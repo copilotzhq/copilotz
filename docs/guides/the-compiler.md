@@ -55,20 +55,24 @@ Views can use `.ts` or `.tsx`. Put shared code and shared UI components in `lib/
 imports only the plugin's `contract.ts`. The compiler skips both. A misplaced file in a declaration
 folder, a missing default export or two files giving the same host View its name stops generation.
 
-For example, `plugins/orders/collections/order.ts` can be the whole declaration:
+Give the orders plugin a shared caller rule in `plugins/orders/plugin.ts`:
 
 ```ts
-import { defineCollection, people } from "copilotz";
+import { people, type Plugin } from "copilotz";
 
-export default defineCollection({
-  schema: {
-    type: "object",
-    properties: { shipped: { type: "boolean" } },
-    required: ["shipped"],
-    additionalProperties: false,
-  },
+export default { defaults: { allow: people } } satisfies Partial<Plugin>;
+```
+
+Then `plugins/orders/collections/order.ts` declares the document and the query the screen reads:
+
+```ts
+import { defineCollection } from "copilotz";
+
+type Order = { shipped: boolean };
+
+export default defineCollection<Order>({
   queries: {
-    pending: { allow: people, run: (orders) => orders.countDocuments({ shipped: false }) },
+    pending: (orders) => orders.countDocuments({ shipped: false }),
   },
 });
 ```

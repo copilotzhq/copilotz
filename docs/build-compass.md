@@ -76,8 +76,11 @@ Three things people often get wrong, and the track shows each one running:
 - **Watching events and watching Views are different.** `runtime.subscribe` hears every event as
   it's committed; Processors react to the ones they name. `runtime.observe` renders a View, and
   renders it again when what it read changes: that's how screens stay live.
-- **Queries read; Actions write.** A collection's named queries never write. Anything that changes
-  data, however many documents it touches, is an Action.
+- **Queries read.** A collection's named queries never write. A screen or tool can save a document
+  through its collection. Actions handle business rules and writes that must agree.
+
+For a new rc.64 app, [start with the compiler](guides/the-compiler.md#start-an-app). The chapters
+below follow the course repository and its hand-written plugin assembly.
 
 ## What you need
 

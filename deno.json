@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/copilotz",
-  "version": "1.0.0-rc.63",
+  "version": "1.0.0-rc.64",
   "exports": {
     ".": "./runtime/mod.ts",
     "./gen": "./cli/mod.ts",
@@ -124,6 +124,7 @@
   ],
   "publish": {
     "exclude": [
+      "docs/_staging/",
       "bench/",
       "packages/",
       "**/tests/",

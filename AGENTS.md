@@ -4,10 +4,9 @@ A guide for coding agents (Claude Code, Codex, Cursor, Gemini) building an app w
 it whole before you write code. The last section is for work on Copilotz itself.
 
 It ships in the package (`node_modules/copilotz/AGENTS.md`, and `@copilotz/copilotz` on JSR) and
-goes with `copilotz@1.0.0-rc.63`. Every docs page is Markdown at
-`https://copilotz.com/docs/<slug>.md`, and https://copilotz.com/llms.txt lists them all. When you're
-unsure of a name, fetch its page or read the package's types (`node_modules/copilotz/**/*.d.ts`).
-Don't guess.
+goes with `copilotz@1.0.0-rc.64`. The [reading list](llms.txt) links to every docs page in the
+installed package. The same pages are online at https://copilotz.com/llms.txt. When you're unsure of
+a name, fetch its page or read the package's types (`node_modules/copilotz/**/*.d.ts`). Don't guess.
 
 It also comes as an Agent Skill, for any coding agent: `npx skills add copilotzhq/copilotz`.
 
@@ -18,6 +17,118 @@ who may do it, and how it shows. People use it on a web page or in a terminal, t
 through tools, and outside assistants (ChatGPT, Claude, any MCP client) over MCP. Every way in calls
 the same Actions, under the same rules, and every write is on one record of who did what, for whom.
 It runs on Node 24+, Deno 2.9+ and Bun.
+
+## Find it: what an app needs, and where it's documented
+
+**Starting and checking an app**
+
+- Start a checked TypeScript app → `copilotz init [dir]` →
+  [Start an app](docs/guides/the-compiler.md#start-an-app).
+- Assemble plugins from declarations → `copilotz gen` →
+  [The files and their names](docs/guides/the-compiler.md#the-files-and-their-names).
+- Load only one host's declarations → `#copilotz/plugins/<name>/web.ts` →
+  [Load a plugin](docs/guides/the-compiler.md#load-a-plugin).
+- Catch misspelled registry names → `AppNames` →
+  [Typed names](docs/guides/the-compiler.md#typed-names).
+- Keep generated files current → `copilotz gen --watch` →
+  [Watch and check](docs/guides/the-compiler.md#watch-and-check).
+- Check generated files in CI → `copilotz gen --check` →
+  [Watch and check](docs/guides/the-compiler.md#watch-and-check).
+- Take over a plugin's assembly → `copilotz gen --eject [plugin]` →
+  [Mix generated and hand-written plugins](docs/guides/the-compiler.md#mix-generated-and-hand-written-plugins).
+- Validate an Action's annotated input → `defineAction({ run })`, `copilotz gen` →
+  [An Action's input from its type](docs/guides/the-compiler.md#an-actions-input-from-its-type).
+- Validate collection writes from a document type → `defineCollection<Order>({ indexes, queries })`
+  → [A collection from its type](docs/guides/the-compiler.md#a-collection-from-its-type).
+- Read a typed document by collection name → `ctx.db.collection("order")` →
+  [Collections](docs/reference.md#collections).
+- Test without an API key → a scripted `LlmAdapter`, `memoryStore` →
+  [Fakes at the edges](docs/build-compass/part-10-testing/31-fakes-at-the-edges.md).
+
+**Actions, access and mail**
+
+- Call an Action that takes nothing → `defineAction({ run })` →
+  [Actions with no parameters](docs/reference.md#actions-with-no-parameters).
+- Type an Action's parameters from its fields → `defineAction({ input, run })` →
+  [A grant and a transaction for the whole Action](docs/reference.md#a-grant-and-a-transaction-for-the-whole-action).
+- Share caller rules across a plugin → `definePlugin({ defaults: { allow } })` →
+  [One permission check for Actions and queries](docs/reference.md#one-permission-check-for-actions-and-queries).
+- Check a person's permission before an Action runs → `async allow(actor, input, ctx)` →
+  [One permission check for Actions and queries](docs/reference.md#one-permission-check-for-actions-and-queries).
+- Record writes under a named grant → `defineAction({ as: "inventory-adjust" })` →
+  [A grant and a transaction for the whole Action](docs/reference.md#a-grant-and-a-transaction-for-the-whole-action).
+- Run an Action in one transaction → `defineAction({ transaction: true })` →
+  [A grant and a transaction for the whole Action](docs/reference.md#a-grant-and-a-transaction-for-the-whole-action).
+- Test mail without sending it → `captureEmail()` →
+  [Mail in tests: the capture adapter](docs/reference/plugins/email.md#mail-in-tests-the-capture-adapter).
+- Open development mail as files → `resources.email.capture.directory` →
+  [Mail in tests: the capture adapter](docs/build-compass/part-10-testing/31-fakes-at-the-edges.md#mail-in-tests-the-capture-adapter).
+- Send a receipt or build its MIME source → `email.send`, `mime(message, from)` →
+  [Mail in tests: the capture adapter](docs/reference/plugins/email.md#mail-in-tests-the-capture-adapter).
+- Limit reads and writes at the data → `resources.shared`, `guard`, `byCollection` →
+  [Rules: `guard` and `labels`](docs/reference.md#rules-guard-and-labels).
+- Group several writes inside an Action → `ctx.transaction`, `tx.call` →
+  [A grant and a transaction for the whole Action](docs/reference.md#a-grant-and-a-transaction-for-the-whole-action).
+- Read a named query as its caller → `collection.query`, `runtime.query` →
+  [Collections](docs/reference.md#collections).
+
+**Screens and dates**
+
+- Ask before deleting, or before any action → `ConfirmDialog`, `confirm()` →
+  [Confirming an action](docs/guides/the-web-toolkit.md#confirming-an-action).
+- Delete a row from a list, asking first → `confirm({ danger, onConfirm })` →
+  [Deleting, after asking](docs/guides/a-business-apps-screens.md#deleting-after-asking).
+- Add/edit a record in a dialog with field errors → `EntityDialog` →
+  [A record in a dialog](docs/guides/the-web-toolkit.md#a-record-in-a-dialog).
+- A record's form as data (text, number, select, checkbox, date, date-time) → `EntityDialog`
+  `fields` (`EntityField`) →
+  [A record in a dialog](docs/guides/the-web-toolkit.md#a-record-in-a-dialog).
+- Show a save's refusal (schema or Action) under its field → `Field` `name`, `Form` `errors` →
+  [Forms](docs/guides/the-web-toolkit.md#forms).
+- Keep a dialog open while its save runs → `Dialog` `busy` →
+  [Forms](docs/guides/the-web-toolkit.md#forms).
+- A date range to the second → `DateRangePicker` `seconds` →
+  [Date ranges with seconds](docs/guides/the-web-toolkit.md#date-ranges-with-seconds).
+- Read typed date-time text (day/month order, 12 h or 24 h, seconds) → `parseDayTime` →
+  [Reading typed dates and times](docs/guides/the-web-toolkit.md#reading-typed-dates-and-times).
+- A day-time as a `Date` or an ISO timestamp, in the app's time zone → `dateOfDayTime` →
+  [Reading typed dates and times](docs/guides/the-web-toolkit.md#reading-typed-dates-and-times).
+- UI components several screens or plugins share → `lib/web/` (the plugin's, or the app's) →
+  [Shared UI: an app's own components](docs/guides/a-business-apps-screens.md#shared-ui-an-apps-own-components).
+- Build a form with labelled inputs → `Form`, `Field`, `Input` →
+  [Forms](docs/guides/the-web-toolkit.md#forms).
+- Search, sort and page a list → `DataTable`, `tableAddress`, `tableQuery` →
+  [Tables and their files](docs/guides/the-web-toolkit.md#tables-and-their-files).
+- Choose a day, time or range → `DatePicker`, `DateTimePicker`, `DateRangePicker` →
+  [Dates](docs/guides/the-web-toolkit.md#dates).
+- Save from a View handler → `ctx.db.collection(name).insertOne/updateOne/deleteOne` →
+  [The rules every screen keeps](docs/guides/a-business-apps-screens.md#the-rules-every-screen-keeps).
+
+**Files, exports and paper**
+
+- Export a table to CSV/JSON/SQL/PDF with totals → `DataTable exportOptions/formats/footerRows` →
+  [Exporting a table](docs/guides/the-web-toolkit.md#exporting-a-table).
+- Share a custom file format across screens → `TableExportFormats` →
+  [Exporting a table](docs/guides/the-web-toolkit.md#exporting-a-table).
+- Put New or Print beside the table controls → `DataTable toolbar` →
+  [A toolbar of your own](docs/guides/the-web-toolkit.md#a-toolbar-of-your-own).
+- Show a page-size menu with one choice → `DataTable/Pagination showSinglePageSize` →
+  [A toolbar of your own](docs/guides/the-web-toolkit.md#a-toolbar-of-your-own).
+- Print or email a table with aligned totals and a logo → `tablePdf` →
+  [Printing a table](docs/guides/the-web-toolkit.md#printing-a-table).
+- Place a transparent PNG or a JPEG on an invoice → `pdfImage/documentPdf` →
+  [Images and barcodes in a document](docs/guides/the-web-toolkit.md#images-and-barcodes-in-a-document).
+- Print a barcode on paper or screen → `documentPdf/Barcode/bars` →
+  [Images and barcodes in a document](docs/guides/the-web-toolkit.md#images-and-barcodes-in-a-document).
+- Make a barcode PNG for a product label or email → `barcodePng` →
+  [Images and barcodes in a document](docs/guides/the-web-toolkit.md#images-and-barcodes-in-a-document).
+- Compute or verify a product's EAN check digit → `eanDigits` →
+  [Images and barcodes in a document](docs/guides/the-web-toolkit.md#images-and-barcodes-in-a-document).
+- Print a screen → `NoPrint`, `PrintOnly` → [Printing](docs/guides/the-web-toolkit.md#printing).
+- Build a PDF on the server → `documentPdf` from `copilotz/web/export` →
+  [PDFs on a server](docs/guides/the-web-toolkit.md#pdfs-on-a-server).
+- Read a file without loading it in a list → `projection`, `runtime.bytes` →
+  [Pictures in a list](docs/guides/a-business-apps-screens.md#pictures-in-a-list).
 
 ## How Copilotz works, in one minute
 
@@ -62,94 +173,32 @@ Plugins reach each other only through the runtime, by name. One that builds on a
 
 ## Start a project
 
-There's no project generator. Set a project up as the docs' courses do, on Node 24 or newer:
+Start on Node 24 or newer:
 
 ```sh
-mkdir my-app && cd my-app
-npm init -y && npm pkg set type=module
-npm install copilotz@1.0.0-rc.63 react@19 react-dom@19
-npm install -D typescript @types/node @types/react @types/react-dom esbuild
+npx copilotz@1.0.0-rc.64 init orders
+cd orders
+npm run check
+npm run dev
 ```
 
-Pin the version: npm's `latest` tag still points at an early release candidate. On Deno, run
-`deno add jsr:@copilotz/copilotz` and map `"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.63"` in
-`deno.json`, so imports read the same.
+Open the local address the server prints. The starter installs dependencies, configures Node to load
+TSX, and includes an orders plugin with a collection, query, Action, web View and test.
 
-Node runs `.ts` files as they are, so there's no build step. It doesn't run `.tsx`, which Views for
-the web are: load every script through a loader hook that does, `tsx.ts` and `tsx-hooks.ts` at the
-project's root:
+In `app.ts`, list the plugins in order. In `plugins/<name>/`, each declaration is a file with a
+default export. Put a collection's type and named queries in `collections/`, business logic in
+`actions/`, and Views in `views/` (including `views/web/` and `views/terminal/`). Use `plugin.ts`
+for fields such as `requires`, `defaults` and `guard`, `lib/web/` for React components, and
+`contract.ts` for shapes other plugins import.
 
-```ts
-// tsx.ts: node --import ./tsx.ts …
-import { register } from "node:module";
+`copilotz gen` assembles the files, writes schemas from the TypeScript types, and records the app's
+names in `copilotz-env.d.ts`. Commit that declaration and ignore `.copilotz/build/`. The server
+imports `#copilotz/plugins/<name>/mod.ts`, the browser `web.ts` and the terminal `terminal.ts` from
+the same folder. The starter's dev script watches declarations and the server. On Deno, the compiler
+entry is `deno run -A jsr:@copilotz/copilotz@1.0.0-rc.64/gen`.
 
-register("./tsx-hooks.ts", import.meta.url);
-```
-
-```ts
-// tsx-hooks.ts: a .tsx module, made JavaScript by esbuild as it loads.
-import { readFile } from "node:fs/promises";
-import { transform } from "esbuild";
-
-type Loaded = { format?: string; source?: string; shortCircuit?: boolean };
-type Next = (url: string, context: unknown) => Promise<Loaded>;
-
-export async function load(url: string, context: unknown, next: Next): Promise<Loaded> {
-  if (!url.startsWith("file:") || !url.endsWith(".tsx")) return next(url, context);
-  const { code } = await transform(await readFile(new URL(url), "utf8"), {
-    loader: "tsx",
-    jsx: "automatic",
-    format: "esm",
-    target: "es2024",
-    sourcefile: url,
-  });
-  return { format: "module", source: code, shortCircuit: true };
-}
-```
-
-Copy `tsconfig.json` from [Build Compass](https://copilotz.com/docs/build-compass.md), under "What
-you need": `NodeNext` modules, `allowImportingTsExtensions`, `verbatimModuleSyntax`,
-`erasableSyntaxOnly`, `strict`, `noEmit`, and `jsx: "react-jsx"`. The scripts, in `package.json`,
-each through the loader (`dev` and `start` once there's a `server.ts`):
-
-```json
-"scripts": {
-  "test": "node --import ./tsx.ts --disable-warning=ExperimentalWarning --test --test-timeout=60000 --test-concurrency=1 \"tests/*.test.ts\"",
-  "check": "tsc --noEmit -p .",
-  "dev": "node --import ./tsx.ts --env-file-if-exists=.env --watch server.ts",
-  "start": "node --import ./tsx.ts server.ts"
-}
-```
-
-The layout, as Copilotz's own plugins have it: a folder per primitive, one declaration per file.
-It's the only one; don't invent others (`queries/`, a `web/` of everything).
-
-```text
-app.ts              plugins(settings): every plugin, in order. It reads no environment.
-plugins/<name>/
-  mod.ts            assembles the plugin from its folders, and nothing else
-  plugin.ts         optional: its single fields (requires, guard, who, check), a plain object
-  collections/      one file per collection: its schema, its type (Infer), indexes, named queries
-  actions/          one file per Action: business logic, never a plain save
-  processors/       one file per Processor: what happens after a commit
-  views/            Views for a model and the terminal, as text; views/web/ (one screen, dialog
-                    or panel per file, its components beside), views/terminal/
-  resources/        one file per kind: tools, agents, the `shared` rules, settings
-  routes/ events/ schedules/ adapters/   as the plugin needs them
-  lib/              what its files share: helpers, a large guard's parts (lib/guards/<collection>.ts)
-  contract.ts       what other plugins may import: shapes and small helpers, never code
-  web.tsx           names its web Views, and nothing else; terminal.ts, its terminal Views
-server.ts           the web host: reads the environment, passes settings to plugins()
-front.ts            the browser's plugins, in order; browser.tsx, the page's code: web({ plugins })
-tsx.ts, tsx-hooks.ts  Node's loader for .tsx: every script imports it
-tests/kit.ts        the app as app.ts makes it, in memory, with a scripted model
-tests/*.test.ts
-.env                OPENAI_API_KEY=… (optional; dev reads it: --env-file-if-exists=.env)
-```
-
-`web.tsx` and `terminal.ts` stay apart from `mod.ts`: the browser loads only front ends, so a
-plugin's server side never travels to it. Queries live with their collection. Types come from
-schemas (`Infer<typeof schema>`), not written twice.
+Existing plugins with a hand-written `mod.ts` keep their own assembly and explicit schemas. List
+them alongside generated plugins in `app.ts`. [The compiler](docs/guides/the-compiler.md).
 
 **Give the project its own guide.** Write `AGENTS.md` at its root, and `CLAUDE.md` holding the one
 line `@AGENTS.md` (Claude Code reads `CLAUDE.md`, and follows the import). Keep it short and true:
@@ -157,16 +206,15 @@ line `@AGENTS.md` (Claude Code reads `CLAUDE.md`, and follows the import). Keep 
 ```markdown
 # AGENTS.md
 
-This app runs on Copilotz (copilotz@1.0.0-rc.63). Read node_modules/copilotz/AGENTS.md first;
-https://copilotz.com/llms.txt lists the docs, as Markdown.
+This app runs on Copilotz (copilotz@1.0.0-rc.64). Read node_modules/copilotz/AGENTS.md first;
+node_modules/copilotz/llms.txt lists the installed guides.
 
-- `npm test` runs every test offline, with a scripted model: run it after each change.
-  `npm run check` checks the types.
-- `app.ts` lists the plugins in order; `plugins/<name>/mod.ts` assembles each one.
-- `plugins/<name>/` has a folder per primitive; `mod.ts` assembles it. Plain saves write the
-  collection (a screen's handler, a tool, a script, REST); Actions hold business logic. Access rules
-  live at the data (the `shared` resource first, then a `guard`). Each tool has a `tool:<name>`
-  View.
+- `npm test` runs offline. Run `npm run build` after editing declarations. `npm run check` checks
+  generated files, types, unused code, lint, formatting and the plugin's declaration.
+- `app.ts` lists the plugins in order. Each file in a plugin's primitive folders default-exports its
+  declaration. Put React components in `lib/web/`.
+- Plain saves write the collection. Actions hold business logic. Keep access rules at the data
+  (`shared` first, then a `guard`). Give each tool a `tool:<name>` View.
 ```
 
 ## A plugin, end to end
@@ -174,30 +222,25 @@ https://copilotz.com/llms.txt lists the docs, as Markdown.
 A collection, a tool that adds to it, an Action for what's more than a save, a View for the model, a
 rule and an agent: `plugins/tasks/`, a file each.
 
-`collections/task.ts`:
+Each path below is relative to `plugins/tasks/` until `app.ts`. The compiler names each declaration
+from its file. The example adds tasks to the starter's orders app.
+
+`collections/task.ts` declares the document and its open-tasks query. The plugin sets who may call
+the query in `plugin.ts`.
 
 ```ts
-import { defineCollection, type Infer, people } from "copilotz";
+import { defineCollection } from "copilotz";
 
-const schema = {
-  type: "object",
-  properties: {
-    title: { type: "string", minLength: 1 },
-    done: { type: "boolean" },
-    in: { type: "string" },
-  },
-  required: ["title", "in"],
-  additionalProperties: false,
-} as const;
+export interface Task {
+  /** @minLength 1 */
+  title: string;
+  done?: boolean;
+  in: string;
+}
 
-/** A task, as its schema says it: the type follows the schema. */
-export type Task = Infer<typeof schema>;
-
-export const task = defineCollection({
-  schema,
+export default defineCollection<Task>({
   queries: {
-    // What screens and Views list: the open tasks, of what whoever asks reaches.
-    open: { allow: people, run: (tasks) => tasks.find({ done: { $ne: true } }).toArray() },
+    open: (tasks) => tasks.find({ done: { $ne: true } }).toArray(),
   },
 });
 ```
@@ -209,7 +252,7 @@ person it works for, under the rules):
 import { failure } from "copilotz";
 import { tool } from "copilotz/plugins/agents";
 
-export const tools = {
+export default {
   // A plain save: the tool writes the collection, under the rules, as its agent's person.
   add_task: tool({
     description: "Adds a task to this chat's space",
@@ -225,18 +268,16 @@ export const tools = {
 };
 ```
 
-`actions/complete.ts`: completing a task holds a rule the schema can't say, so it's an Action, the
-one way every caller completes one:
+`actions/task.complete.ts`: completing a task holds a rule the schema can't say, so it's an Action,
+the one way every caller completes one:
 
 ```ts
-import { defineAction, failure, people } from "copilotz";
+import { defineAction, failure } from "copilotz";
 
 /** Done once, by whoever reaches the task: a rule the schema can't say, so an Action. */
-export const complete = defineAction({
+export default defineAction({
   description: "Marks a task done, once",
-  input: { type: "object", properties: { task: { type: "string" } }, required: ["task"] },
-  allow: people,
-  run: async (ctx, { task }) => {
+  run: async (ctx, { task }: { task: string }) => {
     const tasks = ctx.db.collection("task");
     // The filter holds the rule: of two at once, one completes it.
     const { matchedCount } = await tasks
@@ -251,35 +292,44 @@ export const complete = defineAction({
 });
 ```
 
-`views/tasks.ts`, and `views/tool-add-task.ts`, what the model reads after the tool:
+`views/tasks.ts` shows the records the viewer can reach, with the ids a model needs to complete
+them.
 
 ```ts
 import type { ViewContext } from "copilotz";
 import type { Task } from "../collections/task.ts";
 
-/** The open tasks, as text: for the terminal and for a model. It reads as whoever looks. */
-export const tasks = (_: unknown, ctx: ViewContext) => {
-  const open = ctx.db.collection<Task>("task").query<Task[]>("open").value ?? [];
-  return open.length ? open.map((t) => `- ${t.title}`).join("\n") : "No tasks.";
-};
+export default function tasks(_: unknown, ctx: ViewContext) {
+  const read = ctx.db.collection("task").query<(Task & { _id: string })[]>("open");
+  const open = read.value ?? [];
+  return open.length ? open.map((t) => `- ${t.title} (${t._id})`).join("\n") : "No tasks.";
+}
 ```
+
+`views/tool/add_task.ts` shows the list after a save. A failure passes its words to the model.
 
 ```ts
 import type { ViewContext } from "copilotz";
 
-/** What a model reads after it calls add_task: the list, as it is now. */
-export const addTask = (_call: unknown, ctx: ViewContext) => ctx.show("tasks", {});
+export default (call: { output: string }, ctx: ViewContext) =>
+  call.output.startsWith("Error:") ? call.output : ctx.show("tasks", {});
+```
+
+`views/tool/complete_task.ts` shows the same list after completion.
+
+```ts
+export { default } from "./add_task.ts";
 ```
 
 `resources/shared.ts`, `resources/agents.ts` and `plugin.ts`:
 
 ```ts
 /** The rule, at the data: a task lives in a space (its `in`), and its members reach it. */
-export const shared = { task: {} };
+export default { task: {} };
 ```
 
 ```ts
-export const agents = {
+export default {
   helper: {
     default: true,
     instructions: "Keep tasks.",
@@ -290,33 +340,11 @@ export const agents = {
 ```
 
 ```ts
-import type { Plugin } from "copilotz";
+import { people, type Plugin } from "copilotz";
 
-/** The plugin's own fields: what it builds on. */
-export default { requires: ["chat", "spaces"] } satisfies Partial<Plugin>;
-```
-
-`mod.ts` assembles them:
-
-```ts
-import { definePlugin, type Plugin } from "copilotz";
-import plugin from "./plugin.ts";
-import { task } from "./collections/task.ts";
-import { complete } from "./actions/complete.ts";
-import { tasks as tasksView } from "./views/tasks.ts";
-import { addTask } from "./views/tool-add-task.ts";
-import { agents } from "./resources/agents.ts";
-import { shared } from "./resources/shared.ts";
-import { tools } from "./resources/tools.ts";
-
-export const tasks: Plugin = definePlugin({
-  name: "tasks",
-  ...plugin,
-  collections: { task },
-  actions: { "task.complete": complete },
-  views: { tasks: tasksView, "tool:add_task": addTask },
-  resources: { shared, tools, agents },
-});
+export default { requires: ["chat", "spaces"], defaults: { allow: people } } satisfies Partial<
+  Plugin
+>;
 ```
 
 `app.ts` lists the plugins and sets the model alias the agent names. Without a key it's
@@ -327,26 +355,37 @@ when the message names it ("add task" for `add_task`).
 import { definePlugin, type Plugin } from "copilotz";
 import { models } from "copilotz/plugins/models";
 import { chat } from "copilotz/plugins/agents";
-import { access } from "copilotz/plugins/access";
-import { tasks } from "./plugins/tasks/mod.ts";
+import { access, devSignIn } from "copilotz/plugins/access";
+import orders from "#copilotz/plugins/orders/mod.ts";
+import tasks from "#copilotz/plugins/tasks/mod.ts";
 
 export function plugins(settings: { openai?: string } = {}): Plugin[] {
   const provider = settings.openai ? { openai: { apiKey: settings.openai } } : {};
   const model = { helper: settings.openai ? "openai/gpt-5.4-mini" : "fake/echo" };
   const app = definePlugin({ name: "app-settings", resources: { provider, model } });
-  return [models, chat, ...access, tasks, app];
+  return [models, chat, ...access, devSignIn, orders, tasks, app];
 }
 ```
 
 ## Test without an API key: the default loop
 
-Run `npm test` after every change, and `npm run check` before you stop. No test needs a key or the
-network. Run the app as `app.ts` makes it, with fakes only where it meets the world: a scripted
-model (below); `createRuntime({ clock: manualClock(Date.now()) })` and `clock.advance(ms)` for time;
+Run `npm run build` to generate and type-check changes, `npm test` after each change, and
+`npm run check` before you stop. The starter checks generated files, types, unused code, lint,
+formatting and the plugin's declaration. No test needs a key or the network. Run the app as `app.ts`
+makes it, with fakes only where it meets the world: a scripted model (below);
+`createRuntime({ clock: manualClock(Date.now()) })` and `clock.advance(ms)` for time;
 `createRuntime({ fetch })` for what plugins call outside (`ctx.fetch`). A model provider is called
 with the platform's `fetch`, so a fake one is a local server (`serve`, from `copilotz/testing`) set
 as the provider's `baseURL`. `runtime.fetch(new Request(…))` tests HTTP without a port, and
 `await runtime.idle()` waits until nothing is left to run.
+
+**Mail in tests.** Trusted code sends invoices and receipts with `ctx.call("email.send", message)`.
+In a test, import `captureEmail` and `email` from `copilotz/plugins/access/email`, make
+`const inbox = captureEmail()`, register `adapters: { email: { capture: inbox } }` and select
+`resources: { email: { adapter: "capture", from: "orders@example.com" } }`. Read `inbox.messages`
+after the send and call `inbox.clear()` to empty it. The exported `mime(message, from).source`
+builds its MIME source.
+[Mail in tests](docs/reference/plugins/email.md#mail-in-tests-the-capture-adapter).
 
 `tests/kit.ts`:
 
@@ -409,14 +448,15 @@ test("the agent adds a task for Ana; she completes it, once", async () => {
     const here: Actor = { ...ana, in: space };
     await runtime.call("chat.send", { in: space, text: "Add Bo." }, { actor: here });
     await runtime.idle();
-    assert.equal(helper.sent[1].messages.at(-1)?.text, "- Bo"); // what the model read
     const made = (await store.events(0)).find((e) => e.type === "task.created");
     assert.equal(personOf(made?.actor), "ana"); // the record: written for Ana…
     assert.equal(made?.actor?.kind, "agent"); // …by the agent
-    const seen = await runtime.observe<string>("tasks", {}, { actor: here }).ready;
-    assert.deepEqual(seen, { status: "ready", value: "- Bo" }); // what Ana sees
-    // Completing it is business logic: once, and refused after.
     const task = made!.data._id as string;
+    const listing = `- Bo (${task})`;
+    assert.equal(helper.sent[1].messages.at(-1)?.text, listing); // what the model read
+    const seen = await runtime.observe<string>("tasks", {}, { actor: here }).ready;
+    assert.deepEqual(seen, { status: "ready", value: listing }); // what Ana sees
+    // Completing it is business logic: once, and refused after.
     await runtime.call("task.complete", { task }, { actor: here });
     await assert.rejects(runtime.call("task.complete", { task }, { actor: here }), /done already/);
   } finally {
@@ -433,7 +473,7 @@ wrong (a schema that names no fields, a route outside the plugin's name), `tests
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { describe } from "copilotz/describe";
-import { tasks } from "../plugins/tasks/mod.ts";
+import tasks from "#copilotz/plugins/tasks/mod.ts";
 
 // Each of the app's own plugins, as a tool reads it: no schema that names no fields, no route
 // outside its name, no setting outside its contract.
@@ -484,18 +524,39 @@ test("each plugin imports another only through its contract, and requires it", (
   write it's asked about (`write`: `"insert"`, `"update"`, `"replace"` or `"delete"`), so it can let
   people add and change documents but not delete them. Don't filter by who's asking inside an
   Action.
-- **A schema says what a document is, and every write keeps to it.** Name each field and its type,
-  say what's required, and close it (`additionalProperties: false`). Inserts and replaces are
-  checked; so are updates, as MongoDB's `$jsonSchema` validator checks them: what `$set` gives must
-  fit, a field the schema doesn't allow can't be set nor a required one unset, `$inc` counts
-  numbers, and the document an update leaves must be valid. An update names its operators (`$set`,
-  `$inc`, `$push`…): plugin code's update with none is refused (REST's `PATCH` and a View's
-  `updateOne` set plain fields). A document older than its schema can still be updated with what
-  fits; a migration fixes the rest.
-- **Say `allow` on every Action outsiders call:** `people`, `contacts`, `peopleOrContacts`,
-  `publicCallers`, or `inPerson` for what only the person decides (consent, keys, who's in a space,
-  money). Write it by kind, never by identity. It's asked of agents too, and of whom they work for.
-  An Action without `allow` is internal.
+- **A schema says what a document is, and every write keeps to it.** Generated object schemas are
+  closed. When writing a schema by hand, name each field and its type, say what's required, and
+  close it (`additionalProperties: false`). Inserts and replaces are checked; so are updates, as
+  MongoDB's `$jsonSchema` validator checks them: what `$set` gives must fit, a field the schema
+  doesn't allow can't be set nor a required one unset, `$inc` counts numbers, and the document an
+  update leaves must be valid. An update names its operators (`$set`, `$inc`, `$push`…): plugin
+  code's update with none is refused (REST's `PATCH` and a View's `updateOne` set plain fields). A
+  document older than its schema can still be updated with what fits; a migration fixes the rest.
+- **Say who may call a plugin's Actions and queries once.** Set `defaults: { allow: people }` in
+  `plugin.ts`. Each Action or query may override it, for example with `inPerson` when only the
+  person decides. Without either, it's internal. An async `allow(actor, input, ctx)` reads with
+  `ctx.db` as the caller, before a grant. An agent and its principal must both pass.
+- **Give an Action the declarations it needs.** For no parameters, omit `input` and the second
+  parameter to `run`. Call it with nothing or `{}`. Extra fields are refused. For a typed input,
+  annotate `run`'s second parameter and generate. An explicit schema types both `run` and `allow`.
+  For example, an inventory plugin can keep the permission check and the stock rule in its `lib/`.
+  Its `actions/stock.issue.ts` then reads:
+
+  ```ts
+  import { defineAction } from "copilotz";
+  import { canUse, issueOne } from "../lib/inventory.ts";
+
+  export default defineAction({
+    as: "inventory-adjust",
+    transaction: true,
+    run: (ctx, { product }: { product: string }) => issueOne(ctx.db, product, ctx.in),
+    allow: canUse("inventory"),
+  });
+  ```
+
+  `canUse` checks the caller before the grant. The writes record the grant and who called it. A
+  throw rolls them back. If every inventory Action shares the check, move it to `defaults.allow`.
+  [The full stock example](docs/reference.md#a-grant-and-a-transaction-for-the-whole-action).
 - **A View for whatever anyone reads, a model included.** Each tool gets a `tool:<name>` View: short
   text, with ids the model can act on. A failed call's output is its error's words; pass them on,
   don't throw. An MCP server that offers a tool without its View doesn't start.
@@ -505,13 +566,15 @@ test("each plugin imports another only through its contract, and requires it", (
   words reach a caller outside or a model.
 - **Settings are resources, not code.** `app.ts` reads no environment: the server, the terminal or a
   test passes settings in. Agents name a model alias that the app sets.
-- **Writes that must agree go in one `ctx.transaction`.** A refused write rolls it all back. It
-  holds the store's writer, so keep slow work out. Another plugin's Action joins it with `tx.call`
-  when that Action is `atomic: true`.
+- **Writes that must agree use `transaction: true` for a whole Action or one `ctx.transaction` for
+  part of it.** A refused write rolls it all back. It holds the store's writer, so keep slow work
+  out. Another plugin's Action joins it with `tx.call` when that Action declares `transaction: true`
+  or `atomic: true`.
 - **Who acts:** `personOf(ctx.actor)`, not `ctx.actor.id` (an agent's is its own). Where: `ctx.in`.
   A tool works where its chat is.
-- **Going past the actor's reach is a named grant,** `ctx.as(grant("…"))`, in trusted code, on the
-  record. Keys stay in code: never in Action inputs (they're recorded), never with a model.
+- **Going past the actor's reach is a named grant,** `as: "inventory-adjust"` for a whole Action or
+  `ctx.as(grant("…"))` for one operation, in trusted code, on the record. Keys stay in code: never
+  in Action inputs (they're recorded), never with a model.
 - **An agent tells a conversation only what everyone in it could see.** Its work reads what both its
   asker and the place its answer goes reach: a space and what it draws on; a customer's chat, what
   that customer reaches (a space drawing on another with `contacts: "read"` lets them read it); its
@@ -520,8 +583,9 @@ test("each plugin imports another only through its contract, and requires it", (
 - **A tool that goes past its caller, offered to a contact or the public, is a declassifier.** Scope
   it to them (their own bookings, never any record), take no free-form query that could widen it,
   and return only what they may see. In a customer's chat, an Action people call that goes past its
-  caller is refused; the app's own (no `allow`) runs as its tool chose. The public (`publicCallers`,
-  `{ kind: "public" }`) reads only spaces that have it as a viewer, and writes nothing.
+  caller is refused; an internal Action (no `allow` of its own or inherited) runs as its tool chose.
+  The public (`publicCallers`, `{ kind: "public" }`) reads only spaces that have it as a viewer, and
+  writes nothing.
 - **Outside effects:** write the intent, call out with its id as the idempotency key (a tool's
   `callId`), then write the result.
 - **Online:** `devSignIn` is for this machine only; Copilotz won't start it with a public origin.
@@ -535,7 +599,7 @@ the runtime never changes or deletes one. An event is `{ seq, id, type, data, ca
 time. `action.started` holds `{ action, input, inputHash, startedAt, attempt }`, `action.completed`
 the `result`, a collection's event `{ _id, doc }`. Read it with `store.events(afterSeq, limit)` in a
 test or script, `runtime.subscribe` live, or SQL (`sqlite3`, `psql`,
-[maintenance](https://copilotz.com/docs/operations/maintenance.md)). Plugin code reads no log.
+[maintenance](docs/operations/maintenance.md)). Plugin code reads no log.
 
 **Kept out:** a collection's `private` fields (keys, tokens), an Action's `private` fields, an
 unrecorded Action's call (`record: false`; not its writes), and collections with `events: false` or
@@ -545,9 +609,8 @@ unrecorded Action's call (`record: false`; not its writes), and collections with
 a reference, and reads load it whole unless a `projection` leaves the field out. Blobs live in the
 store, or in files or a bucket (`createRuntime({ blobs })`), chosen before it fills. A file is a
 string (a `data:` address, base64). Nothing deletes a blob: a value deleted or replaced stays on the
-record. [Stores](https://copilotz.com/docs/operations/stores.md) and
-[BC 36](https://copilotz.com/docs/build-compass/part-12-shipping/36-postgresql-and-blobs.md) have
-the rest.
+record. [Stores](docs/operations/stores.md) and
+[BC 36](docs/build-compass/part-12-shipping/36-postgresql-and-blobs.md) have the rest.
 
 **A list reads names, not pictures:** its query leaves them out (`projection: { picture: 0 }`), and
 each row shows `/pictures/<id>`, a route that checks who asks before it reads. With `{ actor }`,
@@ -585,17 +648,19 @@ isn't `private`; a route reading before it checks who asks; counting on a delete
 ## A business app's web front end
 
 Screens for people at work: lists, forms in dialogs, dates, a home, printed documents.
-[A business app's screens](https://copilotz.com/docs/guides/a-business-apps-screens.md) builds each
-one in full, as files that compile;
-[the web toolkit](https://copilotz.com/docs/guides/the-web-toolkit.md) has every piece, prop and
-token. Read both before the first screen.
+[A business app's screens](docs/guides/a-business-apps-screens.md) builds each one in full, as files
+that compile; [the web toolkit](docs/guides/the-web-toolkit.md) has every piece, prop and token.
+Read both before the first screen.
 
 **Files and names.**
 
-- **One View per file**, in `plugins/<name>/views/web/`, with the React components it draws beside
-  it. `web.tsx` only names the plugin's Views, as `mod.ts` assembles the server side. Not one big
-  `web.tsx`, and no UI kit of the app's own: components several screens share go in
-  `views/web/components/`, made of the toolkit's pieces.
+- **One View per file** in `plugins/<name>/views/web/`. A folder gives it its prefix
+  (`screen/orders.tsx` is `screen:orders`). The compiler writes the web entry point.
+- **React components live in `lib/web/`.** Use the plugin's for its own Views, including a component
+  with hooks. Use the app's `lib/web/`, beside `plugins/`, for a status badge, table preset or form
+  section used across plugins. Build them from the toolkit. The compiler reads `views/**` as Views
+  and skips `lib/`.
+
 - **A name says where a View shows.** `screen:<place>` is a whole screen at `/<place>…`.
   `dialog:<name>` is a dialog over a screen, at an address of that screen (`/customers/12`), so Back
   closes it and the list behind keeps its page. `panel:<name>` is a part of another View that reads
@@ -611,9 +676,9 @@ token. Read both before the first screen.
   `findOne`, `countDocuments`. A read is `{ status: "loading" }`, then `{ status: "ready", value }`,
   and the View runs again when a commit changes it. It hands values to React components. Don't fetch
   in an effect, poll, or call `/api/` from the page.
-- **Screens read named queries with an `allow`** (`people`): they run on the server, as whoever
-  asks. In the browser a View's own `find` reaches only a collection a rule speaks for (`shared`, or
-  a `guard`); any other answers `forbidden` ("You can't see this here").
+- **Screens read named queries admitted by `allow`**, their own or the plugin default. They run on
+  the server as whoever asks. In the browser a View's own `find` reaches only a collection a rule
+  speaks for (`shared`, or a `guard`); any other answers `forbidden` ("You can't see this here").
 - **Handlers save with the View's collections:** `ctx.db.collection("customer").insertOne(record)`,
   `updateOne({ _id }, fields)` (plain fields are set), `deleteOne({ _id })`, as the person: under
   the rules (one must speak for the collection's writes), checked against the schema, recorded as
@@ -629,10 +694,11 @@ token. Read both before the first screen.
   `<LazyView kind="panel:…" item={…} />` shows a View on demand.
 - **Validation errors come from where the write is checked.** The browser's `required` and `type`
   help first. A save the schema refuses rejects with a public `invalid` that names its field
-  (`detail: { field: "price" }`), and a `Form` whose `onSubmit` throws puts it in that `Field`'s
-  `error`. An Action's own rule throws `failure("invalid", "Give the name.", { public: true })`,
-  with `detail: { field }` when it's about one field (`Object.assign(failure(…), { detail })`), and
-  the form shows it at its top or by its field. An Action's `input` schema's messages are for
+  (`detail: { field: "price" }`), and a `Form` whose `onSubmit` throws puts it under the `Field` of
+  that `name`, in the words its `errors` gives by field. `EntityDialog` does this for its form. An
+  Action's own rule throws `failure("invalid", "Give the name.", { public: true })`, with
+  `detail: { field }` when it's about one field (`Object.assign(failure(…), { detail })`), and the
+  form shows it at its top or by its field. An Action's `input` schema's messages are for
   developers, so a form says each field's refusal its own way (`{ name: "Give the name." }`, by
   `detail.field`), and the schema's text where it has none. A record whose fields the server sets
   (who made it, when, a number in a sequence) keeps an Action: a browser's View doesn't know who's
@@ -663,9 +729,11 @@ The pieces, by job:
   `ListGroup`, `Tabs`, `Divider`, `Spacer`, `Heading`, `Text`.
 - **Fields:** `Form`, `Field`, `Input`, `Textarea`, `Select`, `Checkbox`, `Radio`, `Switch`,
   `Picker`, `MultiPicker`, `Autocomplete`, `TagsInput`, `FileInput`, `RowsEditor`, `DatePicker`,
-  `DateRangePicker`, `DateTimePicker`, `TimeFields`.
+  `DateRangePicker`, `DateTimePicker`, `TimeFields`, `parseDayTime` and `dateOfDayTime`.
 - **Actions and overlays:** `Button`, `IconButton`, `Menu`, `Popover`, `Dialog`, `Drawer`,
   `Tooltip`, `toast` and `Toasts`.
+- **Dialogs:** `ConfirmDialog` and `confirm()` ask before an action. `EntityDialog` adds or edits a
+  record.
 - **Data:** `DataTable` (with `tableAddress`, `tableQuery`), `Pagination`, `DetailList`, `Badge`,
   `Chip`, `Avatar`, `Notice`, `EmptyState`, `Skeleton`, `Spinner`, `Kbd`.
 - **An app's own frame:** `AppBar`, `TopBar`, `TileGrid`, `LiveClock`, `Logo`, `Icon` (`drawing`: an
@@ -682,20 +750,41 @@ The pieces, by job:
   the table, give it `total`, and keep each filter in the address too, back to the first page
   (`go(path + tableQuery(where, { ...state, offset: 0 }, { from, to }))`). The export menu saves the
   rows shown; every row of a server-paged list is an unrecorded Action's, saved with `download`.
+- **Custom table files and totals:** give `DataTable` `formats` (or the shell
+  `<TableExportFormats value={formats}>`), `exportName` and `footerRows` by column key.
+  `exportOptions` sets CSV's dialect, JSON's shape, SQL's `tableName`, `values: "raw"` and the PDF
+  layout. Give `toolbar` a button or filter; `showSinglePageSize` keeps a lone size visible.
+  [Exporting a table](docs/guides/the-web-toolkit.md#exporting-a-table).
+- **Invoices and product labels:** in an Action, `copilotz/web/export` has `exportFile` and
+  `tablePdf` for a report with totals. Prepare a logo with `await pdfImage(bytesOrDataUrl)` for its
+  header or a `documentPdf` page. Draw Code 128, Code 39 or EAN-8/13 with `Barcode` on screen,
+  `{ barcode, format, x, y, width, height }` in a PDF and `await barcodePng(value, options)` for an
+  image.
+  [Images and barcodes in a document](docs/guides/the-web-toolkit.md#images-and-barcodes-in-a-document).
 - **A create or edit form in a dialog:** the screen shows
-  `ctx.show("dialog:customer", { _id, back
-  })` when its address names one (`/customers/new`,
-  `/customers/<id>`). The dialog's View reads the record and returns a component: a `Dialog`
-  (`placement="top"`) around a `Form` of `Field
-  layout="row"`s, Save in its footer submitting the
-  form by its id (`form="customer"`). `onSubmit` writes the record (`insertOne` for a new one,
-  `updateOne({ _id }, fields)` for an edit), then `toast()` and `go(back)`.
+  `ctx.show("dialog:customer", { _id, back })` when its address names one (`/customers/new`,
+  `/customers/<id>`). The dialog's View reads the record and returns an `EntityDialog`: `title`,
+  `values` (the record, or a new one's defaults), `fields` as data
+  (`{ name, label, type, required }`, `type` one of `text`, `email`, `number`, `textarea`, `select`,
+  `checkbox`, `date`, `datetime`…) or `Field`s with a `name` as children, `errors` (people's words
+  by field), `onSubmit` (`insertOne(record)`, or `updateOne({ _id }, record)`; an Action with
+  `ctx.call`), `toast` and `onClose={() => go(back)}`. It keeps what's typed, says a needed field
+  left empty, shows a refusal under its field, and closes once the save answered.
+- **A delete that asks first:**
+  `confirm({ title, message, danger: true, toast, onConfirm: () =>
+  ctx.db.collection("customer").deleteOne({ _id }) })`
+  from a row's button or a table's `actions`: it shows where `<Toasts />` is, and resolves `true` or
+  `false`. As a `dialog:` View at an address, return a `ConfirmDialog` with the same props and
+  `onClose`. While `onConfirm` runs it's busy; a failure stays in it, with its words.
 - **Date, date-time and date-range fields:** days are `YYYY-MM-DD` and times `YYYY-MM-DD HH:mm` or
   `HH:mm:ss`, the app's clock time with no zone, never ISO timestamps. `todayIn(timeZone)` and
   `nowIn(timeZone)` in the app's zone, `format` patterns from its settings. `DatePicker`;
   `DateTimePicker` keeps a value's seconds until its time changes (`seconds` shows them);
   `DateRangePicker` has `presets` (or `rangePresets(…)`), typed From and To, and `time` for ends
-  with a time of day.
+  with a time of day. `DateRangePicker` `seconds` takes the ends to the second (`00:00:00` to
+  `23:59:59` for a preset), and its `format` may be the app's day-time pattern.
+  `parseDayTime(text, pattern)` reads typed day-time text back (`undefined` when it isn't one);
+  `dateOfDayTime(value, timeZone)` is its moment, as a `Date`.
 - **A sign-in page:** Copilotz's own, with `passwordSignIn` (staff with usernames) or `emailSignIn`:
   the theme gives its look (`themeOf([look])` on the server), the `signInPage` resource its words
   and pitch. Accounts come from an Action of the app's that calls `password.set`. Don't write a
@@ -719,9 +808,11 @@ The pieces, by job:
 
 **Common mistakes:**
 
-- A UI kit and stylesheets of the app's own, inline styles for looks, or overrides of `.copilotz-*`,
-  instead of the toolkit and the theme. Hand-made `<table>`s of fields (use `DataTable` with fields
-  in cells, or `RowsEditor`), a hidden `<input type="file">` behind buttons (`FileInput`), the
+- Stylesheets of the app's own, inline styles for looks, or overrides of `.copilotz-*`, instead of
+  the toolkit and the theme; components several screens share copied into each, instead of one in
+  `lib/`; a confirm, delete or record dialog written again for each screen, instead of `confirm()`,
+  `ConfirmDialog` and `EntityDialog`. Hand-made `<table>`s of fields (use `DataTable` with fields in
+  cells, or `RowsEditor`), a hidden `<input type="file">` behind buttons (`FileInput`), the
   browser's `datetime-local` (`DateTimePicker`), a `document` key listener (`useShortcuts`), a form
   part listening for the DOM's `submit` (`Form` and `useFormSubmit`).
 - One big `web.tsx`; a View that holds state or hooks; a screen fetching `/api/queries/…` from an
@@ -744,49 +835,91 @@ The pieces, by job:
   shares of the whole row: `"33.33%"` and `"66.67%"` fill it.
 - A workaround copied from an older release: rc.54 has `Screen`, typed range ends, seconds, `hidden`
   on layout pieces, fields that fit table cells, `detailOpen`, `Toolbar grow`, a file field's own
-  words and picture previews.
+  words and picture previews. rc.64 has `ConfirmDialog` and `confirm()`, `EntityDialog`, a refusal
+  under its `Field` (`name`), date ranges to the second and `parseDayTime`.
 
 ## Recipes
 
 Each link is a page as Markdown. GS is Getting Started (a salon's bookings, 10 chapters). BC is
 Build Compass (41 chapters, written for an earlier release candidate: check names in the reference).
 
-- A plugin: [GS 1](https://copilotz.com/docs/getting-started/01-one-booking.md). People, contacts,
-  spaces, the rules: [GS 2](https://copilotz.com/docs/getting-started/02-who-sees-what.md).
-- The web: [GS 3](https://copilotz.com/docs/getting-started/03-its-own-web-page.md),
-  [serving on the web](https://copilotz.com/docs/guides/serving-on-the-web.md). An agent and its
-  tools: [GS 4](https://copilotz.com/docs/getting-started/04-its-own-agent.md).
-- MCP: [GS 5](https://copilotz.com/docs/getting-started/05-chatgpt-claude-and-gemini-over-mcp.md).
-  One test, every way in:
-  [GS 6](https://copilotz.com/docs/getting-started/06-the-same-bookings-every-way-in.md).
-- Widgets: [GS 7](https://copilotz.com/docs/getting-started/07-a-widget-in-the-assistant.md). A
-  site's chat: [GS 8](https://copilotz.com/docs/getting-started/08-a-chat-on-your-site.md).
-  WhatsApp: [GS 9](https://copilotz.com/docs/getting-started/09-whatsapp.md).
+- A plugin: [GS 1](docs/getting-started/01-one-booking.md). People, contacts, spaces, the rules:
+  [GS 2](docs/getting-started/02-who-sees-what.md).
+- The web: [GS 3](docs/getting-started/03-its-own-web-page.md),
+  [serving on the web](docs/guides/serving-on-the-web.md). An agent and its tools:
+  [GS 4](docs/getting-started/04-its-own-agent.md).
+- MCP: [GS 5](docs/getting-started/05-chatgpt-claude-and-gemini-over-mcp.md). One test, every way
+  in: [GS 6](docs/getting-started/06-the-same-bookings-every-way-in.md).
+- Widgets: [GS 7](docs/getting-started/07-a-widget-in-the-assistant.md). A site's chat:
+  [GS 8](docs/getting-started/08-a-chat-on-your-site.md). WhatsApp:
+  [GS 9](docs/getting-started/09-whatsapp.md).
 - Shipping (SQLite, PostgreSQL, sign-in by email):
-  [GS 10](https://copilotz.com/docs/getting-started/10-shipping-the-salon.md). A container of 512
-  MiB or less (Deno 2.9+, `--max-semi-space-size=2`, SQLite's cache, each plugin from its own entry
-  point): [memory](https://copilotz.com/docs/operations/memory.md).
+  [GS 10](docs/getting-started/10-shipping-the-salon.md). A container of 512 MiB or less (Deno 2.9+,
+  `--max-semi-space-size=2`, SQLite's cache, each plugin from its own entry point):
+  [memory](docs/operations/memory.md).
 - The prompt and context Views:
-  [BC 2](https://copilotz.com/docs/build-compass/part-1-an-agent-of-your-own/02-north-in-your-terminal.md),
-  [BC 4](https://copilotz.com/docs/build-compass/part-2-your-own-plugins/04-today-every-turn.md).
+  [BC 2](docs/build-compass/part-1-an-agent-of-your-own/02-north-in-your-terminal.md),
+  [BC 4](docs/build-compass/part-2-your-own-plugins/04-today-every-turn.md).
 - A Processor, below; more in
-  [BC 6](https://copilotz.com/docs/build-compass/part-2-your-own-plugins/06-chats-that-name-themselves.md).
-  Transactions:
-  [BC 9](https://copilotz.com/docs/build-compass/part-3-the-board/09-the-boards-data-and-actions.md).
+  [BC 6](docs/build-compass/part-2-your-own-plugins/06-chats-that-name-themselves.md). Transactions:
+  [BC 9](docs/build-compass/part-3-the-board/09-the-boards-data-and-actions.md).
 - Schedules and a manual clock:
-  [BC 27](https://copilotz.com/docs/build-compass/part-8-skills-and-routines/27-routines-on-a-schedule.md).
-  Fakes at the edges:
-  [BC 31](https://copilotz.com/docs/build-compass/part-10-testing/31-fakes-at-the-edges.md).
-- Scripts over REST: [REST and the client](https://copilotz.com/docs/guides/rest-and-the-client.md).
-  Many orgs: [many orgs](https://copilotz.com/docs/guides/many-orgs.md).
-- Every entry point, option, event and context field:
-  [reference](https://copilotz.com/docs/reference.md). Each of Copilotz's plugins (`chat`, `spaces`,
-  `mcp`…): [plugins](https://copilotz.com/docs/reference/plugins.md). How it runs:
-  [architecture](https://copilotz.com/docs/architecture.md).
+  [BC 27](docs/build-compass/part-8-skills-and-routines/27-routines-on-a-schedule.md). Fakes at the
+  edges: [BC 31](docs/build-compass/part-10-testing/31-fakes-at-the-edges.md).
+- Scripts over REST: [REST and the client](docs/guides/rest-and-the-client.md). Many orgs:
+  [many orgs](docs/guides/many-orgs.md).
+- Every entry point, option, event and context field: [reference](docs/reference.md). Each of
+  Copilotz's plugins (`chat`, `spaces`, `mcp`…): [plugins](docs/reference/plugins.md). How it runs:
+  [architecture](docs/architecture.md).
 
-**Types from schemas.** `defineCollection` and `defineAction` type documents and inputs from their
-schemas, and `Infer<typeof schema>` names the type (`collections/task.ts` above). Contracts export
-those types; don't write a document's type by hand beside its schema.
+**An Action's schema from its type.** In a plugin built by `copilotz gen`, give the default export's
+`run` a typed second parameter. The generator uses the app's `typescript` devDependency to make its
+`input` in `mod.ts`. A field's comment reaches the model. A tag puts a constraint in the schema
+checked for every caller.
+
+```ts
+import { defineAction } from "copilotz";
+
+export default defineAction({
+  description: "Calculate an order line's total in cents.",
+  run: (_ctx, input: {
+    /** Number of units ordered.
+     * @integer
+     * @minimum 1
+     */
+    quantity: number;
+    unitPrice: number;
+  }) => input.quantity * input.unitPrice,
+});
+```
+
+A hand-written `input` wins. Use one in a plugin with a hand-written `mod.ts`, or to share an
+existing schema. [Actions](docs/reference.md#actions).
+
+**A collection's schema from its type.** In a plugin built by `copilotz gen`, use
+`export default defineCollection<Order>({ indexes: [["customerId"]] })`. The compiler writes its
+schema and a named collection read knows `Order & { _id: string }`. Leave `_id` out of the document
+type. Write timestamps as `string` with `/** @format date-time */` on the field. An explicit
+`schema` wins. [The compiler](docs/guides/the-compiler.md#a-collection-from-its-type).
+
+**Schema-first collections and Actions.** When a plugin shares an existing JSON Schema or assembles
+its own `mod.ts`, pass `schema` to `defineCollection` and `input` to `defineAction`. Use `as const`
+on a schema kept in a variable. `Infer<typeof schema>` names its TypeScript type. An explicit schema
+takes precedence when generating too.
+
+```ts
+import { defineCollection, type Infer } from "copilotz";
+
+const schema = {
+  type: "object",
+  properties: { code: { type: "string", minLength: 1 } },
+  required: ["code"],
+  additionalProperties: false,
+} as const;
+
+export type Product = Infer<typeof schema>;
+export default defineCollection({ schema });
+```
 
 **A Processor, for what follows a commit.** What must happen with a write goes in its transaction
 (`ctx.transaction`); what follows it (a count, a message, a call outside) is a Processor: it hears
@@ -798,7 +931,7 @@ for what it's about. `processors/tally.ts`:
 import type { ProcessorDef } from "copilotz";
 
 /** Once a task is done, its space's tally counts it: after the commit, retried until it's done. */
-export const tally: ProcessorDef = {
+export default {
   on: "task.updated",
   where: { changed: "done", "doc.done": true },
   run: async (ctx, event) => {
@@ -806,7 +939,7 @@ export const tally: ProcessorDef = {
     await ctx.db.collection("tally")
       .updateOne({ _id: space }, { $inc: { done: 1 } }, { upsert: true });
   },
-};
+} satisfies ProcessorDef;
 ```
 
 ## Entry points

@@ -64,28 +64,25 @@ export function plugins() {
   return [identity, devSignIn, orders];
 }
 `,
-    "plugins/orders/collections/order.ts": `import { defineCollection, people } from "copilotz";
+    "plugins/orders/plugin.ts": `import { people, type Plugin } from "copilotz";
 
-export default defineCollection({
-  schema: {
-    type: "object",
-    properties: { shipped: { type: "boolean" } },
-    required: ["shipped"],
-    additionalProperties: false,
-  },
+export default { defaults: { allow: people } } satisfies Partial<Plugin>;
+`,
+    "plugins/orders/collections/order.ts": `import { defineCollection } from "copilotz";
+
+type Order = { shipped: boolean };
+
+export default defineCollection<Order>({
   queries: {
-    pending: { allow: people, run: (orders) => orders.countDocuments({ shipped: false }) },
+    pending: (orders) => orders.countDocuments({ shipped: false }),
   },
 });
 `,
-    "plugins/orders/actions/order.ship.ts":
-      `import { defineAction, failure, people } from "copilotz";
+    "plugins/orders/actions/order.ship.ts": `import { defineAction, failure } from "copilotz";
 
 export default defineAction({
   description: "Ship a pending order",
-  allow: people,
-  input: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
-  run: async (ctx, { id }) => {
+  run: async (ctx, { id }: { id: string }) => {
     const orders = ctx.db.collection("order");
     const result = await orders.updateOne({ _id: id, shipped: false }, { $set: { shipped: true } });
     if (!result.matchedCount) throw failure("invalid", "No pending order here.", { public: true });

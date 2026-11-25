@@ -1,13 +1,12 @@
 # A plugin, step by step
 
-From an empty folder to a tested plugin, in the shape the docs use. AGENTS.md has a smaller version
-of this app in one piece ("A plugin, end to end"). This file builds it in steps, adds a second
-Action and a rule against writes from outside, and says why each piece is there. On a version newer
-than this skill, `node_modules/copilotz/AGENTS.md` wins.
+For a new app, start with the generated plugin in `node_modules/copilotz/AGENTS.md` (“A plugin, end
+to end”). This walkthrough uses the hand-written alternative, with explicit schemas and a `mod.ts`
+for assembly.
 
 ## 1. The project
 
-Install as [SKILL.md](../SKILL.md) says (`copilotz@next` on Node 24+). Node runs `.ts` files as they
+For a manual setup, install `copilotz@next` and React on Node 24+. Node runs `.ts` files as they
 are, so there's no build step, but `tsc` and the editor need to know imports end in `.ts`. This
 `tsconfig.json` comes from
 [Build Compass, "What you need"](https://copilotz.com/docs/build-compass.md):

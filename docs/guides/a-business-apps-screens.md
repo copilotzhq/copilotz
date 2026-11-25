@@ -1,6 +1,6 @@
 ---
 title: "A business app's screens"
-description: "The screens back-office apps are made of, the Copilotz way: one View per file, the app's own shared components in lib/, Views that read and Actions that write, an app's own frame and home, lists with search, filters, paging and exports, a record's form in a dialog, deletes that ask first, dates, sign-in, printed documents, shortcuts and files, all from the toolkit with no CSS."
+description: "The screens back-office apps are made of, the Copilotz way: one View per file, the app's own shared components in lib/, Views that read and handlers that save, an app's own frame and home, lists with search, filters, paging and exports, a record's form in a dialog, deletes that ask first, dates, sign-in, printed documents, shortcuts and files, all from the toolkit with no CSS."
 section: Guides
 order: 9
 ---
@@ -27,12 +27,12 @@ guide is how to put them together.
   rule speaks for (the `shared` resource, or a `guard`); any other answers `forbidden`, and the part
   says "You can't see this here". A named query with an `allow` (`people`) runs on the server, as
   whoever asks, and answers just what the screen shows: every read below is one.
-- **One View per file.** A plugin's front end is `plugins/<name>/views/web/`, a file per View.
-  `plugins/<name>/web.tsx` only names the Views, as `mod.ts` assembles the server side. React
-  components aren't Views: they live in `lib/`, the plugin's for its own screens and the app's for
-  what every plugin's screens share ([shared UI](#shared-ui-an-apps-own-components)). The data's
-  side is a folder per primitive: `collections/` (each with its schema, its type and its named
-  queries), `actions/` for business logic.
+- **One View per file.** A plugin's front end is `plugins/<name>/views/web/`, a file per View. Give
+  each View a default export. `copilotz gen` assembles the web entry point. React components aren't
+  Views: they live in `lib/`, the plugin's for its own screens and the app's for what every plugin's
+  screens share ([shared UI](#shared-ui-an-apps-own-components)). The data's side is a folder per
+  primitive: `collections/` (each with its schema, its type and its named queries), `actions/` for
+  business logic.
 - **The toolkit, and no CSS.** Screens are made of `copilotz/web`'s pieces, layout included (`Page`,
   `Stack`, `Grid`, `Toolbar`, `Split`, `Card`). The look is the app's theme. No stylesheet, no
   `style={{…}}` for looks, no rules on the toolkit's `.copilotz-*` classes. A printed document's
@@ -46,28 +46,25 @@ guide is how to put them together.
 
 ## Files and names
 
+Start with `copilotz init`. In a generated customers plugin the files go here:
+
 ```text
-app.ts                   the server's plugins
-server.ts                the web host: the page, its code, its theme
-front.ts                 the browser's plugins, in order
-browser.tsx              the page's code: web({ root, plugins: front })
-lib/web/                 the app's own components, which every plugin's screens share
-  status-badge.tsx
-plugins/
-  look/                  the theme, the words and the formats, for the page and the server
-  frame/views/web/shell.tsx  the app's frame: the web.shell View
-  customers/
-    mod.ts contract.ts
-    collections/customer.ts  its schema, its type and its named queries
-    web.tsx              names the Views, and nothing else
-    views/web/
-      customers-screen.tsx   screen:customers
-      customer-dialog.tsx    dialog:customer
-  visits/
-    views/web/           visits-screen.tsx, visit-dialog.tsx…: a View each
-    lib/web/
-      visits-board.tsx   a React component the visits screen draws
+app.ts                                lists #copilotz/plugins/customers/mod.ts on the server
+front.ts                              lists #copilotz/plugins/customers/web.ts in the browser
+lib/web/status-badge.tsx              a React component any plugin can import
+plugins/customers/
+  plugin.ts                           defaults.allow, requires and the guard
+  contract.ts                         types another plugin may import
+  collections/customer.ts             defineCollection<Customer> with its named queries
+  views/web/screen/customers.tsx       screen:customers
+  views/web/dialog/customer.tsx        dialog:customer
+  lib/web/customer-fields.tsx          a component used by the dialog
 ```
+
+Type an Action's input on `run`. Use a document type in `defineCollection<T>` and put named queries
+beside it. The [compiler guide](the-compiler.md) shows the declarations and generated imports. The
+worked salon recipes below use the hand-written alternative. In a generated plugin, use the paths
+above and default-export the View functions in those recipes.
 
 A View's name says where it shows:
 
@@ -1096,7 +1093,7 @@ export const save = defineAction({
 ```ts
 // plugins/visits/mod.ts
 import { definePlugin, type Plugin } from "copilotz";
-import { save } from "./actions.ts";
+import { save } from "./actions/save.ts";
 import { between, ofCustomer, one } from "./queries.ts";
 
 export const visits: Plugin = definePlugin({
@@ -1433,7 +1430,7 @@ export const picture: Route = async (_request, { runtime, actor, params }) => {
 ```ts
 // plugins/services/mod.ts
 import { definePlugin, type Plugin } from "copilotz";
-import { save } from "./actions.ts";
+import { save } from "./actions/save.ts";
 import { list } from "./queries.ts";
 import { picture } from "./routes.ts";
 

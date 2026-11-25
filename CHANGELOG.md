@@ -1,3 +1,71 @@
+## 1.0.0-rc.64 — 2026-11-25
+
+Start a business app with `copilotz init`. Give each declaration a file and write its types once.
+The compiler assembles the plugin and checks the names the app uses. The web toolkit now covers
+record dialogs, date ranges to the second, table exports, printed invoices and barcode labels. The
+guides ship with the runtime.
+
+**Breaking:**
+
+- Code that calls an `ActionDef` or named query's `allow` directly must pass the caller's
+  `AllowContext` and await the result. A query may inherit the rule from its plugin. Existing
+  synchronous rules still work when the runtime calls them.
+
+**New:**
+
+- **Plugins from folders.** `copilotz init [dir]` makes a working orders app with a TSX loader,
+  checks and a test. `copilotz gen` builds server, web and terminal entry points and writes
+  `copilotz-env.d.ts`. Action, collection and query names are checked against the plugins in
+  `app.ts`. View names complete in the editor. Use `--watch` during development, `--check` in CI and
+  `--eject` to take over a plugin's assembly.
+- **Schemas from TypeScript.** Type an Action's second parameter on `run`, or declare a collection
+  with `defineCollection<Order>({ indexes, queries })`. The compiler turns local and imported types
+  into runtime checks. Field comments describe tool inputs, tags such as `@minimum 1` constrain
+  them, and a named collection read knows the document and its string id.
+- **Shorter Actions.** A plugin's `defaults.allow` covers its Actions and named queries. Each can
+  override it. An async `allow(actor, input, ctx)` can read the caller's permissions before a
+  declared grant (`as`) takes effect. `transaction: true` opens or joins a transaction and rolls
+  back the writes together on failure. An Action with no parameters can omit `input`. An explicit
+  schema types both `run` and `allow`.
+- **Record dialogs and confirmations.** `EntityDialog` takes a record and fields, shows a save's
+  refusal under the field it names, and closes after the save succeeds. `ConfirmDialog` and
+  `confirm()` ask before a delete, focus Cancel for a destructive action and keep a failed
+  confirmation open. `Dialog` takes `busy` and `role="alertdialog"`. The toolkit's new words ship in
+  English and Brazilian Portuguese.
+- **Dates to the second.** `DateRangePicker` accepts `seconds` and a day-time pattern.
+  `parseDayTime` reads typed dates and times in the app's pattern and locale. `dateOfDayTime`
+  converts that value to a moment in the chosen time zone.
+- **Table files and printed documents.** Give `DataTable` a custom `formats` record, or share it
+  with `TableExportFormats`. Export visible columns with totals, raw or displayed values, a CSV
+  dialect or a SQL table name. The toolbar accepts the screen's controls and can show a lone page
+  size. `tablePdf` takes a paper size, headings, a logo, column widths and alignment. `pdfImage`
+  prepares a PNG or JPEG for it or a `documentPdf` page. Code 39 (with optional Mod 43), EAN-8 and
+  EAN-13 join Code 128 on screen and in PDF. `barcodePng` makes an image for a label or email.
+- **Mail in tests.** `captureEmail()` keeps messages and attachments sent through `email.send`.
+  Inspect `messages` and reset with `clear()`. The capture adapter can also write MIME messages as
+  `.eml` files.
+
+**Fixed:**
+
+- A `Form` shows a server refusal under the named `Field`, including a nested field's parent. A
+  field's `name` reaches a control drawn as a function.
+- A day pattern accepts a typed four-digit year for `yy`, extra spaces and an optional comma.
+  Table-shaped JSON with raw values preserves each cell's type.
+
+**Docs:**
+
+- The “Find it” index in `AGENTS.md` links each job to an API and a guide. The npm and JSR packages
+  include those pages and a root `llms.txt` with the full reading list. The compiler, toolkit and
+  mail guides cover the new declarations, screens and files.
+
+**Upgrading:**
+
+- Existing plugins can keep their hand-written entry points and JSON Schemas. To generate a plugin,
+  give each declaration a default export, move React components into `lib/web/`, and install
+  TypeScript as a dev dependency. Keep `_id` out of document types and use a string tagged
+  `@format date-time` for a JSON timestamp. An explicit `schema` or `input` takes precedence. Commit
+  `copilotz-env.d.ts` and generate the host modules before type-checking.
+
 ## 1.0.0-rc.63 — 2026-11-24
 
 Chats can be renamed, the models catalog knows GPT-6.2 Astra and Sol, and rc.62's `"moderate"`

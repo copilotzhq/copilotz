@@ -44,11 +44,14 @@ To keep a collection changing only through its Actions, refuse writes from outsi
 REST API, a browser's socket) in a `guard`, as Copilotz's boards and documents do. See
 [the walkthrough](plugin-walkthrough.md), step 3.
 
-## `allow` on every Action outsiders call
+## Who may call an Action or named query
 
-`allow(actor, input)` is asked wherever an actor calls: a page, a key, a tool's `ctx.call`, a timer
-an actor set. For an agent it's asked twice, of the agent and of whom it works for, so a tool never
-calls what its person couldn't. Write it by kind, never by identity:
+Set the plugin's `defaults.allow` for the rule its Actions and queries share. Each may override it.
+An async rule reads from `ctx.db` as its caller before the Action takes a grant.
+
+`allow(actor, input, ctx)` is asked wherever an actor calls: a page, a key, a tool's `ctx.call`, a
+timer an actor set. For an agent it's asked twice, of the agent and of whom it works for, so a tool
+never calls what its person couldn't. Write it by kind, never by identity:
 
 | Helper             | Lets in                                                                         |
 | ------------------ | ------------------------------------------------------------------------------- |
@@ -58,9 +61,9 @@ calls what its person couldn't. Write it by kind, never by identity:
 | `peopleOrContacts` | both                                                                            |
 | `publicCallers`    | the public, `{ kind: "public" }`: whoever calls a public interface as no one    |
 
-An Action without `allow` is internal. Outside callers are refused, but code acting for an actor
-(another Action, a Processor, a tool) runs it. So a tool that calls an internal Action goes past its
-caller: see "Declassifiers" below.
+An Action with neither its own rule nor a default is internal. Outside callers are refused, but code
+acting for an actor (another Action, a Processor, a tool) runs it. So a tool that calls an internal
+Action goes past its caller: see "Declassifiers" below.
 
 ## A View for whatever anyone reads, a model included
 

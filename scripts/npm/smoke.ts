@@ -6,8 +6,7 @@
  * - **An app:** a runtime with the memory store, chat and the fake model,
  *   sends a message and reads the reply; again on PostgreSQL, in a schema of
  *   its own that it drops after, when `COPILOTZ_TEST_POSTGRES_URL` is set.
- * - **AGENTS.md**, the guide for an app's coding agent, is in the installed
- *   package.
+ * - **The agent guide and reading list** link to pages and headings in the installed package.
  * - **Every entry point** loads on Node, and the app and all of them
  *   type-check against the package's declarations (`skipLibCheck: false`).
  * - **The browser's code** bundles from the installed package
@@ -25,6 +24,7 @@
  * npm, or, while the version the package names isn't there yet, from JSR's
  * npm registry (`@jsr/oxian__ominipg`, the same code), as this repo installs it.
  */
+import { checkDocLinks } from "./docs.ts";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -277,10 +277,20 @@ try {
 
   step(`installing ${packages.length ? "them, together," : "it"} into a new project`);
   run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], dir);
-  // The guide for an app's coding agent, where it looks: in the installed package.
-  if (!existsSync(join(dir, "node_modules", ...manifest.name.split("/"), "AGENTS.md"))) {
-    throw new Error(`the installed ${manifest.name} has no AGENTS.md`);
+  step("the installed guides, reading list and their links");
+  const installed = join(dir, "node_modules", ...manifest.name.split("/"));
+  for (const file of ["AGENTS.md", "llms.txt"]) checkDocLinks(installed, file);
+  for (
+    const page of [
+      "reference.md",
+      "reference/plugins/email.md",
+      "guides/the-compiler.md",
+      "guides/the-web-toolkit.md",
+    ]
+  ) {
+    if (!existsSync(join(installed, "docs", page))) throw new Error(`Missing docs/${page}`);
   }
+  if (existsSync(join(installed, "docs/_staging"))) throw new Error("Staging docs shipped");
   if (packages.length) {
     // One Copilotz, the app's: each package's is it (a peer at the same version), not a copy.
     const copies = packages.filter((p) =>

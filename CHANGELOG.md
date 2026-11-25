@@ -73,12 +73,14 @@ guides ship with the runtime.
   longer leaves durable data committed behind an error (`ctx.transaction` and `transaction: true`).
 - **A `ctx.record` append is kept as the identity that made it,** a declared grant included; one the
   owner refuses at completion fails the Action on the record.
+- **New Actions count nested calls before checking permission.** If an earlier call is refused on
+  retry, a later completed call still answers from its receipt. Actions started on rc.63 keep their
+  original numbering.
 
-**Fixed in this release's own work:** a retried Action keeps rc.63's nested call positions (an async
-`allow` reserves its position before it waits), so an upgrade never runs a completed nested call
-again; an Action input embedding `Infer<typeof schema>` keeps its `$ref`s; `gen` resolves Deno
-import-map aliases; the `copilotz` command runs on Node 24.0 and 24.1; and the capture mail adapter
-refuses a public `links` origin unless a test sets `email.capture.allowPublicOrigin: true`.
+**Fixed in this release's own work:** an Action input embedding `Infer<typeof schema>` keeps its
+`$ref`s; `gen` resolves Deno import-map aliases; the `copilotz` command runs on Node 24.0 and 24.1;
+and the capture mail adapter refuses a public `links` origin unless a test sets
+`email.capture.allowPublicOrigin: true`.
 
 **Docs:**
 

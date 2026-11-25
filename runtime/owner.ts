@@ -58,6 +58,7 @@ import { memoryStore } from "./memory.ts";
 import {
   type Hooks,
   isRead,
+  nextAttempt,
   type Op,
   type Outcome,
   perform,
@@ -2084,19 +2085,17 @@ export async function createOwner(
     signal?: AbortSignal,
     actor?: Actor,
   ) => {
-    let attempt = 1;
-    let after: "failed" | "lost" | undefined;
+    let prior: Outcome | undefined;
     if (known) {
       // The log is the receipt: a completed call answers again without running.
-      const prior = await answer(store, { op: "outcome", call: id }) as Outcome;
+      prior = await answer(store, { op: "outcome", call: id }) as Outcome;
       if (
         prior.attempts &&
         (prior.action !== action || prior.inputHash !== await fingerprint(action, input))
       ) throw conflict(id);
       if (prior.completed) return prior.result;
-      attempt = prior.attempts + 1;
-      if (prior.attempts) after = prior.lost ? "lost" : "failed";
     }
+    const { attempt, after, callNumbering } = nextAttempt(prior);
     const begun = performance.now();
     const startedAt = new Date().toISOString();
     try {
@@ -2106,6 +2105,7 @@ export async function createOwner(
         input,
         id,
         attempt,
+        callNumbering,
         ...(after ? { after } : {}),
         ...(scheduled ? { scheduled } : {}),
         ...(actor ? { actor } : {}),
@@ -2137,6 +2137,7 @@ export async function createOwner(
               inputHash,
               startedAt,
               attempt,
+              callNumbering,
             },
           }),
           ...(after

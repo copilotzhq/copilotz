@@ -53,6 +53,13 @@ const customer = defineCollection({
         additionalProperties: false,
       },
       note: { type: "string" },
+      body: {
+        $id: "./copilotz-embedded-1",
+        type: "object",
+        properties: { text: { $ref: "#/$defs/text" } },
+        $defs: { text: { type: "string", minLength: 2 } },
+        required: ["text"],
+      },
     },
     required: ["name", "price"],
     additionalProperties: false,
@@ -136,6 +143,15 @@ async function refused(work: () => Promise<unknown>, field: string) {
   assertEquals((error as { code?: string }).code, "invalid", (error as Error).message);
   assert((error as Error).message.includes(field), (error as Error).message);
 }
+
+each("dot-path updates resolve a field reference in its embedded schema", async (rt) => {
+  await update(rt, { $set: { body: { text: "before" } } });
+  await update(rt, { $set: { "body.text": "after" } });
+  const error = await assertRejects(() => update(rt, { $set: { "body.text": "x" } }));
+  assertEquals((error as { code: string }).code, "invalid");
+  assertEquals((error as { detail: unknown }).detail, { field: "body.text" });
+  assertEquals((await store.findOne("customer", { _id: "c1" }))?.body, { text: "after" });
+});
 
 each("an update that can't fit the schema is refused, and changes nothing", async (rt) => {
   const before = await stored(rt);

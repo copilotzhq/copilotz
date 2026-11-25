@@ -9,6 +9,7 @@ import type { ActionDef, Context, Plugins, ReadContext, TransactionScope } from 
 import {
   type Attempt,
   isRead,
+  type LegacyCall,
   nextAttempt,
   type Op,
   type Outcome,
@@ -81,11 +82,45 @@ type Reach = {
   signal: AbortSignal;
   /** This job may repeat earlier work: a retried call or delivery. */
   retry: boolean;
-  /** The numbering used by the recorded Action whose code is running. */
+  /** Receipt checks for a parent that started before calls were numbered at admission. */
+  replay?: ReturnType<typeof legacyReplay>;
+  /** The numbering used by the Action or Processor delivery whose code is running. */
   callNumbering: Attempt["callNumbering"];
   /** Numbers the nested calls made under each cause, in call order. */
   next(cause: string): number;
 };
+
+/** An rc.63 receipt at a shifted position cannot safely identify the call being retried. */
+function legacyReplay(calls?: LegacyCall[]) {
+  if (!calls?.length) return;
+  let refusal: Error | undefined;
+  return {
+    match(scope: string, position: number, name: string, id: string) {
+      if (refusal) throw refusal;
+      for (const receipt of calls) {
+        const parts = /^(.*)\.(\d+)\.[^.]+$/s.exec(receipt.id);
+        if (parts) {
+          if (parts[1] !== scope) continue;
+          const samePosition = Number(parts[2]) === position;
+          if (samePosition && receipt.id === id && receipt.action === name) continue;
+          if (!samePosition && receipt.action !== name) continue;
+        }
+        refusal = Object.assign(
+          invalid(
+            `Cannot replay "${scope}" at position ${position} ("${name}"). ` +
+              `The rc.63 receipt "${receipt.id}" records "${receipt.action}". Run the parent again by hand.`,
+          ),
+          { final: true },
+        );
+        throw refusal;
+      }
+    },
+    // A parent can catch a child's ordinary admission error. An ambiguous replay still fails.
+    ensure() {
+      if (refusal) throw refusal;
+    },
+  };
+}
 
 /** For whom ops in a held transaction go: what their writes answer to, as whom, in whose code. */
 type Who = { cause?: string; actor?: Actor; action?: string; outside?: true };
@@ -208,6 +243,7 @@ export function createExecutor(
     const held = holding(job, opener);
     try {
       const result = await work(scoped(job, held, opener, numbering));
+      job.replay?.ensure();
       await held.commit();
       return result;
     } catch (error) {
@@ -466,13 +502,14 @@ export function createExecutor(
       (numbering ? `${numbering}.${position}.${inputHash}` : crypto.randomUUID());
     let prior: Outcome | undefined;
     if (!own?.given && who.cause && job.retry) {
+      if (numbering) job.replay?.match(numbering, position, name, id);
       prior = await held.run({ op: "outcome", call: id }, who) as Outcome;
       if (prior.completed) {
         if (own) await held.commit();
         return prior.result as R;
       }
     }
-    const { attempt, after, callNumbering } = own?.given ?? nextAttempt(prior);
+    const { attempt, after, callNumbering, legacyCalls } = own?.given ?? nextAttempt(prior);
     // Its own: what it writes answers to its call.
     const its: Who = { cause: id, ...(actor ? { actor } : {}) };
     const hidden = def.private ?? [];
@@ -508,7 +545,9 @@ export function createExecutor(
     job.frame("action", { type: "started", id, action: name, attempt });
     try {
       for (const mark of marks) held.queue(mark, its);
-      const result = await run({ ...job, callNumbering }, its, id);
+      const replay = legacyReplay(legacyCalls);
+      const result = await run({ ...job, callNumbering, replay }, its, id);
+      replay?.ensure();
       const whole = json(result) ?? null;
       refuseBlobKeys(whole);
       const logged = unprivate(whole, hidden);
@@ -842,6 +881,7 @@ export function createExecutor(
       (numbering ? `${numbering}.${position}.${inputHash}` : crypto.randomUUID());
     let prior: Outcome | undefined;
     if (!given && parent && job.retry) {
+      if (numbering) job.replay?.match(numbering, position, name, id);
       // Asked as whom it works for: in someone's job, an op that names nobody is refused.
       prior = await job.send({
         ops: [{ op: "outcome", call: id }],
@@ -849,7 +889,7 @@ export function createExecutor(
       }) as Outcome;
       if (prior.completed) return prior.result as R;
     }
-    const { attempt, after, callNumbering } = given ?? nextAttempt(prior);
+    const { attempt, after, callNumbering, legacyCalls } = given ?? nextAttempt(prior);
 
     const begun = performance.now();
     // Marks the call's start (once per call) and, on a retry, this attempt.
@@ -886,6 +926,7 @@ export function createExecutor(
     const reach: Reach = {
       ...job,
       callNumbering,
+      replay: legacyReplay(legacyCalls),
       async send(request) {
         const tx = "tx" in request ? request.tx : undefined;
         const end = "end" in request ? request.end : undefined;
@@ -924,6 +965,7 @@ export function createExecutor(
         pending = false;
       }
       const result = await runAction<R>(registry, name, ctx, normalized, checkGrant);
+      reach.replay?.ensure();
       // What it answers goes on record: one the owner would refuse fails the call, on record.
       const whole = json(result) ?? null;
       refuseBlobKeys(whole);
@@ -1102,7 +1144,15 @@ export function createExecutor(
         };
         const own = request.kind === "process" ? request.event.actor : request.actor;
         const flush = async () => {
-          for (const { ops, who } of byWho(pending.splice(0))) await timed({ ops, ...who });
+          let first: unknown;
+          for (const { ops, who } of byWho(pending.splice(0))) {
+            try {
+              await timed({ ops, ...who });
+            } catch (error) {
+              first ??= error;
+            }
+          }
+          if (first !== undefined) throw first;
         };
         const job: Reach = {
           send,
@@ -1127,7 +1177,8 @@ export function createExecutor(
           },
           frame: (channel, data) => out.write({ frame: { channel, data } }),
           signal,
-          callNumbering: request.kind === "call" ? request.callNumbering : 2,
+          callNumbering: "callNumbering" in request ? request.callNumbering : 2,
+          replay: request.kind === "process" ? legacyReplay(request.legacyCalls) : undefined,
           retry: request.kind === "call"
             ? request.attempt > 1
             : request.kind === "process" && request.retry,
@@ -1140,6 +1191,7 @@ export function createExecutor(
         Promise.resolve().then(() => execute(job, request)).then(
           async (result) => {
             await flush();
+            job.replay?.ensure();
             out.end({ result: json(result) });
           },
           async (error) => {

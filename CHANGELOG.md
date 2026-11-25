@@ -47,6 +47,15 @@ guides ship with the runtime.
 
 **Fixed:**
 
+- Processor deliveries keep their nested-call numbering across restarts. An outstanding rc.63
+  delivery reuses the receipt of a completed call after an earlier permission refusal.
+- Legacy Action retries check the recorded child name, input hash and position before running a
+  nested call. An ambiguous replay fails with the parent call ID and position.
+- Grant checks inside a held transaction see staged membership changes. Database-backed permission
+  rules use the same transaction reader on memory, SQLite and PGlite.
+- The final record flush attempts each identity's appends in order and reports the first refusal.
+- Dot-path updates resolve a field's `$ref` in its original schema resource, including embedded
+  collection schemas generated from TypeScript.
 - A `Form` shows a server refusal under the named `Field`, including a nested field's parent. A
   field's `name` reaches a control drawn as a function.
 - Date-only patterns read exactly two digits for `yy`, including in `yyMMdd`. Day-time patterns also
@@ -103,6 +112,9 @@ and the capture mail adapter refuses a public `links` origin unless a test sets
 
 **Upgrading:**
 
+- An Action begun on rc.63 and retried on rc.64 after a permission change fails if its nested calls
+  no longer match their receipts. Review the completed work and run the Action again by hand with a
+  fresh call ID.
 - Existing plugins can keep their hand-written entry points and JSON Schemas. To generate a plugin,
   give each declaration a default export, move React components into `lib/web/`, and install
   TypeScript as a dev dependency. Keep `_id` out of document types and use a string tagged

@@ -414,21 +414,29 @@ for (
     });
   }
 
-  test(`${kind}: retries find rc.63 child receipts after synchronous denials`, async () => {
+  test(`${kind}: retries reconcile rc.63 child receipts after synchronous permission checks`, async () => {
+    let allowed = false;
+    let checks = 0;
     const store = await make();
     // Receipts in rc.63's format, seeded before opening the upgraded runtime. Each parent failed after
     // its first admitted child had committed. Hashes include the Action name and input.
     const { epoch } = await store.open();
     await store.transaction(epoch, async (tx) => {
       for (
-        const [id, inputHash] of [["parent", "b888483fe9979b4c"], ["joined", "fb601e5df447c520"]]
+        const [id, action, inputHash, position] of [
+          ["parent", "parent", "b888483fe9979b4c", 1],
+          ["joined", "joined", "fb601e5df447c520", 1],
+          ["parent-changed", "parent", "b888483fe9979b4c", 1],
+          ["joined-changed", "joined", "fb601e5df447c520", 1],
+          ["parent-gap", "parent", "b888483fe9979b4c", 2],
+        ] as const
       ) {
-        const child = id + ".1.a67be582be756679";
+        const child = `${id}.${position}.a67be582be756679`;
         tx.emit({
           id,
           type: "action.started",
           actor: ana,
-          data: { action: id, input: {}, inputHash, attempt: 1 },
+          data: { action, input: {}, inputHash, attempt: 1 },
         });
         tx.emit({
           id: child,
@@ -444,7 +452,7 @@ for (
           actor: ana,
           data: { action: "sell", result: { acknowledged: true, insertedId: id }, attempt: 1 },
         });
-        tx.emit({ cause: id, type: "action.failed", actor: ana, data: { action: id, attempt: 1 } });
+        tx.emit({ cause: id, type: "action.failed", actor: ana, data: { action, attempt: 1 } });
       }
     });
     const runtime = await createRuntime({
@@ -455,7 +463,7 @@ for (
           sale: { schema: { type: "object", properties: { note: { type: "string" } } } },
         },
         actions: {
-          denied: defineAction({ atomic: true, allow: () => false, run: () => false }),
+          denied: defineAction({ atomic: true, allow: () => allowed, run: () => ++checks }),
           sell: defineAction({
             atomic: true,
             allow: people,
@@ -486,9 +494,103 @@ for (
           insertedId: id,
         });
       }
-      assertEquals((await store.find("sale", {})).length, 2);
+      await assertRejects(
+        () => runtime.call("parent", {}, { id: "parent-gap", actor: ana }),
+        Error,
+        '"parent-gap" at position 1',
+      );
+      allowed = true;
+      for (const action of ["parent", "joined"]) {
+        const id = action + "-changed";
+        await assertRejects(
+          () => runtime.call(action, {}, { id, actor: ana }),
+          Error,
+          `"${id}" at position 1`,
+        );
+        assertEquals(await store.related(id, ["action.completed"]), []);
+      }
+      assertEquals(checks, 0);
+      assertEquals(await store.count("sale", {}), 5);
     } finally {
       await runtime.close();
+    }
+  });
+  test(`${kind}: a recovered Processor delivery keeps the numbering it began with`, async () => {
+    const store = await make();
+    const { epoch } = await store.open();
+    const child = "old.1.a67be582be756679";
+    await store.transaction(epoch, async (tx) => {
+      tx.emit({ id: "old", type: "order.placed", actor: ana, data: {} });
+      tx.emit({
+        id: child,
+        cause: "old",
+        type: "action.started",
+        actor: ana,
+        data: { action: "sell", input: {}, inputHash: "a67be582be756679", attempt: 1 },
+      });
+      await tx.insert("sale", [{ _id: "previous-sale" }]);
+      tx.emit({
+        cause: child,
+        type: "action.completed",
+        actor: ana,
+        data: { action: "sell", result: "previous-sale", attempt: 1 },
+      });
+    });
+
+    const sales: string[] = [];
+    const sold = Promise.withResolvers<void>();
+    let allowed = false;
+    const plugin = definePlugin({
+      name: "sales",
+      collections: {
+        sale: { schema: { type: "object", properties: { note: { type: "string" } } } },
+      },
+      events: { "order.placed": { schema: { type: "object" }, allow: people } },
+      actions: {
+        check: defineAction({ allow: () => allowed, run: () => true }),
+        sell: defineAction({
+          run: async (ctx) => (await ctx.db.collection("sale").insertOne({})).insertedId,
+        }),
+      },
+      processors: {
+        orders: {
+          on: "order.placed",
+          run: async (ctx) => {
+            await ctx.call("check", {}).catch(() => {});
+            sales.push(await ctx.call("sell", {}));
+            if (!ctx.retry) {
+              sold.resolve();
+              await new Promise<void>((done) =>
+                ctx.signal.addEventListener("abort", () => done(), { once: true })
+              );
+            }
+          },
+        },
+      },
+    });
+    // Keep the database across the owner's restart, including in-memory PGlite.
+    const first = await createRuntime({
+      store: { ...store, close: async () => {} },
+      plugins: [plugin],
+    });
+    try {
+      await first.idle();
+      assertEquals(sales, ["previous-sale"]);
+      await first.emit("order.placed", {}, { id: "new", actor: ana });
+      await Promise.race([sold.promise, first.idle()]);
+      assertEquals(sales.length, 2);
+    } finally {
+      await first.close({ drain: 0 });
+    }
+    allowed = true;
+    const second = await createRuntime({ store, plugins: [plugin] });
+    try {
+      await second.idle();
+      assertEquals(sales, ["previous-sale", sales[1], sales[1]]);
+      assertEquals(await store.count("sale", {}), 2);
+      assertEquals(await store.related("new", ["processor.failed"]), []);
+    } finally {
+      await second.close();
     }
   });
 }

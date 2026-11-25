@@ -9,6 +9,7 @@ import type {
   Change,
   Doc,
   Edge,
+  Event,
   Filter,
   FindOptions,
   Reader,
@@ -147,19 +148,29 @@ export type Outcome = {
   inputHash?: string;
   /** Present on starts that count every nested call before admission. */
   callNumbering?: 2;
+  legacyCalls?: LegacyCall[];
 };
+
+/** Child starts from the original numbering scope (including branches), before replay begins. */
+export type LegacyCall = { id: string; action: string };
+
+export const legacyCalls = (events: Event[], parent: string): LegacyCall[] =>
+  events.filter((e) => e.type === "action.started" && e.cause === parent)
+    .map((e) => ({ id: e.id, action: String(e.data.action) }));
 
 /** A parent's first start fixes how its children are numbered across retries. */
 export type Attempt = {
   attempt: number;
   after?: "failed" | "lost";
   callNumbering: 1 | 2;
+  legacyCalls?: LegacyCall[];
 };
 
 export function nextAttempt(prior?: Outcome): Attempt {
   return {
     attempt: (prior?.attempts ?? 0) + 1,
     ...(prior?.attempts ? { after: prior.lost ? "lost" : "failed" } : {}),
+    ...(prior?.legacyCalls?.length ? { legacyCalls: prior.legacyCalls } : {}),
     callNumbering: prior?.attempts ? prior.callNumbering ?? 1 : 2,
   };
 }
@@ -194,7 +205,9 @@ export async function outcome(reader: Reader, call: string): Promise<Outcome> {
       ? {
         action: String(started.data.action),
         inputHash: started.data.inputHash as string,
-        ...(started.data.callNumbering === 2 ? { callNumbering: 2 } : {}),
+        ...(started.data.callNumbering === 2
+          ? { callNumbering: 2 }
+          : { legacyCalls: legacyCalls(events, call) }),
       }
       : {}),
   };

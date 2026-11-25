@@ -206,7 +206,7 @@ export function code128(text: string, options?: { set?: "auto" | "B" }): number[
 }
 
 /**
- * The bars of `text`, drawn `width` pixels wide at most with whole pixels per
+ * The bars of `text`, drawn to a preferred `width` with whole pixels per
  * module (so they stay sharp; at least one): each bar's `x` and `w`, the
  * module's size and the barcode's whole width, in pixels. `quiet` adds the
  * blank margins scanners need (ten modules for Code 128 and Code 39).
@@ -214,19 +214,9 @@ export function code128(text: string, options?: { set?: "auto" | "B" }): number[
  */
 export function bars(
   text: string,
-  width?: number,
+  width = 300,
   options: BarcodeOptions = {},
 ): { module: number; width: number; bars: { x: number; w: number }[] } {
-  return layoutBars(text, options, width, 300);
-}
-
-/** An explicit width must fit the symbol. A preferred width can grow to one unit per module. */
-export function layoutBars(
-  text: string,
-  options: BarcodeOptions,
-  width: number | undefined,
-  preferredWidth: number,
-) {
   const widths = options.format === "code39"
     ? code39(text, options)
     : options.format === "ean8"
@@ -238,11 +228,8 @@ export function layoutBars(
   const left = !options.quiet ? 0 : options.format === "ean13" ? 11 : retail ? 7 : 10;
   const right = !options.quiet ? 0 : retail ? 7 : 10;
   const modules = widths.reduce((a, b) => a + b, 0) + left + right;
-  const available = width === undefined ? Math.max(preferredWidth, modules) : width;
-  if (!Number.isFinite(available) || available < modules) {
-    throw new RangeError(`Barcode width must be finite and at least ${modules} units.`);
-  }
-  const module = Math.floor(available / modules);
+  if (!Number.isFinite(width)) throw new RangeError("Barcode width must be finite.");
+  const module = Math.max(1, Math.floor(width / modules));
   const out: { x: number; w: number }[] = [];
   let x = left;
   widths.forEach((w, i) => {

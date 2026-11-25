@@ -175,32 +175,20 @@ test("Adam7 interlacing restores packed palette and RGBA pixels before embedding
   assertEquals([...await inflate(image.alpha!)], samples.filter((i) => i % 4 === 3));
 });
 
-test("an EAN-13 and its quiet margins must fit inside the requested PNG", async () => {
-  await assertRejects(
-    () => barcodePng("590123412345", { format: "ean13", width: 100 }),
-    RangeError,
-    "113",
-  );
+test("a narrow requested width grows to whole modules including quiet margins", async () => {
   assertEquals(
-    readPng(await barcodePng("590123412345", { format: "ean13", width: 113 })).width,
+    readPng(await barcodePng("590123412345", { format: "ean13", width: 100 })).width,
     113,
   );
-});
-
-test("an EAN-13 and its quiet margins must fit inside the requested PDF label", () => {
+  const label = { barcode: "SKU-12345", quiet: true, x: 12, y: 0, height: 20 };
+  assertEquals(
+    documentPdf([[{ ...label, width: 120 }]], { size: "receipt" }),
+    documentPdf([[{ ...label, width: 143 }]], { size: "receipt" }),
+  );
   assertThrows(
-    () =>
-      documentPdf([[{
-        barcode: "590123412345",
-        format: "ean13",
-        quiet: true,
-        x: 0,
-        y: 0,
-        width: 100,
-        height: 20,
-      }]], { size: [100, 20] }),
+    () => documentPdf([[{ ...label, width: 120 }]], { size: [140, 20] }),
     RangeError,
-    "113",
+    "on the page",
   );
 });
 
@@ -210,8 +198,6 @@ test("a long Code 128 fits its PNG and PDF when width is omitted", async () => {
   assertEquals(bars(value, undefined, { quiet: true }).width, 330);
   assertEquals(readPng(await barcodePng(value)).width, 330);
   assertEquals(documentPdf([[label]]), documentPdf([[{ ...label, width: 330 }]]));
-  await assertRejects(() => barcodePng(value, { width: 329 }), RangeError, "330");
-  assertThrows(() => documentPdf([[{ ...label, width: 329 }]]), RangeError, "330");
 });
 
 test("an omitted barcode width uses the room from x to the receipt edge", () => {

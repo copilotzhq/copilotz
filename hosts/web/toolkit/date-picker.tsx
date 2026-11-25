@@ -23,9 +23,9 @@
  * minutes, like `DateTimePicker`), and the value's ends are then
  * `YYYY-MM-DD HH:mm` (a preset is its days, whole); `seconds` takes the
  * times to the second, `YYYY-MM-DD HH:mm:ss` (a preset runs from `00:00:00`
- * to `23:59:59`). With a time, From and To also read a whole day and time
- * typed in the format (`16/11/2026 14:30:05`), and `format` may be a
- * day-time pattern (`dd/MM/yyyy HH:mm:ss`), which writes each end whole.
+ * to `23:59:59`). From and To read dates. The time comes from each end's
+ * time fields. A day-time `format` such as `dd/MM/yyyy HH:mm:ss` writes
+ * each end whole.
  * The foot stays in view when the panel scrolls.
  *
  * The field, the presets and the foot take their look from `--date-picker-*`
@@ -42,7 +42,7 @@
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { lang } from "../words.ts";
 import { Button } from "./button.tsx";
-import { Calendar, type DayFormat, formatDay, parseDay, shortPattern } from "./calendar.tsx";
+import { Calendar, type DayFormat, formatDay, parseDay } from "./calendar.tsx";
 import { cx } from "./cx.ts";
 import {
   addMonth,
@@ -55,7 +55,6 @@ import {
   isDayTime,
   monthOf,
   monthsBetween,
-  parseDayTime,
   partsOfDayTime,
   type Preset,
   presetRange,
@@ -239,43 +238,24 @@ function firstMonth(
   return first;
 }
 
-/** What an end's field reads from typed text: a day, and a time of it when one was typed. */
-type Typed = { day: string; clock?: Clock };
-
-/**
- * A typed end: its day as the field writes it, read back as it's typed; with `timed`, a whole day
- * and time typed (`16/11/2026 14:30:05`) is read too, by `dayTime` (a pattern, or the language's
- * short date and time). Wrong text is marked and changes nothing.
- */
+/** A typed day: the text as the field writes it, read back as it's typed; wrong text is marked and changes nothing. */
 function DayField(
-  { label, day, format, dayTime, timed = false, min, max, onDay }: {
+  { label, day, format, min, max, onDay }: {
     label: string;
     day?: string;
     format?: DayFormat;
-    /** How a whole day and time is typed: a pattern, or the page language's. */
-    dayTime?: string;
-    timed?: boolean;
     min?: string;
     max?: string;
-    onDay(day: string, clock?: Clock): void;
+    onDay(day: string): void;
   },
 ): ReactNode {
   const id = useId();
   const written = day ? formatDay(day, format) : "";
   const [text, setText] = useState(written);
   const [bad, setBad] = useState(false);
-  const read = (typed: string): Typed | undefined => {
-    const only = parseDay(typed, format);
-    if (only || !timed) return only ? { day: only } : undefined;
-    const at = parseDayTime(typed, dayTime, lang()) ??
-      (dayTime === undefined
-        ? parseDayTime(typed, `${shortPattern()} HH:mm`, lang(), true)
-        : undefined);
-    return at ? { day: at.slice(0, 10), clock: clockOf(at, START) } : undefined;
-  };
   // A day chosen elsewhere (the calendar, a preset) is written; the one being typed stays as typed.
   useEffect(() => {
-    if (!text || read(text)?.day !== day) {
+    if (!text || parseDay(text, format) !== day) {
       setText(written);
       setBad(false);
     }
@@ -295,12 +275,11 @@ function DayField(
         onFocus={(event) => event.currentTarget.select()}
         onChange={(event) => {
           const next = event.target.value;
-          const typed = read(next);
-          const fits = typed !== undefined && (!min || typed.day >= min) &&
-            (!max || typed.day <= max);
+          const typed = parseDay(next, format);
+          const fits = typed !== undefined && (!min || typed >= min) && (!max || typed <= max);
           setText(next);
           setBad(!fits && next.trim() !== "");
-          if (fits) onDay(typed.day, typed.clock);
+          if (fits) onDay(typed);
         }}
         onBlur={() => {
           setText(written);
@@ -401,9 +380,8 @@ export function DateRangePicker(
   const timed = time || seconds;
   const [first, last] = seconds ? [START_SECOND, END_SECOND] : [START, END];
   // A day-time pattern writes each end whole; its day alone is what From and To show.
-  const whole = typeof format === "string" && hasTime(format) ? format : undefined;
+  const whole = timed && typeof format === "string" && hasTime(format) ? format : undefined;
   const dayFormat = whole ? dayPatternOf(whole) : format;
-  const dayTime = whole ?? (typeof format === "string" ? `${format} HH:mm:ss` : undefined);
   const days = (v?: DateRange) => ({
     start: v?.start.slice(0, 10) ?? today,
     end: v?.end.slice(0, 10) ?? today,
@@ -447,18 +425,14 @@ export function DateRangePicker(
     setTimes(clocks(value));
     setMonth(firstMonth(start, min, max));
   };
-  // A time typed to the minute, in a picker to the second, is at its `:00`.
-  const kept = (clock: Clock): Clock => seconds ? { ...clock, second: clock.second ?? 0 } : clock;
-  const typedFrom = (day: string, clock?: Clock) => {
+  const typedFrom = (day: string) => {
     const range = { start: day, end: draft.end !== undefined && draft.end < day ? day : draft.end };
     setDraft(range);
-    if (clock) setTimes((now) => ({ ...now, from: kept(clock) }));
     setMonth(firstMonth(range, min, max));
   };
-  const typedTo = (day: string, clock?: Clock) => {
+  const typedTo = (day: string) => {
     const range = { start: day < draft.start ? day : draft.start, end: day };
     setDraft(range);
-    if (clock) setTimes((now) => ({ ...now, to: kept(clock) }));
     const second = addMonth(month, 1);
     if (monthOf(day) < month || monthOf(day) > second) {
       setMonth(firstMonth(range, min, max, "end"));
@@ -541,8 +515,6 @@ export function DateRangePicker(
                       label={say("rangeFrom")}
                       day={draft.start}
                       format={dayFormat}
-                      dayTime={dayTime}
-                      timed={timed}
                       min={min}
                       max={max}
                       onDay={typedFrom}
@@ -563,8 +535,6 @@ export function DateRangePicker(
                       label={say("rangeTo")}
                       day={draft.end}
                       format={dayFormat}
-                      dayTime={dayTime}
-                      timed={timed}
                       min={min}
                       max={max}
                       onDay={typedTo}

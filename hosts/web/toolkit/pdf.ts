@@ -27,7 +27,7 @@
  */
 import type { ExportCell, Sheet } from "./export.ts";
 import type { PdfImage } from "./pdf-image.ts";
-import { type BarcodeOptions, layoutBars } from "./code128.ts";
+import { type BarcodeOptions, bars } from "./code128.ts";
 
 /** How the PDF looks: its page, its title, and its colours (`#rrggbb`). */
 export type PdfOptions = {
@@ -523,7 +523,7 @@ export type Drawn =
     thickness?: number;
   }
   | {
-    /** A barcode of this text, as `Barcode` draws it, at most `width` wide. */
+    /** A barcode of this text, as `Barcode` draws it, with preferred `width`. */
     barcode: string;
     x: number;
     y: number;
@@ -641,7 +641,7 @@ function draw(
         } cm /${name} Do Q`,
       );
     } else {
-      const drawn = layoutBars(item.barcode, item, item.width, width - item.x);
+      const drawn = bars(item.barcode, item.width ?? width - item.x, item);
       const first = drawn.bars[0];
       const last = drawn.bars[drawn.bars.length - 1];
       if (

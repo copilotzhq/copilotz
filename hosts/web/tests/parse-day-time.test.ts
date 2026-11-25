@@ -90,6 +90,7 @@ test("what isn't a day and a time is refused", () => {
   assertEquals(parseDayTime("11/16/2026 13:05 PM", "M/d/yyyy h:mm a"), undefined);
   assertEquals(parseDayTime("11/16/2026 0:05 AM", "M/d/yyyy h:mm a"), undefined);
   assertEquals(parseDayTime("11/16/2026 1:05 XM", "M/d/yyyy h:mm a"), undefined);
+  assertEquals(parseDayTime("11/16/2026 02:05 PM", "M/d/yyyy HH:mm a"), undefined);
 });
 
 test("with no pattern: the language's own short date and time, or a day-time as kept", () => {
@@ -207,4 +208,28 @@ test("Arabic digits in quoted words stay literal alongside numeric date and time
   assertEquals(parseDayTime(formatPattern(value, pattern, locale), pattern, locale), value);
   assertEquals(parseDayTime("الدفعة ١ ١٦/١١/٢٠٢٦ ١٤:٣٠:٠٥", pattern, locale), value);
   assertEquals(parseDayTime("الدفعة 1 ١٦/١١/٢٠٢٦ ١٤:٣٠:٠٥", pattern, locale), undefined);
+});
+
+test("a compact day-time needs exactly one valid reading", () => {
+  assertEquals(parseDayTime("2026/211 14:30", "yyyy/dM HH:mm"), undefined);
+  assertEquals(parseDayTime("2026/228 14:30", "yyyy/Md HH:mm"), "2026-02-28 14:30");
+  assertEquals(parseDayTime("2026-11-02 123", "yyyy-MM-dd Hmm"), undefined);
+  assertEquals(parseDayTime("2026-11-02 1234", "yyyy-MM-dd Hmmss"), undefined);
+  assertEquals(parseDayTime("2026-11-02 2:30", "yyyy-MM-dd h:mm"), undefined);
+});
+
+test("localized day-times require a Gregorian calendar", () => {
+  for (const locale of ["th-TH", "fa-IR"]) {
+    const text = new Intl.DateTimeFormat(locale, {
+      dateStyle: "short",
+      timeStyle: "medium",
+      timeZone: "UTC",
+    }).format(new Date("2026-11-02T14:30:00Z"));
+    assertEquals(parseDayTime(text, undefined, locale), undefined);
+  }
+  assertEquals(parseDayTime("2/11/2569 14:30", "d/M/yyyy HH:mm", "th-TH"), undefined);
+  assertEquals(
+    parseDayTime("2/11/2026 14:30", "d/M/yyyy HH:mm", "th-TH-u-ca-gregory"),
+    "2026-11-02 14:30",
+  );
 });

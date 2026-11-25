@@ -8,7 +8,7 @@
 
 /** A form control, as `formValues` reads it: what `form.elements` holds. */
 type Element = {
-  id?: string;
+  matches?(selector: string): boolean;
   name?: string;
   type?: string;
   value?: string;
@@ -21,62 +21,18 @@ type Element = {
 /** Controls that hold nothing a record keeps. */
 const SKIPPED = new Set(["submit", "button", "reset", "image", "file", "fieldset", "output"]);
 
-/** Named controls that can contribute to a record, including ones disabled during a save. */
-function recordControls(form: { elements: ArrayLike<unknown> }): Element[] {
-  return (Array.from(form.elements) as Element[]).filter((c) =>
-    !!c.name && !SKIPPED.has((c.type ?? "").toLowerCase())
-  );
-}
-
-const controlKey = (c: Element) =>
-  JSON.stringify([
-    c.name,
-    c.type,
-    c.id,
-    !c.id && (c.type === "radio" || c.type === "checkbox") ? c.value : null,
-  ]);
-
-/** Keep submit-time eligibility, but read the controls in live form order after the parts finish. */
-export function captureNamedControls(form: HTMLFormElement): () => Element[] {
-  const initial = new Map(
-    recordControls(form).map((c) => [
-      c,
-      { name: c.name, key: controlKey(c), enabled: !c.disabled },
-    ]),
-  );
-  return () => {
-    const current = recordControls(form);
-    const mounted = new Set(current);
-    const removed = [...initial].filter(([c, old]) => !mounted.has(c) || old.name !== c.name)
-      .map(([, old]) => old);
-    const added = current.filter((c) => initial.get(c)?.name !== c.name);
-    const keys = new Set(added.map(controlKey));
-    const byKey = Map.groupBy(removed, (old) => old.key);
-    // A remount can change an id. Read unmatched controls of the same name as a group.
-    const byName = Map.groupBy(removed.filter((old) => !keys.has(old.key)), (old) => old.name);
-    return current.filter((c) => {
-      const old = initial.get(c);
-      if (old && old.name === c.name) return old.enabled;
-      const group = byKey.get(controlKey(c)) ?? byName.get(c.name);
-      if (!group?.some((entry) => entry.enabled)) return false;
-      if (group.some((entry) => !entry.enabled)) {
-        throw new Error(`Cannot tell which "${c.name}" controls were enabled when saving began.`);
-      }
-      return true;
-    });
-  };
-}
-
 /**
  * What a form's named controls hold, as a record keeps it: text as a string; a number field as a
  * number (`undefined` when cleared); a checkbox as `true` or `false`; the chosen radio's value;
  * a multiple select, or several controls of one name, as a list. Buttons, files and disabled
- * controls are left out. Pass the controls captured at submit to read their values after a part finishes.
+ * controls are left out.
  */
 export function formValues(
   form: { elements: ArrayLike<unknown> },
-  controls = recordControls(form).filter((c) => !c.disabled),
 ): Record<string, unknown> {
+  const controls = (Array.from(form.elements) as Element[]).filter((c) =>
+    c.name && !c.disabled && !c.matches?.(":disabled") && !SKIPPED.has((c.type ?? "").toLowerCase())
+  );
   const count = new Map<string, number>();
   for (const c of controls) count.set(c.name!, (count.get(c.name!) ?? 0) + 1);
   const values: Record<string, unknown> = {};

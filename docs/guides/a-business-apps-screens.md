@@ -629,7 +629,7 @@ export const customerDialog = (
   return (
     <EntityDialog
       title={found?.value?.name ?? "New customer"}
-      values={found?.value ?? { since: today }}
+      values={found?.value ?? { _id: item._id, since: today }}
       fields={[
         { name: "name", label: "Name", required: true },
         { name: "phone", label: "Phone", type: "tel" },
@@ -996,7 +996,7 @@ export const visitDialog = (
       // `at` is `YYYY-MM-DD HH:mm:ss`: its seconds stay until its time is changed.
       values={saved
         ? { ...saved, price: (saved.price / 100).toFixed(2) }
-        : { at: nowIn(timeZone, 1, undefined, true) }}
+        : { _id: item._id, at: nowIn(timeZone, 1, undefined, true) }}
       fields={[
         {
           name: "customer",
@@ -1131,7 +1131,8 @@ export const visits: Plugin = definePlugin({
   `at.slice(0, 16) <= range.end`.
 - **`DateRangePicker` with `seconds`** takes the ends to the second (`00:00:00` to `23:59:59` for a
   preset), so a stored time compares with them as text. `format` may be the app's day-time pattern
-  (`dayTime` here, `dd/MM/yyyy HH:mm:ss`), and From and To read a whole day and time typed in it.
+  (`dayTime` here, `dd/MM/yyyy HH:mm:ss`), and From and To read its date. Enter the time in the
+  adjacent fields.
 - **`parseDayTime(text, pattern)`** reads a day-time typed in the app's pattern back
   (`"16/11/2026 14:30:05"` by `dd/MM/yyyy HH:mm:ss`; `M/d/yyyy h:mm a` for a 12-hour clock), and is
   `undefined` for what isn't one, so a field of the app's own can mark it.

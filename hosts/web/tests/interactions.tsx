@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { mock } from "node:test";
 import { Window } from "happy-dom";
-import { act, Activity, type ReactNode } from "react";
+import { act, Activity, type ReactNode, useState } from "react";
 import { createRuntime, definePlugin, type ViewContext } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import { sqliteStore } from "../../../stores/sql/sqlite/mod.ts";
 import { postgresStore } from "../../../stores/sql/postgres/mod.ts";
 import { tempFile, test } from "../../../testing/mod.ts";
+import { ConfirmDialog } from "../toolkit/confirm-dialog.tsx";
 import { EntityDialog } from "../toolkit/entity-dialog.tsx";
 import { Form, useFormSubmit } from "../toolkit/form.tsx";
 import { DateRangePicker } from "../toolkit/date-picker.tsx";
@@ -71,97 +72,57 @@ test("an entity saves a named control after its part normalizes it", () =>
     assert.deepEqual(saved, [{ name: "normalized" }]);
   }));
 
-test("an entity reads the final values of controls enabled when Save was pressed", () =>
-  page(async (render) => {
-    const upload = Promise.withResolvers<void>();
-    const saved: unknown[] = [];
-    function Part({ saving }: { saving: boolean }) {
-      useFormSubmit(async (form, signal) => {
-        await upload.promise;
-        if (signal.aborted) return;
-        form.querySelector<HTMLInputElement>('[name="name"]')!.value = "normalized";
-      });
-      return (
-        <>
-          <input name="name" defaultValue="original" disabled={saving} />
-          <input name="ignored" defaultValue="disabled at submit" disabled={!saving} />
-        </>
-      );
-    }
-    await render(
-      <EntityDialog title="Edit" onSubmit={(record) => saved.push(record)} onClose={() => {}}>
-        {({ saving }) => <Part saving={saving} />}
-      </EntityDialog>,
-    );
-    await submit();
-    assert.equal(document.querySelector<HTMLInputElement>('[name="name"]')!.disabled, true);
-    await act(async () => upload.resolve());
-    assert.deepEqual(saved, [{ name: "normalized" }]);
-  }));
-
-test("an entity reads a remounted control and skips controls removed during save", () =>
+test("an entity reads enabled repeated controls in live order after a remount", () =>
   page(async (render) => {
     const work = Promise.withResolvers<void>();
     const saved: unknown[] = [];
-    function Part({ saving }: { saving: boolean }) {
-      useFormSubmit(async (form, signal) => {
-        await work.promise;
-        if (signal.aborted) return;
-        form.querySelector<HTMLInputElement>("#edited")!.value = "normalized";
-      });
-      return (
-        <div key={String(saving)}>
-          {saving && <input id="ignored" name="name" defaultValue="other" />}
-          <input id="edited" name="name" defaultValue="original" disabled={saving} />
-          {!saving && <input name="removed" defaultValue="detached" />}
-        </div>
-      );
-    }
     await render(
-      <EntityDialog title="Edit" onSubmit={(record) => saved.push(record)} onClose={() => {}}>
-        {({ saving }) => <Part saving={saving} />}
+      <EntityDialog title="Tags" onSubmit={(record) => saved.push(record)} onClose={() => {}}>
+        {({ saving }) => (
+          <>
+            <div key={String(saving)}>
+              <input name="tag" defaultValue={saving ? "updated" : "original"} />
+              <input name="tag" defaultValue="another" />
+              {saving && <input name="tag" defaultValue="disabled" disabled />}
+              {!saving && <input name="removed" defaultValue="detached" />}
+            </div>
+            <Upload wait={work.promise} />
+          </>
+        )}
       </EntityDialog>,
     );
-    const original = document.querySelector("#edited")!;
     await submit();
-    assert.equal(original.isConnected, false);
     await act(async () => work.resolve());
-    assert.deepEqual(saved, [{ name: "normalized" }]);
+    assert.deepEqual(saved, [{ tag: ["updated", "another"], file: "A.pdf" }]);
   }));
 
-for (const mixed of [false, true]) {
-  test(
-    "remounted same-name fields " + (mixed ? "report ambiguous eligibility" : "save in live order"),
-    () =>
-      page(async (render) => {
-        const work = Promise.withResolvers<void>();
-        const saved: unknown[] = [];
-        await render(
-          <EntityDialog title="Tags" onSubmit={(record) => saved.push(record)} onClose={() => {}}>
-            {({ saving }) => (
-              <div key={String(saving)}>
-                <input
-                  name="tag"
-                  defaultValue={saving ? "updated" : "original"}
-                  disabled={saving}
-                />
-                <input name="tag" defaultValue="another" disabled={mixed || saving} />
-                <Upload wait={work.promise} />
-              </div>
-            )}
-          </EntityDialog>,
-        );
-        const first = document.querySelector('[name="tag"]')!;
-        await submit();
-        assert.equal(first.isConnected, false);
-        await act(async () => work.resolve());
-        if (mixed) {
-          assert.deepEqual(saved, []);
-          assert.match(document.querySelector('[role="alert"]')!.textContent!, /tag/);
-        } else assert.deepEqual(saved, [{ tag: ["updated", "another"], file: "A.pdf" }]);
-      }),
-  );
-}
+test("an entity saves its latest draft when a part finishes", () =>
+  page(async (render) => {
+    const work = Promise.withResolvers<void>();
+    const saved: unknown[] = [];
+    await render(
+      <EntityDialog
+        title="Edit"
+        values={{ qty: 1 }}
+        onSubmit={(record) => saved.push(record)}
+        onClose={() => {}}
+      >
+        {({ values, set }) => (
+          <>
+            <button type="button" id="qty" onClick={() => set({ qty: 2 })}>
+              {String(values.qty)}
+            </button>
+            <Upload wait={work.promise} />
+          </>
+        )}
+      </EntityDialog>,
+    );
+    await submit();
+    await act(() => document.querySelector<HTMLButtonElement>("#qty")!.click());
+    assert.equal(document.querySelector("#qty")!.textContent, "2");
+    await act(async () => work.resolve());
+    assert.deepEqual(saved, [{ qty: 2, file: "A.pdf" }]);
+  }));
 
 test("a reconnected Activity form retries while its aborted part is still pending", () =>
   page(async (render) => {
@@ -279,45 +240,125 @@ test("a dismissed save cannot close the next dialog when it finishes", () =>
   page(async (render) => {
     const save = Promise.withResolvers<void>();
     const closed: string[] = [];
-    const edit = (id: string) =>
+    const signals: AbortSignal[] = [];
+    const edit = (id: string, open = true) =>
       render(
         <EntityDialog
           title={id}
+          open={open}
           values={{ _id: id }}
-          onSubmit={() => save.promise}
+          onSubmit={(_record, _form, _unset, signal) => {
+            signals.push(signal);
+            return save.promise;
+          }}
           onClose={() => closed.push(id)}
         />,
       );
     await edit("A");
     await submit();
     assert.equal(document.querySelector("dialog")?.getAttribute("aria-busy"), "true");
+    await edit("A", false);
+    assert.equal(signals[0].aborted, true);
     await edit("B");
     await act(async () => save.resolve());
     assert.deepEqual(closed, []);
   }));
 
-test("a form captures its callbacks before awaiting its first part", () =>
+// The same two submissions on rc.63 (2383779c) read quantity 2, then 3, in both handlers.
+test("rc.63 Form parity: later parts and the final save read state when they run", () =>
   page(async (render) => {
-    const upload = Promise.withResolvers<void>();
-    const ran: string[] = [];
-    function Part({ name }: { name: string }) {
-      useFormSubmit(() => {
-        ran.push(name);
+    const saved: unknown[] = [];
+    function Quantity({ qty }: { qty: number }) {
+      useFormSubmit(() => ({ part: qty }));
+      return null;
+    }
+    function Editor({ wait }: { wait: Promise<void> }) {
+      const [qty, setQty] = useState(1);
+      return (
+        <Form
+          onSubmit={(parts, form) => saved.push([parts, qty, form.querySelector("input")!.value])}
+        >
+          <Upload wait={wait} />
+          <Quantity qty={qty} />
+          <input value={qty} onChange={(event) => setQty(Number(event.target.value))} />
+        </Form>
+      );
+    }
+    for (const next of [2, 3]) {
+      const work = Promise.withResolvers<void>();
+      await render(<Editor wait={work.promise} />);
+      await submit();
+      await typeInto(document.querySelector("input")!, String(next));
+      await act(async () => work.resolve());
+    }
+    assert.deepEqual(saved, [
+      [{ file: "A.pdf", part: 2 }, 2, "2"],
+      [{ file: "A.pdf", part: 3 }, 3, "3"],
+    ]);
+  }));
+
+test("a new values object without an id starts a fresh draft and cancels the old upload", () =>
+  page(async (render) => {
+    const work = Promise.withResolvers<void>();
+    const saved: unknown[] = [];
+    const signals: AbortSignal[] = [];
+    function Part() {
+      useFormSubmit(async (_form, signal) => {
+        signals.push(signal);
+        await work.promise;
       });
       return null;
     }
-    const show = (name: string) =>
+    const edit = (values: { name: string }) =>
       render(
-        <Form onSubmit={() => ran.push("save " + name)}>
-          <Upload wait={upload.promise} />
-          <Part name={name} />
-        </Form>,
+        <EntityDialog
+          title="Edit"
+          values={values}
+          fields={[{ name: "name", label: "Name" }]}
+          onClose={() => {}}
+          onSubmit={(record) => saved.push(record)}
+        >
+          <Part />
+        </EntityDialog>,
       );
-    await show("first");
+    await edit({ name: "A" });
+    await typeInto(document.querySelector("input")!, "edited A");
     await submit();
-    await show("second");
-    await act(async () => upload.resolve());
-    assert.deepEqual(ran, ["first", "save first"]);
+    await edit({ name: "B" });
+    assert.equal(signals[0].aborted, true);
+    assert.equal(document.querySelector("input")!.value, "B");
+    await act(async () => work.resolve());
+    assert.deepEqual(saved, []);
+    await submit();
+    assert.deepEqual(saved, [{ name: "B" }]);
+  }));
+
+test("a reopened confirmation owns its completion and close callback", () =>
+  page(async (render) => {
+    const first = Promise.withResolvers<void>();
+    const second = Promise.withResolvers<void>();
+    const closed: string[] = [];
+    const show = (title: string, operation: Promise<void>, open = true) =>
+      render(
+        <ConfirmDialog
+          title={title}
+          open={open}
+          onConfirm={() => operation}
+          onClose={() => closed.push(title)}
+        />,
+      );
+    const answer = () =>
+      act(() => document.querySelector<HTMLButtonElement>("footer button:last-child")!.click());
+    await show("A", first.promise);
+    await answer();
+    await show("A", first.promise, false);
+    await show("B", second.promise);
+    await answer();
+    await act(async () => first.resolve());
+    assert.deepEqual(closed, []);
+    assert.equal(document.querySelector("dialog")!.getAttribute("aria-busy"), "true");
+    await act(async () => second.resolve());
+    assert.deepEqual(closed, ["B"]);
   }));
 
 test("reopening or replacing a record clears its inline refusals", () =>
@@ -395,32 +436,67 @@ for (const [locale, input] of [["zh-CN", "2026/211月"], ["ko-KR", "2026/211월"
   );
 }
 
-test("a range accepts its displayed English time to the second in From", () =>
+test("typing dates in a timed range preserves the separate time fields to the second", () =>
   page(async (render) => {
+    document.documentElement.lang = "fa-IR";
+    const applied: unknown[] = [];
     await render(
       <DateRangePicker
-        label="Range"
-        separator=" → "
         seconds
-        value={{
-          start: "2026-11-16 10:00:00",
-          end: "2026-11-16 13:00:00",
-        }}
-        onChange={() => {}}
+        format="dd/MM/yyyy HH:mm:ss"
+        value={{ start: "2026-11-01 08:15:20", end: "2026-11-30 18:30:45" }}
+        onChange={(range) => applied.push(range)}
       />,
     );
-    const shown = document.querySelector(".copilotz-date-field-text")!.textContent!;
-    const end = shown.split(" → ")[1];
-    const input = document.querySelector<HTMLInputElement>(".copilotz-date-end input")!;
-    await typeInto(input, end);
-    assert.equal(input.value, end);
-    assert.equal(input.hasAttribute("aria-invalid"), false);
-    assert.equal(
-      document.querySelector<HTMLInputElement>('.copilotz-date-end input[role="spinbutton"]')!
-        .value,
-      "13",
+    const [from, to] = document.querySelectorAll<HTMLInputElement>(
+      ".copilotz-date-end-input input",
     );
+    await typeInto(from, "۱۱/۰۸/۱۴۰۵");
+    assert.equal(from.getAttribute("aria-invalid"), "true");
+    await typeInto(from, "02/11/2026");
+    await typeInto(to, "29/11/2026");
+    document.querySelector<HTMLElement>("[popover]")!.hidePopover = () => {};
+    const apply = Array.from(document.querySelectorAll("button")).find((button) =>
+      button.textContent === "Apply"
+    );
+    await act(() => apply!.click());
+    assert.deepEqual(applied, [{ start: "2026-11-02 08:15:20", end: "2026-11-29 18:30:45" }]);
   }));
+
+for (const locale of ["en-US", "th-TH", "fa-IR"]) {
+  test(
+    "a timed range preserves its ends after pasting a whole day-time in " + locale,
+    () =>
+      page(async (render) => {
+        document.documentElement.lang = locale;
+        const value = { start: "2026-11-02 14:30", end: "2026-11-03 15:45" };
+        const applied: unknown[] = [];
+        await render(
+          <DateRangePicker
+            time
+            separator=" → "
+            value={value}
+            onChange={(range) => applied.push(range)}
+          />,
+        );
+        const ends = document.querySelector(".copilotz-date-field-text")!.textContent!.split(" → ");
+        const inputs = document.querySelectorAll<HTMLInputElement>(
+          ".copilotz-date-end-input input",
+        );
+        assert.equal(inputs.length, 2);
+        for (const [index, input] of Array.from(inputs).entries()) {
+          await typeInto(input, ends[1 - index]);
+          assert.equal(input.getAttribute("aria-invalid"), "true");
+        }
+        document.querySelector<HTMLElement>("[popover]")!.hidePopover = () => {};
+        const apply = Array.from(document.querySelectorAll("button")).find((button) =>
+          button.textContent === "Apply"
+        );
+        await act(() => apply!.click());
+        assert.deepEqual(applied, [value]);
+      }),
+  );
+}
 
 test("table PDF settings follow the visible export columns", () =>
   page(async (render) => {

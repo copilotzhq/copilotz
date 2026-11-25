@@ -1,7 +1,7 @@
 /**
  * A product or order barcode (see `code128.ts`): what a receipt, a label or a shelf
- * tag prints for a scanner, as an SVG of whole-pixel bars at most `width`
- * pixels wide and `height` tall, named by its `value` for screen readers,
+ * tag prints for a scanner, as an SVG of whole-pixel bars with a preferred `width`
+ * and a fixed `height`, named by its `value` for screen readers,
  * with the value under it when `caption` is on. It keeps the blank margin
  * scanners need at each end (`quiet`, on by default), and its bars are
  * dark on light whatever the screen's scheme, since that's what scanners
@@ -38,7 +38,7 @@ export function Barcode(
     & BarcodeOptions
     & {
       value: string;
-      /** The most it may take, in pixels: its modules are whole pixels, as wide as fit. */
+      /** Preferred width in pixels. Each module takes at least one pixel. */
       width?: number;
       /** Its bars' height, in pixels. */
       height?: number;

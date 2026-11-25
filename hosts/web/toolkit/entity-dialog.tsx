@@ -26,7 +26,7 @@
  * ```tsx
  * <EntityDialog
  *   title={customer ? customer.name : "New customer"}
- *   values={customer ?? { since: today }}
+ *   values={customer ?? defaults}
  *   fields={[
  *     { name: "name", label: "Name", required: true },
  *     { name: "email", label: "Email", type: "email" },
@@ -41,7 +41,7 @@
  * />
  * ```
  */
-import { type ReactNode, useId, useRef, useState } from "react";
+import { type ReactNode, useId, useState } from "react";
 import { Button } from "./button.tsx";
 import { Checkbox } from "./checkbox.tsx";
 import { DatePicker } from "./date-picker.tsx";
@@ -49,7 +49,7 @@ import { DateTimePicker } from "./date-time-picker.tsx";
 import { Dialog } from "./dialog.tsx";
 import { type Control, Field } from "./field.tsx";
 import { Form } from "./form.tsx";
-import { captureNamedControls, entityValues, formValues } from "./form-values.ts";
+import { entityValues, formValues } from "./form-values.ts";
 import { Input } from "./input.tsx";
 import { Picker, type PickerOption } from "./picker.tsx";
 import { Textarea } from "./textarea.tsx";
@@ -127,8 +127,9 @@ export type EntityDialogProps<T extends Record<string, unknown>> = {
   /** Words under the title. */
   description?: ReactNode;
   /**
-   * The record (or a new one's defaults): where the form starts. It doesn't decide the record's
-   * type, which is `Record<string, unknown>` unless given (`<EntityDialog<Customer> …>`).
+   * The initial record or defaults. The draft lasts for this `_id`, or this object's identity
+   * when it has no `_id`. Supply the type with `<EntityDialog<Customer> …>`.
+   * It defaults to `Record<string, unknown>`.
    */
   values?: NoInfer<Partial<T>>;
   /** Its fields, as data, drawn first. */
@@ -139,9 +140,14 @@ export type EntityDialogProps<T extends Record<string, unknown>> = {
    * Saves it: given the record as the form leaves it (less its `_id`). Its failure shows by its
    * field (`detail.field`) or at the form's top. The third argument names previously populated
    * fields cleared to undefined (including an empty number), ready for `$unset` on an update.
-   * Returning `false` keeps the dialog open.
+   * The signal aborts when the dialog closes or switches records. Returning `false` keeps it open.
    */
-  onSubmit(values: Omit<T, "_id">, form: HTMLFormElement, unset: Record<string, true>): unknown;
+  onSubmit(
+    values: Omit<T, "_id">,
+    form: HTMLFormElement,
+    unset: Record<string, true>,
+    signal: AbortSignal,
+  ): unknown;
   /** It closes: Cancel, Escape, the backdrop, or a save done. */
   onClose(): void;
   /** What a toast says once it's saved (`"Customer saved."`). */
@@ -165,13 +171,14 @@ export function EntityDialog<T extends Record<string, unknown> = Record<string, 
   props: EntityDialogProps<T>,
 ): ReactNode {
   // A new editing session owns its draft, its submission and its field errors.
-  const key = JSON.stringify([props.open ?? true, props.values?._id]);
-  return <RecordDialog key={key} {...props} />;
+  const record = props.values?._id ?? props.values;
+  const [session, setSession] = useState({ record, key: 0 });
+  if (!Object.is(session.record, record)) setSession({ record, key: session.key + 1 });
+  return props.open === false ? null : <RecordDialog key={session.key} {...props} />;
 }
 
 function RecordDialog<T extends Record<string, unknown>>(
   {
-    open = true,
     title,
     description,
     values: given,
@@ -196,12 +203,6 @@ function RecordDialog<T extends Record<string, unknown>>(
   const [missing, setMissing] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
-  const controls = useRef<ReturnType<typeof captureNamedControls> | undefined>(undefined);
-  const submittingChanged = (busy: boolean, element: HTMLFormElement) => {
-    controls.current = busy ? captureNamedControls(element) : undefined;
-    setSaving(busy);
-  };
-
   const set = (change: Partial<T>) => {
     setDraft((now) => ({ ...now, ...change }));
     setMissing((now) => now.filter((name) => !(name in change)));
@@ -213,12 +214,12 @@ function RecordDialog<T extends Record<string, unknown>>(
   ) => {
     const ready = entityValues(
       fields,
-      { ...draft, ...formValues(element, controls.current?.()), ...handed },
+      { ...draft, ...formValues(element), ...handed },
       given,
     );
     setMissing(ready.missing);
     if (ready.missing.length) return;
-    const answer = await onSubmit(ready.values as Omit<T, "_id">, element, ready.unset);
+    const answer = await onSubmit(ready.values as Omit<T, "_id">, element, ready.unset, signal);
     if (signal.aborted || answer === false) return;
     if (done) toast(done, "success");
     onClose();
@@ -226,7 +227,7 @@ function RecordDialog<T extends Record<string, unknown>>(
 
   return (
     <Dialog
-      open={open}
+      open
       onClose={onClose}
       title={title}
       description={description}
@@ -242,7 +243,7 @@ function RecordDialog<T extends Record<string, unknown>>(
         </>
       }
     >
-      <Form id={form} onSubmittingChange={submittingChanged} errors={errors} onSubmit={submit}>
+      <Form id={form} onSubmittingChange={setSaving} errors={errors} onSubmit={submit}>
         {fields.map((field) => (
           <Field
             key={field.name}

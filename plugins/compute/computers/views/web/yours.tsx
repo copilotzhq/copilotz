@@ -29,6 +29,7 @@ import type { IconName } from "../../../../../hosts/web/mod.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
+/** Your computers, the View (`computer.yours`). */
 export const yoursView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => {
   const data = plansData(ctx);
   const style = <style href="computers-web" precedence="copilotz">{STYLE}</style>;

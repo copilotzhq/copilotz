@@ -33,6 +33,7 @@ import { say } from "./words.ts";
 /** A place it's signed in, to sign out of: a computer, or the server (an account). */
 export type SignedIn = { way: Way; computer?: string; account?: string };
 
+/** One plan's card: see the module's doc. */
 export function PlanCard(
   { plan, machines, accounts, connect, signOut }: {
     plan: PlanShown;

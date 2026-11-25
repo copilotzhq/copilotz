@@ -15,6 +15,7 @@ import { loadCatalog, resolve } from "../shared/choice.ts";
 /** What a test asks. */
 const ASK = "Answer with one word: ready.";
 
+/** `llm.test`: see the module's doc. */
 export const test = defineAction({
   description: "Tries one model your own plan pays for with a short question, to show it answers",
   record: false,

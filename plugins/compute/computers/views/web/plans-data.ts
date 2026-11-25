@@ -24,6 +24,7 @@ import {
   sharedIn,
 } from "./plan-states.ts";
 
+/** What the plans' Views read, ready. */
 export type PlansData = {
   computers: Computer[];
   machines: Machine[];
@@ -37,6 +38,7 @@ export type PlansData = {
   personal?: string;
 };
 
+/** What the plans' Views read, as a View reads it: undefined until it's all there. */
 export function plansData(ctx: ViewContext<ReactNode>): PlansData | undefined {
   const mine = ctx.db.collection("computer").query<Computer[]>("mine", {}).value;
   const spaces = ctx.db.collection("space").query<Reached[]>("reached", {}).value;

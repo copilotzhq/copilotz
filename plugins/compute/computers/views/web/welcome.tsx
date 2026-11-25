@@ -23,6 +23,7 @@ import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
+/** The welcome's step, the View (`computer.plans.welcome`). */
 export const plansWelcomeView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => {
   const data = plansData(ctx);
   const style = <style href="computers-web" precedence="copilotz">{STYLE}</style>;

@@ -84,6 +84,7 @@ const failureOf = (error: unknown): Failure => ({
 
 type Step = "pick" | "where" | "local" | "list";
 
+/** The connect flow, open: see the module's doc. Closing it stops a sign-in under way. */
 export function ConnectFlow(
   { plans, picked, on, machines, computers, accounts, kinds, personal, onClose, call }: {
     plans: PlanShown[];

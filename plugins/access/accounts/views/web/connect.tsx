@@ -337,6 +337,7 @@ function PasteBack(
   );
 }
 
+/** Connecting one account, in a dialog: the page's own. */
 export function ConnectDialog(
   { provider, open, onClose, call, again }: {
     provider: ProviderShown;

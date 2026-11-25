@@ -39,6 +39,7 @@ type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 /** Asked again on coming back to the page at most this often. */
 const AGAIN_MS = 15_000;
 
+/** Your plans, the View (`computer.plans`). */
 export const plansView = (_: unknown, ctx: ViewContext<ReactNode>): ReactNode => {
   const data = plansData(ctx);
   const style = <style href="computers-web" precedence="copilotz">{STYLE}</style>;

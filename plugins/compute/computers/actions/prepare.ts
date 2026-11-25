@@ -43,6 +43,7 @@ export const UPDATE_MS = 120_000;
 /** How long a restarted computer has to come back as its new VM. */
 const BACK_MS = 60_000;
 
+/** `computer.prepare`: see the module's doc. */
 export const prepareAction = defineAction({
   description:
     "Gets one of your computers ready for your plans: awake, on this app's program, and what its plans' CLIs are now",

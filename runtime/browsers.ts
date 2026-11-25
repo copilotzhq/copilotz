@@ -98,7 +98,7 @@ export function readView(remote: Remote, ctx: ViewContext): unknown {
     ).value;
   }
   const { op } = remote;
-  if (op.op === "edges" || op.op === "outcome") throw new Error(`A browser can't read ${op.op}`);
+  if (!("collection" in op)) throw new Error(`A browser can't read ${op.op}`);
   const collection = ctx.db.collection(op.collection as AppName<"collections">);
   switch (op.op) {
     case "find":

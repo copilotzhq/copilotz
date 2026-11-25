@@ -17,6 +17,8 @@ import type {
 } from "./store.ts";
 
 export type ReadOp =
+  /** Ask the owner to admit an Action's grant before its code receives it. */
+  | { op: "elevate" }
   | { op: "find"; collection: string; filter: Filter; options: FindOptions }
   | { op: "findOne"; collection: string; filter: Filter; options: FindOptions }
   | { op: "count"; collection: string; filter: Filter }
@@ -96,6 +98,7 @@ export type DisconnectOp = { op: "disconnect"; actor: { kind: string; id: string
 export type Op = StoreOp | TimerOp | CancelOp | DisconnectOp;
 
 const READS = new Set<Op["op"]>([
+  "elevate",
   "find",
   "findOne",
   "count",
@@ -110,6 +113,8 @@ export const isRead = (op: Op): op is ReadOp => READS.has(op.op);
 /** Runs a read against committed state, or inside a transaction against its own writes. */
 export function read(reader: Reader, op: ReadOp): Promise<unknown> {
   switch (op.op) {
+    case "elevate":
+      return Promise.resolve(); // The owner checked the grant before dispatch.
     case "find":
       return reader.find(op.collection, op.filter, op.options);
     case "findOne":

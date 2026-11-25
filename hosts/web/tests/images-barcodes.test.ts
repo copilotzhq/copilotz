@@ -5,6 +5,7 @@ import {
   bars,
   code39,
   documentPdf,
+  drawDocumentPdf,
   ean13,
   ean8,
   eanDigits,
@@ -90,7 +91,7 @@ const inflate = async (data: Uint8Array) =>
     ).arrayBuffer(),
   );
 
-test("pdfImage rejects a JPEG ending after its frame or with an empty scan", async () => {
+test("pdfImage rejects a JPEG ending before the end of its scan", async () => {
   const jpeg = bytes(images.jpeg);
   const endOfHeader = (marker: number) => {
     const at = jpeg.findIndex((b, i) => b === 0xff && jpeg[i + 1] === marker) + 2;
@@ -98,9 +99,28 @@ test("pdfImage rejects a JPEG ending after its frame or with an empty scan", asy
   };
   const frame = jpeg.slice(0, endOfHeader(0xc0));
   const scan = jpeg.slice(0, endOfHeader(0xda));
-  for (const truncated of [frame, scan, Uint8Array.of(...scan, 0xff, 0xd9)]) {
+  for (
+    const truncated of [
+      frame,
+      scan,
+      Uint8Array.of(...scan, 0xff, 0xd9),
+      jpeg.slice(0, scan.length + 1),
+      jpeg.slice(0, -1),
+    ]
+  ) {
     await assertRejects(() => pdfImage(truncated), Error, "scan data");
   }
+});
+
+test("pdfImage follows every scan and restart marker in a progressive JPEG", async () => {
+  // Three grayscale blocks, encoded by cjpeg -progressive -restart 1B.
+  const jpeg = bytes(
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wgALCAAIABgBAREA/8QAFQABAQAAAAAAAAAAAAAAAAAABAX/3QAEAAH/2gAIAQEAAAABgf/Qb//Rb//EABgQAAMBAQAAAAAAAAAAAAAAAAADBAUU/9oACAEBAAEFAp0n/9CdJ//R0rOVP//EABsQAAIBBQAAAAAAAAAAAAAAAAABAwIREzFC/9oACAEBAAY/Aj//0D//0cEd1NWtrlH/xAAaEAACAwEBAAAAAAAAAAAAAAABEQAhMVGh/9oACAEBAAE/IcKn/9DCp//RVHdhVbr6UR7yf//aAAgBAQAAABB//9D/AP/R/wD/xAAZEAEBAAMBAAAAAAAAAAAAAAABEQAhMUH/2gAIAQEAAT8Qyv/Qyv/RhH/spDQ8BNm6Er//2Q==",
+  );
+  assertEquals((await pdfImage(jpeg)).data, jpeg);
+  const lastScan = jpeg.findLastIndex((value, i) => value === 0xff && jpeg[i + 1] === 0xda);
+  const entropy = lastScan + 2 + new DataView(jpeg.buffer).getUint16(lastScan + 2);
+  await assertRejects(() => pdfImage(jpeg.subarray(0, entropy + 1)), Error, "scan data");
 });
 
 test("PNG filters reconstruct their neighboring samples", async () => {
@@ -125,7 +145,7 @@ test("document images preserve JPEG bytes, PNG predictors and transparency", asy
     );
     assertEquals([image.width, image.height], [2, 1]);
     const item = { image, x: 10, y: 20, width: 30, height: 15 };
-    const text = String.fromCharCode(...documentPdf([[item], [item]]));
+    const text = String.fromCharCode(...drawDocumentPdf([[item], [item]]));
     assertStringIncludes(text, "q 30 0 0 15 10 807 cm /Im1 Do Q");
     assertEquals((text.match(/\/Im1 Do/g) ?? []).length, 2);
     assertEquals((text.match(/\/Subtype \/Image/g) ?? []).length, image.alpha ? 2 : 1);
@@ -195,11 +215,11 @@ test("a narrow requested width grows to whole modules including quiet margins", 
   );
   const label = { barcode: "SKU-12345", quiet: true, x: 12, y: 0, height: 20 };
   assertEquals(
-    documentPdf([[{ ...label, width: 120 }]], { size: "receipt" }),
-    documentPdf([[{ ...label, width: 143 }]], { size: "receipt" }),
+    drawDocumentPdf([[{ ...label, width: 120 }]], { size: "receipt" }),
+    drawDocumentPdf([[{ ...label, width: 143 }]], { size: "receipt" }),
   );
   assertThrows(
-    () => documentPdf([[{ ...label, width: 120 }]], { size: [140, 20] }),
+    () => drawDocumentPdf([[{ ...label, width: 120 }]], { size: [140, 20] }),
     RangeError,
     "on the page",
   );
@@ -210,50 +230,61 @@ test("a long Code 128 fits its PNG and PDF when width is omitted", async () => {
   const label = { barcode: value, quiet: true, x: 0, y: 0, height: 10 };
   assertEquals(bars(value, undefined, { quiet: true }).width, 330);
   assertEquals(readPng(await barcodePng(value)).width, 330);
-  assertEquals(documentPdf([[label]]), documentPdf([[{ ...label, width: 330 }]]));
+  assertEquals(drawDocumentPdf([[label]]), drawDocumentPdf([[{ ...label, width: 330 }]]));
 });
 
 test("an omitted barcode width uses the room from x to the receipt edge", () => {
   const label = { barcode: "A".repeat(25), quiet: true, x: 8, y: 0, height: 10 };
-  assertThrows(() => documentPdf([[label]], { size: "receipt" }), RangeError, "on the page");
+  assertThrows(() => drawDocumentPdf([[label]], { size: "receipt" }), RangeError, "on the page");
   // At x=8 the ink ends at 328, and the right quiet margin extends to 338.
-  assertThrows(() => documentPdf([[label]], { size: [327, 20] }), RangeError, "on the page");
+  assertThrows(() => drawDocumentPdf([[label]], { size: [327, 20] }), RangeError, "on the page");
   assertEquals(
-    documentPdf([[label]], { size: [328, 20] }),
-    documentPdf([[{ ...label, width: 330 }]], { size: [328, 20] }),
+    drawDocumentPdf([[label]], { size: [328, 20] }),
+    drawDocumentPdf([[{ ...label, width: 330 }]], { size: [328, 20] }),
   );
   const small = { ...label, barcode: "POS 12" };
   assertEquals(
-    documentPdf([[small]], { size: "receipt" }),
-    documentPdf([[{ ...small, width: 219 }]], { size: "receipt" }),
+    drawDocumentPdf([[small]], { size: "receipt" }),
+    drawDocumentPdf([[{ ...small, width: 219 }]], { size: "receipt" }),
   );
 });
 
 test("a Code 128 label fits flush with a fractional page edge", () => {
-  const label = { barcode: "POS 12", x: 0, y: 30.1, width: 121, height: 40.2 };
+  const label = {
+    format: "code128" as const,
+    barcode: "POS 12",
+    x: 0,
+    y: 30.1,
+    width: 121,
+    height: 40.2,
+  };
   const pdf = String.fromCharCode(...documentPdf([[label]], { size: [200, 70.3] }));
   assertStringIncludes(pdf, " 0 2 40.2 re f");
-  assertThrows(() => documentPdf([[label]], { size: [200, 70.299] }), RangeError, "on the page");
+  assertThrows(
+    () => documentPdf([[label]], { size: [200, 70.299] }),
+    RangeError,
+    "on the page",
+  );
 });
 
 test("PDF barcode bounds use the first and last bars, including bars flush with the page", () => {
   const label = { barcode: "POS 12", quiet: true, width: 121, height: 20, y: 0 };
   // rc.63 geometry: ten blank points, then 101 points of ink and gaps.
   for (const x of [-10, -3, 116]) {
-    const pdf = String.fromCharCode(...documentPdf([[{ ...label, x }]], { size: "receipt" }));
+    const pdf = String.fromCharCode(...drawDocumentPdf([[{ ...label, x }]], { size: "receipt" }));
     assertStringIncludes(pdf, `${x + 10} 12 2 20 re f`);
     assertStringIncludes(pdf, `${x + 109} 12 2 20 re f`);
   }
   for (const x of [-11, 117, 227, 228]) {
     assertThrows(
-      () => documentPdf([[{ ...label, x }]], { size: "receipt" }),
+      () => drawDocumentPdf([[{ ...label, x }]], { size: "receipt" }),
       RangeError,
       "on the page",
     );
   }
   for (const y of [-1, 1]) {
     assertThrows(
-      () => documentPdf([[{ ...label, x: 0, y }]], { size: [227, 20] }),
+      () => drawDocumentPdf([[{ ...label, x: 0, y }]], { size: [227, 20] }),
       RangeError,
       "on the page",
     );

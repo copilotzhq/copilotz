@@ -30,8 +30,8 @@ table exports, printed invoices and barcode labels. The guides ship with the run
   with `TableExportFormats`. Export visible columns with totals, raw or displayed values, a CSV
   dialect or a SQL table name. The toolbar accepts the screen's controls and can show a lone page
   size. `tablePdf` takes a paper size, headings, a logo, column widths and alignment. `pdfImage`
-  prepares a PNG or JPEG for it or a `documentPdf` page. Code 39 (with optional Mod 43), EAN-8 and
-  EAN-13 join Code 128 on screen and in PDF. `barcodePng` makes an image for a label or email.
+  prepares a PNG or JPEG for it or a `drawDocumentPdf` page. Code 39 (with optional Mod 43), EAN-8
+  and EAN-13 join Code 128 on screen and in PDF. `barcodePng` makes an image for a label or email.
 - **Mail in tests.** `captureEmail()` keeps messages and attachments sent through `email.send`.
   Inspect `messages` and reset with `clear()`. The capture adapter can also write MIME messages as
   `.eml` files.
@@ -50,10 +50,10 @@ table exports, printed invoices and barcode labels. The guides ship with the run
 - PDF column widths and alignments follow the visible columns. A minimal-quoted CSV keeps a row with
   one empty field (`""`). `copilotz/web/export`'s types need no React.
 - A barcode with no `width` grows to fit its whole modules and quiet margins on screen and in PNG.
-  In `documentPdf`, an omitted width uses the space from `x` to the page edge. An undersized
+  In `drawDocumentPdf`, an omitted width uses the space from `x` to the page edge. An undersized
   explicit width grows to the minimum of one unit per module. Printed bars must fit on the page.
-  Their quiet margins may extend past the edge. `Drawn` keeps its rc.63 variants and numeric barcode
-  `width`. The wider `documentPdf` input also accepts images and barcodes with an omitted width.
+  Their quiet margins may extend past the edge. `documentPdf` and `Drawn` keep their rc.63 page and
+  barcode types.
 
 **Fixed, here since rc.63 or before:**
 

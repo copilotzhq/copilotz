@@ -388,7 +388,8 @@ visible headers, keys, rows and footer rows, followed by the base name and the e
 Return text or bytes. Use a built-in name such as `csv` to replace its format. Put `formats` on a
 table, or put `<TableExportFormats value={formats}>` around the screens in the app's shell. A
 table's definitions win. The default menu adds the supplied formats to CSV, Excel and PDF. An
-explicit `exports` list sets the exact menu and order.
+explicit `exports` list selects built-ins. Use `exportChoices` to order a menu that includes custom
+names.
 
 ```tsx
 import { DataTable, type TableExportFormat } from "copilotz/web";
@@ -413,7 +414,7 @@ const formats = {
   rowKey={(p) => p.name}
   footerRows={[{ name: "Total", units: 12 }]}
   formats={formats}
-  exports={["csv", "json", "sql", "pdf", "jsonl"]}
+  exportChoices={["csv", "json", "sql", "pdf", "jsonl"]}
   exportName="stock"
   exportOptions={{
     values: "raw",
@@ -438,7 +439,8 @@ const formats = {
 - **JSON and SQL.** `json: "records"` gives objects by header. `json: "table"` gives
   `{ header, data }` with cells keyed by position. Its default is text and `values: "raw"` preserves
   their scalar types. `tableName` sets the SQL table independently of the file name.
-- **In an Action.** Import `exportFile` from `copilotz/web/export`. Give it a sheet with
+- **In an Action.** Use `exportFile` for a built-in format with string and number cells. For custom
+  format names or raw cells use `exportTableFile` from `copilotz/web/export`. Give it a sheet with
   `{ headers, rows, footerRows }`, in column order, or use
   `tableSheet(chosenColumns, rows, totalsByKey, "raw")` to make one. A server-paged table can export
   the rows it has. For the whole list, the Action reads the matching rows as its caller.
@@ -449,15 +451,16 @@ column widths and alignments follow the visible titled columns in export order. 
 
 ## A toolbar of your own
 
-Give `toolbar` a button or filter to put it beside the built-in controls. Use `actions` for buttons
-that take selected rows. `showSinglePageSize` keeps the page-size menu visible when one size fits.
+Give `toolbarContent` a button or filter to put it beside the built-in controls. Use `actions` for
+buttons that take selected rows. `showSinglePageSize` keeps the page-size menu visible when one size
+fits.
 
 ```tsx
 <DataTable
   rows={products}
   columns={columns}
   rowKey={(p) => p.name}
-  toolbar={<Button href="/products/new">New product</Button>}
+  toolbarContent={<Button href="/products/new">New product</Button>}
   pageSize={25}
   pageSizes={[25]}
   showSinglePageSize
@@ -468,8 +471,9 @@ that take selected rows. `showSinglePageSize` keeps the page-size menu visible w
 
 Use `tablePdf` from `copilotz/web/export` in an Action to make attachment bytes, or give `DataTable`
 the same layout in `exportOptions.pdf`. Named paper (`"a4"` or `"letter"`) defaults to landscape. A
-`[width, height]` pair uses points (72 per inch). The first page holds the logo and title lines,
-every page repeats the column headings, and totals print in bold after the last row.
+`[width, height]` pair uses points (72 per inch). The first page holds the logo and title lines.
+`titleLines` supplies multiple lines in place of `title`. Every page repeats the column headings,
+and totals print in bold after the last row.
 
 ```ts
 import { pdfImage, tablePdf } from "copilotz/web/export";
@@ -642,10 +646,11 @@ layout (a receipt's width, an invoice's margins) is the one place an app writes 
 `documentPdf(pages, { size })` draws a document as a PDF with no dependency and no React, so it runs
 on a server (an e-mailed invoice): pages of things placed in points from each page's top left, text
 (a font of Helvetica's four, a size, a colour, wrapped and aligned within a `width`), lines,
-rectangles, images and vector barcodes. Sizes are `a4`, `a4-landscape`, `letter`, `receipt` (80 mm
-wide, as tall as what's on it), or given. `textWidth` and `wrapText` measure with Helvetica's
-widths, to lay out flowing text. Text outside Windows-1252 prints as "?". `copilotz/web/export` has
-it, the table files and the barcodes' bars, without React.
+rectangles and vector barcodes. Use `drawDocumentPdf` for images and automatically sized barcodes.
+Sizes are `a4`, `a4-landscape`, `letter`, `receipt` (80 mm wide, as tall as what's on it), or given.
+`textWidth` and `wrapText` measure with Helvetica's widths, to lay out flowing text. Text outside
+Windows-1252 prints as "?". `copilotz/web/export` has it, the table files and the barcodes' bars,
+without React.
 
 ```ts
 import { documentPdf } from "copilotz/web/export";
@@ -674,12 +679,12 @@ PDF soft mask. The dimensions of the prepared image are pixels. The position and
 are points.
 
 ```ts
-import { barcodePng, documentPdf, pdfImage } from "copilotz/web/export";
+import { barcodePng, drawDocumentPdf, pdfImage } from "copilotz/web/export";
 
 export async function invoiceFiles(logoBytes: Uint8Array) {
   const logo = await pdfImage(logoBytes);
   const product = "5901234123457";
-  const pdf = documentPdf([[
+  const pdf = drawDocumentPdf([[
     { image: logo, x: 36, y: 36, width: 40, height: 40 * logo.height / logo.width },
     { text: "Invoice 1042", x: 92, y: 42, size: 16, font: "bold" },
     { barcode: product, format: "ean13", x: 36, y: 120, width: 240, height: 54, quiet: true },
@@ -703,9 +708,9 @@ import { Barcode } from "copilotz/web";
 Barcode widths grow to fit at least one whole unit per module, including the requested quiet
 margins. For example, Code 128 with `SKU-12345` and quiet margins grows from a requested 120 units
 to 143. EAN-13 with quiet margins requires 113 pixels for PNG or 113 points for PDF. In
-`documentPdf`, omitting the barcode's `width` uses the space from its `x` position to the page edge.
-Printed bars extending beyond the page raise a `RangeError`. The blank quiet margins can extend
-beyond its edges.
+`drawDocumentPdf`, omitting the barcode's `width` uses the space from its `x` position to the page
+edge. Printed bars extending beyond the page raise a `RangeError`. The blank quiet margins can
+extend beyond its edges.
 
 ## A route's own page
 

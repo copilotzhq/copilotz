@@ -281,6 +281,9 @@ test("an app offers a format to its tables, and a table can replace it or a buil
   assertStringIncludes(local, ">Order CSV<");
   assert(!local.includes(">Order lines<"));
   assert(!local.includes(">CSV<"));
+  const custom = render(<DataTable {...base} exportChoices={["lines"]} />);
+  assertStringIncludes(custom, ">Order lines<");
+  assert(!custom.includes(">CSV<"));
   const explicit = render(<DataTable {...base} exports={["csv"]} />);
   assert(!explicit.includes(">Order lines<"));
 });
@@ -291,7 +294,7 @@ test("toolbar buttons keep selection off, a single page size can show, and visib
       columns={columns}
       rows={rows.slice(0, 1)}
       rowKey={(r) => r.id}
-      toolbar={<button>New order</button>}
+      toolbarContent={<button>New order</button>}
       pageSizes={[25]}
       showSinglePageSize
       footerRows={[{ name: "Total", total: 42, secret: "Private" }]}
@@ -308,7 +311,7 @@ test("toolbar buttons keep selection off, a single page size can show, and visib
       columns={columns}
       rows={[]}
       rowKey={(r) => r.id}
-      toolbar={<button>New order</button>}
+      toolbarContent={<button>New order</button>}
       chooseColumns={false}
       search={false}
       exports={false}

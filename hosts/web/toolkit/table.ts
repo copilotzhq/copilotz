@@ -11,7 +11,7 @@
  * ```
  */
 import type { ReactNode } from "react";
-import { type SheetColumn, textOf } from "./table-sheet.ts";
+import { textOf } from "./table-sheet.ts";
 
 export { tableSheet, textOf } from "./table-sheet.ts";
 
@@ -19,13 +19,22 @@ export { tableSheet, textOf } from "./table-sheet.ts";
 export type Key = string | number;
 
 /** A column: what it shows of each row, and how it searches, sorts and exports. */
-export type Column<R> = SheetColumn<R> & {
+export type Column<R> = {
+  /** The column's field: `row[key]`, unless `render` and `text` say otherwise. */
+  key: string;
+  /**
+   * Its header's words. `""` makes it a column of links or buttons (edit, a
+   * receipt): not sorted, not searched, not chosen, not exported.
+   */
+  title: string;
   /** Its name for screen readers, where its header says nothing (a column of links). */
   label?: string;
   /** Sortable by its header: yes, unless `false` (a column of links never is). */
   sortable?: boolean;
   /** What a cell shows: `text`'s words, unless this draws it. */
   render?(row: R): ReactNode;
+  /** The cell as text: what search, sorting and export use (`row[key]` by default). */
+  text?(row: R): string;
   /** Sorted by value: `row[key]` when it's a number, else the number in its text. */
   numeric?: boolean;
   align?: "left" | "right" | "center";

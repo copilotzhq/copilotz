@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,14 +28,14 @@ test("a server can use web/export declarations without installing React types", 
   const app = join(dir, "app.ts");
   writeFileSync(
     app,
-    `import { documentPdf, type Drawn, exportFile, tableSheet } from "./export.js";
+    `import { drawDocumentPdf, type Drawn, exportFile, tableSheet } from "./export.js";
 function barcodeWidth(item: Drawn): number {
   if ("text" in item || "line" in item || "rect" in item) return 0;
   return item.barcode ? item.width : 0;
 }
 const label = { barcode: "123", x: 8, y: 12, height: 20 };
 barcodeWidth({ ...label, width: 200 });
-documentPdf([[label]], { size: "receipt" });
+drawDocumentPdf([[label]], { size: "receipt" });
 import { textOf } from "./toolkit/table-sheet.js";
 type Item = { price: number };
 const rows: Item[] = [{ price: 12 }];
@@ -58,4 +59,23 @@ exportFile("csv", sheet, "items");`,
     ),
     [],
   );
+});
+
+test("rc.63 web API names and inferred wrapper arguments compile with tsc --strict", () => {
+  const root = fileURLToPath(new URL("../../../", import.meta.url));
+  execFileSync("node", [
+    "node_modules/typescript/bin/tsc",
+    "--strict",
+    "--noEmit",
+    "--allowImportingTsExtensions",
+    "--module",
+    "nodenext",
+    "--target",
+    "esnext",
+    "--jsx",
+    "react-jsx",
+    "--types",
+    "node,react",
+    "hosts/web/tests/rc63-api.ts",
+  ], { cwd: root, stdio: "inherit" });
 });

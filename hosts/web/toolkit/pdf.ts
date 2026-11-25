@@ -8,8 +8,8 @@
  *   the width by how much they hold, and a cell too long for its column ends
  *   in "…".
  * - **`documentPdf`**: a document drawn at places, page by page: text (left,
- *   centred or right in a width, wrapped to it), lines, rectangles, images
- *   and vector barcodes. Places are points (1/72 in) from the page's top left. A
+ *   centred or right in a width, wrapped to it), lines, rectangles and vector
+ *   barcodes. `drawDocumentPdf` also draws images and automatically sized barcodes. Places are points (1/72 in) from the page's top left. A
  *   page is A4, letter, or a receipt's 80 mm roll, as long as what's on it
  *   (`height: "fit"`). `textWidth` and `wrapText` measure with Helvetica's
  *   own widths, for laying a document out (a receipt's lines, one under
@@ -25,14 +25,16 @@
  * ]], { size: "receipt" });
  * ```
  */
-import type { ExportCell, Sheet } from "./export.ts";
+import type { Sheet, TableExportSheet } from "./export.ts";
 import type { PdfImage } from "./pdf-image.ts";
 import { type BarcodeOptions, bars } from "./code128.ts";
 
 /** How the PDF looks: its page, its title, and its colours (`#rrggbb`). */
-export type PdfOptions<Title extends string | string[] = string> = {
-  /** Title lines over the table, on the first page. */
-  title?: Title;
+export type PdfOptions = {
+  /** A line over the table, on the first page. */
+  title?: string;
+  /** Multiple title lines, in place of title. */
+  titleLines?: string[];
   /** Smaller lines under the title, on the first page. */
   subtitle?: string | string[];
   /** Paper in points. Named paper defaults to landscape, a pair keeps its given orientation. */
@@ -104,11 +106,85 @@ function rgb(colour: string): string {
   return [0, 2, 4].map((i) => (parseInt(hex.slice(i, i + 2), 16) / 255).toFixed(3)).join(" ");
 }
 
-/** A printable table, with repeated column headings and totals after its final row. */
-export function tablePdf(
-  { headers, rows, footerRows = [] }: Sheet<ExportCell>,
-  options: PdfOptions<string | string[]> = {},
+/** A table as PDF bytes: `headers` over `rows`. */
+function automaticTablePdf(
+  { headers, rows }: TableExportSheet,
+  options: PdfOptions = {},
 ): Uint8Array {
+  const [W, H] = options.orientation === "portrait" ? [595, 842] : [842, 595];
+  const M = 36, SIZE = options.fontSize ?? 9, LINE = Math.round(SIZE * 2);
+  const CHAR = SIZE * 0.52; // Helvetica's average width, near enough to fit columns
+  const cells = rows.map((row) => headers.map((_, i) => winAnsi(String(row[i] ?? ""))));
+  const heads = headers.map(winAnsi);
+  const want = heads.map((h) => Math.min(40, Math.max(3, h.length)));
+  for (const row of cells) {
+    row.forEach((cell, i) => {
+      want[i] = Math.min(40, Math.max(want[i], cell.length));
+    });
+  }
+  const sum = want.reduce((a, b) => a + b, 0) || 1;
+  const widths = want.map((w) => ((W - 2 * M) * w) / sum);
+  const fit = (text: string, width: number) => {
+    const room = Math.max(1, Math.floor((width - 6) / CHAR));
+    return text.length > room ? `${text.slice(0, Math.max(1, room - 1))}\x85` : text;
+  };
+  const title = options.title ? winAnsi(options.title) : "";
+  const top = H - M - (title ? LINE * 1.5 : 0);
+  const perPage = Math.max(1, Math.floor((top - M) / LINE) - 1);
+  const head = rgb(options.headerColor ?? "#334058");
+  const headText = rgb(options.headerText ?? "#ffffff");
+  const stripe = options.stripeColor === null ? null : rgb(options.stripeColor ?? "#f1f4f9");
+
+  const pages: string[] = [];
+  for (let start = 0; start === 0 || start < cells.length; start += perPage) {
+    const ops: string[] = [];
+    const line = (texts: string[], y: number, font: string, ink: string, fill: string | null) => {
+      if (fill) {
+        ops.push(`${fill} rg ${M} ${(y - LINE / 2 + 1).toFixed(1)} ${W - 2 * M} ${LINE} re f`);
+      }
+      let x = M;
+      texts.forEach((text, i) => {
+        const shown = literal(fit(text, widths[i]));
+        ops.push(
+          `${ink} rg BT /${font} ${SIZE} Tf ${(x + 3).toFixed(1)} ${
+            (y - SIZE / 3).toFixed(1)
+          } Td (${shown}) Tj ET`,
+        );
+        x += widths[i];
+      });
+    };
+    if (start === 0 && title) {
+      ops.push(`0 0 0 rg BT /F2 ${SIZE + 4} Tf ${M} ${H - M - SIZE} Td (${literal(title)}) Tj ET`);
+    }
+    let y = (start === 0 ? top : H - M) - LINE / 2;
+    line(heads, y, "F2", headText, head);
+    cells.slice(start, start + perPage).forEach((row, i) => {
+      y -= LINE;
+      line(row, y, "F1", "0 0 0", i % 2 && stripe ? stripe : null);
+    });
+    pages.push(ops.join("\n"));
+    if (cells.length === 0) break;
+  }
+
+  return assemble(pages.map((stream) => ({ width: W, height: H, stream })), ["regular", "bold"]);
+}
+
+/** The enhanced layout is opt-in. A normal table keeps its original fitting and pagination. */
+export function usesTableLayout(options?: PdfOptions, footerRows?: unknown[]): boolean {
+  return !!footerRows?.length || options?.columns !== undefined || options?.size !== undefined ||
+    options?.titleLines !== undefined || options?.subtitle !== undefined ||
+    options?.headerImage !== undefined;
+}
+
+/** A printable table, with repeated column headings and totals after its final row. */
+export function renderTablePdf(
+  sheet: TableExportSheet,
+  options: PdfOptions = {},
+): Uint8Array {
+  const { headers, rows, footerRows = [] } = sheet;
+  if (!usesTableLayout(options, footerRows)) {
+    return automaticTablePdf(sheet, options);
+  }
   const paper = options.size ?? "a4";
   const [a, b] = Array.isArray(paper) ? paper : [SIZES[paper].width, Number(SIZES[paper].height)];
   const orientation = options.orientation ?? (Array.isArray(paper) ? undefined : "landscape");
@@ -147,11 +223,18 @@ export function tablePdf(
   if (fixed > available || (sum && fixed >= available)) {
     throw new RangeError("Columns exceed the page width.");
   }
-  const widths = weights.map((w, i) => columns[i]?.width ?? (available - fixed) * w / sum);
+  // Reserve padding and one em for each automatic column before sharing the remaining space.
+  const autoCount = weights.filter((weight) => weight > 0).length;
+  const autoSpace = available - fixed;
+  const minimum = autoCount ? Math.min(SIZE + 6, autoSpace / autoCount) : 0;
+  const remaining = autoSpace - minimum * autoCount;
+  const widths = weights.map((weight, i) =>
+    columns[i]?.width ?? minimum + remaining * weight / sum
+  );
   const tableWidth = widths.reduce((a, b) => a + b, 0);
   const lines = (s?: string | string[]) =>
     (Array.isArray(s) ? s : s ? [s] : []).flatMap((v) => v.split(/\r?\n/));
-  const titles = lines(options.title), subtitles = lines(options.subtitle);
+  const titles = lines(options.titleLines ?? options.title), subtitles = lines(options.subtitle);
   const logo = options.headerImage;
   if (
     logo &&
@@ -225,6 +308,11 @@ export function tablePdf(
     pages.push({ width: W, height: H, stream: ops.join("\n") });
   } while (start < cells.length);
   return assemble(pages, ["regular", "bold"], logo ? new Map([[logo.image, "Im1"]]) : undefined);
+}
+
+/** A table of text and numbers, with optional print layout and totals. */
+export function tablePdf(sheet: Sheet, options: PdfOptions = {}): Uint8Array {
+  return renderTablePdf(sheet, options);
 }
 
 /** Fits WinAnsi text to the available points, including the ellipsis and the chosen face. */
@@ -531,11 +619,13 @@ export type Drawn =
     height: number;
     set?: "auto" | "B";
     quiet?: boolean;
+    format?: BarcodeOptions["format"];
+    check?: boolean;
     color?: string;
   };
 
-/** documentPdf can size a barcode from its position and the page's width. */
-type BarcodeInput = Omit<Extract<Drawn, { barcode: string }>, "width"> & BarcodeOptions & {
+/** drawDocumentPdf can size a barcode from its position and the page's width. */
+type BarcodeInput = Omit<Extract<Drawn, { barcode: string }>, "width"> & {
   width?: number;
 };
 type DocumentItem =
@@ -584,6 +674,7 @@ function draw(
   height: number,
   fonts: Set<PdfFont>,
   images: Map<PdfImage, string>,
+  checkBounds: boolean,
 ): string {
   const ops: string[] = [];
   const up = (y: number) => n(height - y);
@@ -646,6 +737,8 @@ function draw(
       const last = drawn.bars[drawn.bars.length - 1];
       const tolerance = 1e-6; // points
       if (
+        (checkBounds || item.format !== undefined || item.check !== undefined ||
+          item.width === undefined) &&
         !(item.x + first.x >= -tolerance && item.x + last.x + last.w <= width + tolerance &&
           item.y >= -tolerance && item.height >= 0 && item.y + item.height <= height + tolerance)
       ) {
@@ -670,12 +763,19 @@ type DocumentOptions = {
 };
 
 /** A document as PDF bytes: each page's drawing, on pages of one `size` (A4 by default). */
-export function documentPdf(pages: DocumentItem[][], options?: DocumentOptions): Uint8Array;
-// Keep the rc.63 page type for callers deriving it with Parameters.
-export function documentPdf(pages: Drawn[][], options?: DocumentOptions): Uint8Array;
-export function documentPdf(
+export function documentPdf(pages: Drawn[][], options?: DocumentOptions): Uint8Array {
+  return renderDocument(pages, options, false);
+}
+
+/** Draw images and automatically sized barcodes, checking that the printed bars fit the page. */
+export function drawDocumentPdf(pages: DocumentItem[][], options?: DocumentOptions): Uint8Array {
+  return renderDocument(pages, options, true);
+}
+
+function renderDocument(
   pages: DocumentItem[][],
   { size = "a4", margin = 12 }: DocumentOptions = {},
+  checkBounds: boolean,
 ): Uint8Array {
   const page = Array.isArray(size)
     ? { width: size[0], height: size[1] }
@@ -688,7 +788,11 @@ export function documentPdf(
     const height = page.height === "fit"
       ? Math.ceil(Math.max(0, ...items.map(bottomOf)) + margin)
       : page.height;
-    return { width: page.width, height, stream: draw(items, page.width, height, fonts, images) };
+    return {
+      width: page.width,
+      height,
+      stream: draw(items, page.width, height, fonts, images, checkBounds),
+    };
   });
   return assemble(drawn, [...fonts], images);
 }

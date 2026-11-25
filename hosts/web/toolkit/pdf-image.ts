@@ -14,25 +14,50 @@ export type PdfImage = {
   alpha?: Uint8Array;
 };
 
+// Return the offset of the marker following a nonempty entropy-coded scan.
+// FF 00 encodes a literal FF; restart markers separate intervals inside the scan.
+function endOfScan(data: Uint8Array, start: number): number {
+  let hasData = false;
+  for (let i = start; i < data.length; i++) {
+    if (data[i] !== 0xff) {
+      hasData = true;
+      continue;
+    }
+    const marker = i;
+    while (data[i + 1] === 0xff) i++;
+    const code = data[++i];
+    if (code === 0) hasData = true;
+    else if (code >= 0xd0 && code <= 0xd7 && hasData) continue;
+    else return hasData ? marker : -1;
+  }
+  return -1;
+}
+
 function jpeg(data: Uint8Array): PdfImage {
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
   let adobe = false;
+  let scanned = false;
   let frame: PdfImage | undefined;
-  for (let at = 2; at + 4 <= data.length && data[at] === 255;) {
+  for (let at = 2; at + 2 <= data.length && data[at] === 255;) {
     while (data[at] === 255) at++;
     const marker = data[at++];
+    if (marker === 0xd9 && scanned && frame) {
+      return { ...frame, inverted: adobe && frame.colors === 4 };
+    }
     if (marker === 0xd9 || at + 2 > data.length) break;
     const length = view.getUint16(at);
     if (length < 2 || at + length > data.length) break;
     if (marker === 0xda) {
       const scan = at + length;
       const components = data[at + 2];
-      // Entropy data begins with a byte or a byte-stuffed FF 00, never a marker.
-      if (
-        frame && components >= 1 && components <= frame.colors && length === 6 + 2 * components &&
-        scan < data.length && (data[scan] !== 0xff || data[scan + 1] === 0)
-      ) return { ...frame, inverted: adobe && frame.colors === 4 };
-      break;
+      if (!frame || !components || components > frame.colors || length !== 6 + 2 * components) {
+        break;
+      }
+      const end = endOfScan(data, scan);
+      if (end < 0) break;
+      scanned = true;
+      at = end;
+      continue;
     }
     if (marker === 0xee && String.fromCharCode(...data.subarray(at + 2, at + 7)) === "Adobe") {
       adobe = true;

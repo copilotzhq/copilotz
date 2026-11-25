@@ -135,13 +135,16 @@ export {
 export { tableAddress, tableQuery, tableState } from "./table-address.ts";
 export {
   download,
+  downloadTableFile,
   EXPORT_FORMATS,
   type ExportCell,
   exportFile,
   type ExportFormat,
   type ExportOptions,
+  exportTableFile,
   type Sheet,
   type TableExportFormat,
+  type TableExportSheet,
   toCsv,
   toExcel,
   toJson,
@@ -152,6 +155,7 @@ export {
 } from "./toolkit/export.ts";
 export {
   documentPdf,
+  drawDocumentPdf,
   type Drawn,
   type PageSize,
   type PdfFont,

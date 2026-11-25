@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { Window } from "happy-dom";
 import { act, type ReactNode, useState } from "react";
 import { test } from "../../../testing/mod.ts";
+import { tablePdf } from "../export.ts";
 import { Form, useFormSubmit } from "../toolkit/form.tsx";
 import { DataTable } from "../toolkit/data-table.tsx";
 
@@ -162,4 +163,30 @@ test("hiding sales columns keeps PDF widths and alignment with their fields", ()
     await check(true, false);
     await toggle(0);
     await check(false, false);
+  }));
+
+test("a table with rc.63 props downloads the automatic PDF even with aligned screen columns", () =>
+  page(async (render) => {
+    await render(
+      <DataTable
+        columns={[{ key: "order", title: "Order" }, { key: "qty", title: "Qty", align: "right" }]}
+        rows={[{ order: "PO-42", qty: 9 }]}
+        rowKey={(row) => row.order}
+        exports={["pdf"]}
+        exportOptions={{ pdf: { title: "Purchasing" } }}
+      />,
+    );
+    let url = "";
+    document.addEventListener("click", (event) => {
+      if (event.target instanceof window.HTMLAnchorElement) {
+        event.preventDefault();
+        url = event.target.href;
+      }
+    });
+    document.querySelector<HTMLElement>('[role="menu"]')!.hidePopover = () => {};
+    await act(() => document.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
+    const expected = tablePdf({ headers: ["Order", "Qty"], rows: [["PO-42", "9"]] }, {
+      title: "Purchasing",
+    });
+    assert.deepEqual(new Uint8Array(await (await fetch(url)).arrayBuffer()), expected);
   }));

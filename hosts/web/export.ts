@@ -1,7 +1,7 @@
 /**
  * The web toolkit's files, without React or a page: on a server too. A table
  * as CSV, a workbook (`.xlsx`), a PDF, JSON, XML, TXT or SQL (`exportFile`);
- * a document with a logo (`pdfImage`) drawn as a PDF (`documentPdf`); and
+ * a document with a logo (`pdfImage`) drawn as a PDF (`drawDocumentPdf`); and
  * Code 128, Code 39 and EAN barcodes as vector bars or PNG bytes. In a page, `copilotz/web` has the same, and `download` saves a
  * file.
  *
@@ -16,8 +16,10 @@ export {
   exportFile,
   type ExportFormat,
   type ExportOptions,
+  exportTableFile,
   type Sheet,
   type TableExportFormat,
+  type TableExportSheet,
   toCsv,
   toExcel,
   toJson,
@@ -28,6 +30,7 @@ export {
 } from "./toolkit/export.ts";
 export {
   documentPdf,
+  drawDocumentPdf,
   type Drawn,
   type PageSize,
   type PdfFont,

@@ -91,15 +91,15 @@ It runs on Node 24+, Deno 2.9+ and Bun.
   [Exporting a table](docs/guides/the-web-toolkit.md#exporting-a-table).
 - Share a custom file format across screens → `TableExportFormats` →
   [Exporting a table](docs/guides/the-web-toolkit.md#exporting-a-table).
-- Put New or Print beside the table controls → `DataTable toolbar` →
+- Put New or Print beside the table controls → `DataTable toolbarContent` →
   [A toolbar of your own](docs/guides/the-web-toolkit.md#a-toolbar-of-your-own).
 - Show a page-size menu with one choice → `DataTable/Pagination showSinglePageSize` →
   [A toolbar of your own](docs/guides/the-web-toolkit.md#a-toolbar-of-your-own).
 - Print or email a table with aligned totals and a logo → `tablePdf` →
   [Printing a table](docs/guides/the-web-toolkit.md#printing-a-table).
-- Place a transparent PNG or a JPEG on an invoice → `pdfImage/documentPdf` →
+- Place a transparent PNG or a JPEG on an invoice → `pdfImage/drawDocumentPdf` →
   [Images and barcodes in a document](docs/guides/the-web-toolkit.md#images-and-barcodes-in-a-document).
-- Print a barcode on paper or screen → `documentPdf/Barcode/bars` →
+- Print a barcode on paper or screen → `drawDocumentPdf/Barcode/bars` →
   [Images and barcodes in a document](docs/guides/the-web-toolkit.md#images-and-barcodes-in-a-document).
 - Make a barcode PNG for a product label or email → `barcodePng` →
   [Images and barcodes in a document](docs/guides/the-web-toolkit.md#images-and-barcodes-in-a-document).
@@ -731,11 +731,11 @@ The pieces, by job:
 - **Custom table files and totals:** give `DataTable` `formats` (or the shell
   `<TableExportFormats value={formats}>`), `exportName` and `footerRows` by column key.
   `exportOptions` sets CSV's dialect, JSON's shape, SQL's `tableName`, `values: "raw"` and the PDF
-  layout. Give `toolbar` a button or filter; `showSinglePageSize` keeps a lone size visible.
+  layout. Give `toolbarContent` a button or filter; `showSinglePageSize` keeps a lone size visible.
   [Exporting a table](docs/guides/the-web-toolkit.md#exporting-a-table).
 - **Invoices and product labels:** in an Action, `copilotz/web/export` has `exportFile` and
   `tablePdf` for a report with totals. Prepare a logo with `await pdfImage(bytesOrDataUrl)` for its
-  header or a `documentPdf` page. Draw Code 128, Code 39 or EAN-8/13 with `Barcode` on screen,
+  header or a `drawDocumentPdf` page. Draw Code 128, Code 39 or EAN-8/13 with `Barcode` on screen,
   `{ barcode, format, x, y, width, height }` in a PDF and `await barcodePng(value, options)` for an
   image.
   [Images and barcodes in a document](docs/guides/the-web-toolkit.md#images-and-barcodes-in-a-document).

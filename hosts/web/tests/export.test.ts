@@ -10,6 +10,7 @@ import { assert, assertEquals, assertStringIncludes, assertThrows } from "@std/a
 import { test } from "../../../testing/mod.ts";
 import {
   exportFile,
+  exportTableFile,
   guard,
   type Sheet,
   toCsv,
@@ -107,7 +108,7 @@ test("raw XLSX keeps decimal strings distinct and writes numbers as numeric cell
     [{ value: "12.50" }],
     "raw",
   );
-  const { content } = exportFile("xlsx", sheet, "values", { values: "raw" });
+  const { content } = exportTableFile("xlsx", sheet, "values", { values: "raw" });
   assert(content instanceof Uint8Array);
   const entry = unzip(content).find((e) => e.name === "xl/worksheets/sheet1.xml");
   assert(entry);
@@ -130,7 +131,7 @@ test("CSV quotes every cell and guards formulas, but not plain numbers", () => {
     [
       '"Name","Total","Code"',
       '"Ann ""the"" <boss> & co","12.50","007"',
-      `"'=HYPERLINK(1)","-3.5","+1"`,
+      `"'=HYPERLINK(1)","-3.5","'+1"`,
       `"'@sum","-12.5","'-x"`,
     ].join("\n"),
   );
@@ -161,20 +162,28 @@ test("CSV and TXT preserve raw and written numbers and guard formula-like text",
   ];
   for (const format of ["csv", "txt"]) {
     assertEquals(
-      exportFile(format, sheet, "values", { bom: false, values: "raw" }).content,
+      exportTableFile(format, sheet, "values", { bom: false, values: "raw" }).content,
       expected.map((value) => `"${value}"`).join("\n"),
     );
   }
-  const excel = toExcel(sheet, "values");
+  assertEquals(
+    toCsv({ headers: ["Delta"], rows: [[-1e-7], ["-1e-7"]] }, {
+      csv: { quote: "needed" },
+    }),
+    "Delta\n-1e-7\n-1e-7",
+  );
+  const excel = String(exportTableFile("excel", sheet, "values", { values: "raw" }).content);
   for (const value of expected.slice(1)) assertStringIncludes(excel, `<td>${value}</td>`);
 });
 
 test("JSON records keep sparse and missing cells as empty strings and explicit null as null", () => {
   const row: (string | null)[] = [];
   row[1] = null;
-  assertEquals(JSON.parse(toJson({ headers: ["Sparse", "Null", "Missing"], rows: [row] })), [
-    { Sparse: "", Null: null, Missing: "" },
-  ]);
+  const sheet = { headers: ["Sparse", "Null", "Missing"], rows: [row] };
+  const records = exportTableFile("json", sheet, "sparse", { values: "raw" });
+  assertEquals(JSON.parse(String(records.content)), [{ Sparse: "", Null: null, Missing: "" }]);
+  const table = exportTableFile("json", sheet, "sparse", { json: "table", values: "raw" });
+  assertEquals(JSON.parse(String(table.content)).data, [{ 0: "", 1: null }]);
 });
 
 test("JSON as records by header, or the table export's shape", () => {
@@ -281,7 +290,7 @@ test("custom serializers get the projected sheet, totals, base name and options"
   const raw = tableSheet(columns, data, totals, "raw");
   assertEquals(raw.rows, [[2.5, false, null]]);
   assertEquals(raw.footerRows, [[2.5, "", ""]]);
-  const custom = exportFile("csv", raw, "invoices", {
+  const custom = exportTableFile("csv", raw, "invoices", {
     formats: {
       csv: {
         label: "Binary",
@@ -300,19 +309,28 @@ test("custom serializers get the projected sheet, totals, base name and options"
     type: "application/octet-stream",
     content: Uint8Array.of(4, 2),
   });
-  const sql = exportFile("sql", raw, "invoices", { tableName: "invoice_lines" });
+  const sql = exportTableFile("sql", raw, "invoices", { tableName: "invoice_lines" });
   assertEquals(sql.file, "invoices.sql");
   assertStringIncludes(
     String(sql.content),
     "INSERT INTO `invoice_lines` (`Price`,`Paid`,`Note`) VALUES (2.5,FALSE,NULL);",
   );
-  assertEquals(JSON.parse(toJson(raw))[0], { Price: 2.5, Paid: false, Note: null });
-  assertEquals(JSON.parse(toJson(raw, { json: "table", values: "raw" })).data[0], {
-    0: 2.5,
-    1: false,
-    2: null,
+  assertEquals(JSON.parse(String(exportTableFile("json", raw, "invoices").content))[0], {
+    Price: 2.5,
+    Paid: false,
+    Note: null,
   });
-  assertThrows(() => exportFile("toString", raw, "orders"), RangeError);
+  assertEquals(
+    JSON.parse(
+      String(exportTableFile("json", raw, "invoices", { json: "table", values: "raw" }).content),
+    ).data[0],
+    {
+      0: 2.5,
+      1: false,
+      2: null,
+    },
+  );
+  assertThrows(() => exportTableFile("toString", raw, "orders"), RangeError);
 });
 
 test("all eight built-in formats include the supplied totals", () => {
@@ -321,7 +339,7 @@ test("all eight built-in formats include the supplied totals", () => {
     rows: [["Pen", 2]],
     footerRows: [["Grand Total", 2]],
   };
-  for (const format of ["csv", "txt", "xlsx", "excel", "sql", "pdf", "json", "xml"]) {
+  for (const format of ["csv", "txt", "xlsx", "excel", "sql", "pdf", "json", "xml"] as const) {
     const { content } = exportFile(format, sheet, "products");
     const text = typeof content === "string" ? content : new TextDecoder().decode(content);
     assertStringIncludes(text, "Grand Total");
@@ -343,7 +361,7 @@ test("a table PDF repeats headings, lays out its logo and titles, and aligns its
     ...tablePdf(sheet, {
       size: [300, 200],
       fontSize: 10,
-      title: ["Orders", "November"],
+      titleLines: ["Orders", "November"],
       subtitle: "Paid invoices",
       headerImage: { image, width: 40, height: 16 },
       columns: [{ width: 130 }, { align: "right" }],
@@ -363,6 +381,26 @@ test("a table PDF repeats headings, lays out its logo and titles, and aligns its
   );
   assertStringIncludes(letter, "/MediaBox [0 0 612 792]");
   assertThrows(() => tablePdf(sheet, { size: [100, 150], columns: [{ width: 90 }] }));
+});
+
+test("automatic columns in a custom PDF layout leave room for a single digit", () => {
+  const headers = [
+    "PO",
+    "Supplier",
+    "Item",
+    "Description",
+    "Qty",
+    "Project",
+    "Cost centre",
+    "Ship to",
+    "Terms",
+    "Buyer",
+  ];
+  const sheet = { headers, rows: [headers.map((h) => h === "Qty" ? 9 : h.repeat(40))] };
+  for (const orientation of ["landscape", "portrait"] as const) {
+    const pdf = tablePdf(sheet, { size: "a4", orientation, subtitle: "Open purchases" });
+    assertStringIncludes(new TextDecoder().decode(pdf), "(9) Tj");
+  }
 });
 
 test("an Action makes invoice attachments through the server export entry point", async () => {

@@ -228,7 +228,9 @@ export function bars(
   const left = !options.quiet ? 0 : options.format === "ean13" ? 11 : retail ? 7 : 10;
   const right = !options.quiet ? 0 : retail ? 7 : 10;
   const modules = widths.reduce((a, b) => a + b, 0) + left + right;
-  if (!Number.isFinite(width)) throw new RangeError("Barcode width must be finite.");
+  if (options.format !== undefined && !Number.isFinite(width)) {
+    throw new RangeError("Barcode width must be finite.");
+  }
   const module = Math.max(1, Math.floor(width / modules));
   const out: { x: number; w: number }[] = [];
   let x = left;

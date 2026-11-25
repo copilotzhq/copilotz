@@ -50,13 +50,14 @@ import { Button } from "./button.tsx";
 import { Checkbox } from "./checkbox.tsx";
 import { cx } from "./cx.ts";
 import {
-  download,
+  downloadTableFile,
   EXPORT_FORMATS,
   type ExportCell,
   type ExportFormat,
   type ExportOptions,
   type TableExportFormat,
 } from "./export.ts";
+import { usesTableLayout } from "./pdf.ts";
 import { Icon } from "./icon.tsx";
 import { Input } from "./input.tsx";
 import { Menu } from "./menu.tsx";
@@ -81,7 +82,8 @@ import { say } from "./words.ts";
 export { type Column, type Key, PAGE_SIZES, type TableState };
 
 /** A format in the export menu: by name, or with the menu's own words for it. */
-export type ExportChoice<F extends string = ExportFormat> = F | { format: F; label: string };
+type FormatChoice<F extends string> = F | { format: F; label: string };
+export type ExportChoice = FormatChoice<ExportFormat>;
 
 /** Provide named formats around the app's screens. A table may add or replace them locally. */
 export const TableExportFormats: Context<Record<string, TableExportFormat>> = createContext<
@@ -196,7 +198,7 @@ const ownClick = (event: MouseEvent) => !!(event.target as Element).closest?.(OW
 
 const ALIGN = { left: undefined, right: "copilotz-table-right", center: "copilotz-table-center" };
 
-type DataTableProps<R, Toolbar, Format extends string> = {
+type DataTableProps<R> = {
   columns: Column<R>[];
   rows: R[];
   rowKey(row: R): Key;
@@ -222,13 +224,15 @@ type DataTableProps<R, Toolbar, Format extends string> = {
   /** The column chooser (yes). */
   chooseColumns?: boolean;
   /** The export menu's formats (CSV, Excel, PDF); `false`: none. */
-  exports?: ExportChoice<Format>[] | false;
+  exports?: ExportChoice[] | false;
+  /** Ordered menu choices including custom format names. */
+  exportChoices?: FormatChoice<string>[];
   /** An export's file name, without its extension ("export"). */
   exportName?: string;
   /** Export every row that matches (searched and sorted), not only the page shown. */
   exportAll?: boolean;
   /** How the files are made (see `export.ts`). */
-  exportOptions?: ExportOptions<string | string[]>;
+  exportOptions?: ExportOptions;
   /** Additional or replacement formats for this table, keyed by name. */
   formats?: Record<string, TableExportFormat>;
   /** Totals by column key, shown below the body and included in each file. */
@@ -250,8 +254,10 @@ type DataTableProps<R, Toolbar, Format extends string> = {
    * (by the columns' `width`s, the rest shared evenly; cells never widen their column).
    */
   layout?: "auto" | "fixed";
-  /** A button or filter beside the built-in tools. False hides the entire toolbar. */
-  toolbar?: Toolbar;
+  /** A button or filter beside the built-in tools. */
+  toolbarContent?: ReactNode;
+  /** Show the toolbar (the default). */
+  toolbar?: boolean;
   pagination?: boolean;
   /** The table element's id. */
   id?: string;
@@ -259,10 +265,7 @@ type DataTableProps<R, Toolbar, Format extends string> = {
 };
 
 /** Lists, searches and exports the visible columns of a page or a client-side list. */
-export function DataTable<R>(props: DataTableProps<R, ReactNode, string>): ReactNode;
-// Keep the rc.63 signature last for callers deriving props with Parameters or ComponentProps.
-export function DataTable<R>(props: DataTableProps<R, boolean, ExportFormat>): ReactNode;
-export function DataTable<R>(props: DataTableProps<R, ReactNode, string>): ReactNode {
+export function DataTable<R>(props: DataTableProps<R>): ReactNode {
   const {
     columns,
     rows,
@@ -331,7 +334,8 @@ export function DataTable<R>(props: DataTableProps<R, ReactNode, string>): React
   const visibleTitled = visible.filter((column) => !isLinks(column as Column<unknown>));
   const sharedFormats = useContext(TableExportFormats);
   const definitions = { ...sharedFormats, ...props.exportOptions?.formats, ...props.formats };
-  const choices = exports ?? [...new Set(["csv", "xlsx", "pdf", ...Object.keys(definitions)])];
+  const choices = exports === false ? false : props.exportChoices ?? exports ??
+    [...new Set(["csv", "xlsx", "pdf", ...Object.keys(definitions)])];
   const formats = choices === false ? [] : choices.map((choice) => {
     if (typeof choice !== "string") return choice;
     const label = Object.hasOwn(definitions, choice)
@@ -355,10 +359,10 @@ export function DataTable<R>(props: DataTableProps<R, ReactNode, string>): React
       align: c.align,
       ...byKey.get(c.key),
     }));
-    download(format, sheet, props.exportName ?? "export", {
+    downloadTableFile(format, sheet, props.exportName ?? "export", {
       ...props.exportOptions,
       formats: definitions,
-      pdf: { ...pdf, columns },
+      pdf: usesTableLayout(pdf, props.footerRows) ? { ...pdf, columns } : pdf,
     });
   };
   const always = props.detailOpen === true;
@@ -376,7 +380,7 @@ export function DataTable<R>(props: DataTableProps<R, ReactNode, string>): React
       ? undefined
       : { width: typeof column.width === "number" ? `${column.width}px` : column.width };
   const showsToolbar = toolbar !== false &&
-    (toolbar !== true && toolbar != null || actions !== undefined || search ||
+    (props.toolbarContent != null || actions !== undefined || search ||
       (chooseColumns && titled.length > 1) || formats.length > 0);
 
   return (
@@ -385,7 +389,10 @@ export function DataTable<R>(props: DataTableProps<R, ReactNode, string>): React
       {showsToolbar
         ? (
           <div className="copilotz-table-toolbar">
-            <div className="copilotz-table-actions">{toolbar}{actions?.(selected, clear)}</div>
+            <div className="copilotz-table-actions">
+              {props.toolbarContent}
+              {actions?.(selected, clear)}
+            </div>
             <div className="copilotz-table-tools">
               {search
                 ? (

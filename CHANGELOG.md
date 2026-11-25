@@ -93,6 +93,10 @@ A coming release will fix both issues with nested-call IDs that name their calle
   TypeScript as a dev dependency. Keep `_id` out of document types and use a string tagged
   `@format date-time` for a JSON timestamp. An explicit `schema` or `input` takes precedence. Commit
   `copilotz-env.d.ts` and generate the host modules before type-checking.
+- A `ctx.record` made by an unrecorded Action that a watched query or View calls is now written as
+  the viewer, under the collection's rules, as the call's other writes are (rc.63 wrote it as the
+  system). One the rules refuse isn't kept, and the process logs it. An atomic Action's records now
+  commit or roll back with the transaction it joined.
 
 ## 1.0.0-rc.63 — 2026-11-24
 

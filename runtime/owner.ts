@@ -975,7 +975,14 @@ export async function createOwner(
           await checkElevation(who, origin?.action, rules, track, load);
           const { ops, keep } = await guard([op], who, rules);
           await writeEach(ops, { actor: who, keep, foreign: true });
-        })().catch(() => {});
+        })().catch((error) =>
+          warn(
+            `A record in "${collection}", made by an Action a watched View called, was refused ` +
+              `for its caller and not kept: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+          )
+        );
         return _id;
       },
       metrics,

@@ -95,7 +95,8 @@ const USAGE = `Copilotz computer ${VERSION}
   computer pool --app <app-url> [--vm <name>] [--token <token>] [--root <dir>]
       Runs as a free VM of the app's pool of cloud computers, until the app gives
       it one to serve: it mounts that computer's disk at --root (/mnt/computer
-      unless given) and runs it, until it's released. The VM's name and identity
+      unless given) and runs it, until it's released. While it's free, it takes
+      a newer release from the app, and ends for its service to start it again. The VM's name and identity
       come from Compute Engine's metadata server, unless --vm and --token (or
       COPILOTZ_POOL_TOKEN) give them.
 
@@ -318,7 +319,8 @@ async function main(argv: string[]) {
     const signalled = () => void pool.stop().then(() => process.exit(0));
     process.on("SIGINT", signalled);
     process.on("SIGTERM", signalled);
-    await pool.closed;
+    // Updated while it was free: it ends, and its service starts it again as the new version.
+    if (await pool.closed === "updated") process.exit(UPDATED);
     return;
   }
 

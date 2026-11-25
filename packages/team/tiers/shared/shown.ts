@@ -12,11 +12,18 @@
  * a plain reply for comparing tiers: 20,000 tokens in, 16,000 of them read
  * from the cache (a conversation's history mostly is), and 1,000 out, each
  * agent's alike, and a tier's price is its agents' average.
+ *
+ * With the person's plans (`plansFor`: those they can run now, in their
+ * order), each chain is also priced as their turns would run it: at the
+ * first model it would try for them (`models.check`, plans first), one of
+ * their plans costing them nothing (`plan`), and a tier's price for them
+ * (`yours`) beside the app's (`price`, which pages choosing for others show).
  */
 import type { ReadContext } from "copilotz";
 import type { ModelRef, OfferedModel, Provider } from "copilotz/plugins/models/contract";
 import { agentsOf } from "copilotz/plugins/agents/contract";
 import { personOf } from "copilotz";
+import { plansFor } from "./plans.ts";
 import {
   type By,
   type Choice,
@@ -80,6 +87,12 @@ export type ModelShown = {
   ownKey?: true;
   /** What's tried after it when it fails, in order. */
   fallbacks?: { id: string; name: string; effort?: string }[];
+  /**
+   * The plan of the person looking that answers it first, as their turns
+   * try it (`"h-chatgpt/gpt-6.2-sol"`): it costs them nothing. `price` stays
+   * what it costs on the app's models.
+   */
+  plan?: string;
 };
 
 export type TierShown = {
@@ -88,6 +101,11 @@ export type TierShown = {
   description?: string;
   /** A typical message (its kinds' sum), or reply (their average), in USD; null when none is priced. */
   price: number | null;
+  /**
+   * The same for the person looking, with their plans (0 when plans answer
+   * every kind): only when a plan of theirs answers some kind here.
+   */
+  yours?: number | null;
   /** The app's (as it is, or `changed` by the org), or one the org `made`. */
   app?: true;
   changed?: true;
@@ -194,6 +212,29 @@ const entriesOf = (ctx: ReadContext, ref: ModelRef) =>
   });
 
 /**
+ * For each use, the plan of the person's (`harnesses`) its chain would run
+ * on first, as their turns try it (`models.check`), when it's a plan; each
+ * chain asked once.
+ */
+async function planFirsts(ctx: ReadContext, uses: Use[], harnesses: string[]) {
+  const asked = new Map<string, Promise<string | undefined>>();
+  const firstOf = (ref: ModelRef) => {
+    const key = JSON.stringify(ref);
+    let found = asked.get(key);
+    if (!found) {
+      found = ctx.call<string[]>("models.check", { model: { model: ref, harnesses }, port: "llm" })
+        .then((tried) => tried[0], () => undefined);
+      asked.set(key, found);
+    }
+    return found;
+  };
+  const firsts = await Promise.all(uses.map((use) => firstOf(use.ref)));
+  return firsts.map((id) =>
+    id && harnesses.includes(id.slice(0, id.indexOf("/"))) ? id : undefined
+  );
+}
+
+/**
  * Names and prices for models, by `"provider/model"` and effort, each asked
  * once: a typical message's part for the agent (its calls, each call's
  * tokens), else a plain reply. A model is named by the first it tries, and
@@ -205,9 +246,11 @@ const entriesOf = (ctx: ReadContext, ref: ModelRef) =>
 async function modelsShown(
   ctx: ReadContext,
   uses: Use[],
+  harnesses: string[] = [],
 ): Promise<(ModelShown | undefined)[]> {
   const typical = typicalOf(ctx);
   const lists = uses.map((use) => entriesOf(ctx, use.ref));
+  const firsts = harnesses.length ? planFirsts(ctx, uses, harnesses) : undefined;
   const ids = [...new Set(lists.flat().map((entry) => entry.id))];
   const offered = await Promise.all(
     ids.map((model) =>
@@ -253,6 +296,7 @@ async function modelsShown(
     }).catch(() => quotes.map(() => null))
     : [];
   const prices = new Map([...asked.keys()].map((key, i) => [key, quoted[i] ?? null]));
+  const plans = await firsts;
   return lists.map((list, i) => {
     const p = list[0];
     if (!p) return undefined;
@@ -270,6 +314,7 @@ async function modelsShown(
       ...(p.effort ? { effort: p.effort } : {}),
       price: call === null ? null : call * calls,
       ...(info?.ownKey && !charged[i].length ? { ownKey: true as const } : {}),
+      ...(plans?.[i] ? { plan: plans[i] } : {}),
       ...(list.length > 1
         ? {
           fallbacks: list.slice(1).map((entry) => ({
@@ -313,18 +358,25 @@ export async function shownAt(
       return ref === undefined ? [] : [{ ref, agent: kinds[kind].base ?? kind }];
     })
   );
-  const shown = await modelsShown(ctx, uses);
+  // The person's plans they can run now, in their order: what their turns go with.
+  const harnesses = person ? await plansFor(ctx, levels.person?.harnesses) : [];
+  const shown = await modelsShown(ctx, uses, harnesses);
   let cursor = 0;
   const tiersShown: TierShown[] = list.map(([name, tier]) => {
     const own = kindNames.flatMap((kind) =>
       entryOf(tier, kind, kinds) === undefined ? [] : [{ kind, model: shown[cursor++] }]
     ).filter((k): k is { kind: string; model: ModelShown } => !!k.model);
+    // Only the app's kinds count toward a typical message: an org's own is extra.
+    const counted = own.filter((k) => !kinds[k.kind].base);
     return {
       name,
       title: tier.title,
       ...(tier.description ? { description: tier.description } : {}),
-      // Only the app's kinds count toward a typical message: an org's own is extra.
-      price: total(own.filter((k) => !kinds[k.kind].base).map((k) => k.model.price), per),
+      price: total(counted.map((k) => k.model.price), per),
+      // On a plan of theirs, a kind costs them nothing.
+      ...(counted.some((k) => k.model.plan)
+        ? { yours: total(counted.map((k) => k.model.plan ? 0 : k.model.price), per) }
+        : {}),
       ...(tier.app ? { app: true as const } : {}),
       ...(tier.changed ? { changed: true as const } : {}),
       ...(tier.made ? { made: true as const } : {}),

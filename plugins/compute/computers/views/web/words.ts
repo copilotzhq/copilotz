@@ -1,167 +1,151 @@
 /**
  * The words of computers' web front end, in English: so far, a person's
- * plans on their own computers (on Connected accounts, its sign-in dialog,
- * and the palette's), a computer's Files tab (its folders, uploading to
+ * plans (Your plans and Your computers on Your AI, the connect flow, the
+ * welcome's step, and the palette's), a computer's Files tab (its folders, uploading to
  * them, why an upload didn't go), and an agent's calls that move a file
  * between a chat and a computer. An app gives its own under
- * `computers.<key>`. The plans' names are the providers'
+ * `computers.<key>`. With tiers, a plan's name is what they list (in the
+ * app's words: `text.<English>`); without, the providers'
  * (resources/engines.ts): "Claude plan", "ChatGPT plan, through Codex",
  * "Google AI plan, through Antigravity".
  */
 import { defineWords } from "../../../../../hosts/web/words.ts";
 
 export const say = defineWords("computers", {
-  // The plans, as the providers name them (resources/engines.ts), and their CLIs
-  claudeTitle: "Claude plan",
-  claudePlan: "Claude plan",
+  // The plans' CLIs, and the plans as the app's own computers name them (without tiers to list them)
   claudeCli: "Claude Code",
-  claudeAbout: "Your agents run on your Claude plan, through Claude Code on your computer.",
-  codexTitle: "ChatGPT plan, through Codex",
-  codexPlan: "ChatGPT plan",
   codexCli: "Codex",
-  codexAbout: "Your agents run on your ChatGPT plan, through Codex on your computer.",
-  antigravityTitle: "Google AI plan, through Antigravity",
-  antigravityPlan: "Google AI plan",
   antigravityCli: "Antigravity",
-  antigravityAbout: "Your agents run on your Google AI plan, through Antigravity on your computer.",
+  claudeTitle: "Claude plan",
+  codexTitle: "ChatGPT plan, through Codex",
+  antigravityTitle: "Google AI plan, through Antigravity",
+  grokCli: "Grok Build",
+  grokTitle: "Grok plan",
+  cursorCli: "Cursor",
+  cursorTitle: "Cursor plan",
 
-  // The section on Connected accounts
-  plansTitle: "Plans on your computers",
-  plansAbout: "Your agents can run on a plan you already pay for, instead of an API key. " +
-    "Sign in once, through its app on a computer of yours, and it works in every " +
-    "conversation and space here.",
-  plansPrivate:
-    "Nothing is charged here for those calls. The sign-in stays on your computer: this app never sees it.",
-  checking: "Checking your computers…",
-  checkAgain: "Check again",
+  // Your plans, on Your AI
+  plansTitle: "Your plans",
+  plansAbout: "Your agents run on AI plans you already pay for, instead of the app's models. " +
+    "Connect each one once, and it works in every conversation and space here.",
+  plansPaid: "Your plan pays for the AI.",
+  plansCloud: "A cloud computer you use for it is charged while it's awake.",
+  plansPrivate: "Sign-ins stay on your computers, or sealed on the server: nobody else sees them.",
   checkFailed: "Couldn't check your computers: {why}",
-  noComputerTitle: "Connect a computer of yours first",
-  noComputerText:
-    "Plans run through their apps on a computer of yours, a Mac, a Linux or Windows PC, while " +
-    "it's on. Connect one, then sign in here.",
-  connectComputer: "Connect a computer",
-  personal: "your Personal space",
-
-  // A plan's card
-  signedIn: "Signed in",
-  signIn: "Sign in",
-  signInAgain: "Sign in again",
-  signInOther: "Sign in on another computer",
-  moreOn: "More for {computer}",
-  rowSignedInAs: "Signed in as {account}",
-  rowSignedIn: "Signed in",
-  rowInstalled: "Installed, not signed in",
-  rowMissing: "{cli} isn't installed",
-  rowUnchecked: "Not checked yet",
-  rowOld: "Didn't say: its computer program may need an update",
-  rowSharedSomewhere:
-    "Your plan runs on your own computer. This shared one runs your agents' tools.",
-  sharedNotice:
-    "{computer} is shared with others' agents in {spaces}, so your plans can't run on it.",
-  sharedNoticeSomewhere: "{computer} is shared with others' agents, so your plans can't run on it.",
-  offline: "Offline",
-  checkedAt: "last checked {time}",
-  version: "version {version}",
-  howToInstall: "How to install",
-  hideInstall: "Hide",
-  howToFix: "How to use it",
-  runsWhileOn: "Your agents use it while {computer} is on; until then, they use the app's models.",
-
-  // Installing a CLI
-  installIn: "In a terminal on {computer}, run:",
-  installMissing: "{cli} isn't installed on {computer} yet. In a terminal there, run:",
-  installAnywhere: "In a terminal on that computer, run:",
-  installCommand: "The command that installs {cli}",
-  installThen: "Then check again here. It's {cli}'s official install.",
-  installAndSignIn: "Install {cli} and sign in",
-  installRuns:
-    "{cli} isn't installed on {computer} yet. Signing in runs {cli}'s official installer there first:",
-  stepInstall: "Installing {cli} on {computer}",
-  signOut: "Sign out",
+  connect: "Connect",
+  fix: "Fix",
+  signOutOn: "Sign out on {computer}",
+  signOutServer: "Disconnect {plan}",
   signOutFailed: "Couldn't sign out of {computer}: {why}",
+  moreFor: "More for {plan}",
+  cardReadyServer: "Connected as {account}, on the server: always ready.",
+  cardReady: "Running on {computer} ({state}).",
+  cardReadyBackup: "Running on {computer} ({state}), with {backup} ready as backup.",
+  cardOnline: "online",
+  cardAsleep: "asleep: it wakes when your agents need it",
+  cardAway: {
+    one: "Signed in on {computers}, which is off. Your agents use the app's models until it's on.",
+    other:
+      "Signed in on {computers}, which are off. Your agents use the app's models until one is on.",
+  },
+  cardReconnect: "{plan} needs you to sign in again.",
+  cardOff: "Not connected: your agents use the app's models.",
+  cardLimited:
+    "At its limit since {time}: your agents use your next plan, or the app's models, until it resets.",
+
+  // The person's order of their plans
+  orderTitle: "Use my plans in this order",
+  orderAbout:
+    "When a model runs on more than one of your plans, your agents try them in this order.",
+  moveUp: "Move up",
+  notConnected: "not connected",
+  orderFailed: "Couldn't save the order: {why}",
+
+  // Your computers
+  yoursTitle: "Your computers",
+  yoursAbout: "Where your plans run, and your agents' work.",
+  yoursServes: "Runs {plans}",
+  yoursServesNone: "No plans signed in here",
+  yoursNone:
+    "No computer yet. A plan that runs through its app needs one: connecting it sets one up for you.",
+  terminal: "Terminal",
+  online: "Online",
+  offline: "Offline",
+  seenAt: "last seen {time}",
+
+  // Lists, and a computer shared with others' agents
+  listPair: "{first} and {second}",
+  listMore: "{rest} and {last}",
   shareSignedIn: "{computer} is signed in to your {plan}. Sign out of it first: " +
     "a computer shared with others can't keep plan sign-ins.",
   shareOwnWarning: "Agents in {space} run on {computer} as you: they can read everything you " +
     "can on it, including your own sign-ins (Claude Code, Codex, SSH keys). Share it only with " +
     "people you trust.",
-  installFailedTitle: "{cli} didn't install on {computer}",
-  installFailedText:
-    "Its installer stopped. What it said last is below, and how to install it yourself.",
 
-  // A computer shared with others' agents
-  sharedTitle: "{computer} is shared with others' agents",
-  sharedWhy:
-    "In {spaces}, each person's agents work on {computer} as you. Signed in there, your plan " +
-    "would be theirs to use too, so it can't run on it.",
-  sharedWhySomewhere:
-    "Others' agents work on {computer} as you, where it's shared. Signed in there, your plan " +
-    "would be theirs to use too, so it can't run on it.",
-  sharedFix:
-    "To use it for your plan, have their agents ask you first there: then nothing runs on it " +
-    "without your yes. Or take it out of {spaces}, from its menu there.",
-  askMeFirst: "Ask me first in {spaces}",
-  openSpace: "Open {space}",
-  keepAsIs: "Keep it as it is",
-  listPair: "{first} and {second}",
-  listMore: "{rest} and {last}",
-
-  // Signing in, in a dialog
-  signInTitle: "Sign in to your {plan}",
-  signInThrough: "Through {cli}, on a computer of yours.",
-  signInOn: "Through {cli}, on {computer}.",
-  whichComputer: "On which computer?",
-  whichHint: "Your agents' calls run there, so it needs to be on while they work.",
-  ownSignIn:
-    "It's your agents' own sign-in: your own use of {cli} on that computer stays as it is.",
-  optionReady: "Ready to sign in",
-  optionAsleep: "Asleep: it wakes up first",
-  start: "Start signing in",
-  offlineNote: "{computer} is offline. Turn it on, or start its computer program, then try again.",
-  wakeNote: "{computer} wakes up first: it takes a moment.",
-  stepStart: "Starting {cli} on {computer}",
-  stepWake: "Waking {computer}",
-  stepSignIn: "Sign in to your {plan}",
+  // The connect flow
+  flowTitle: "Connect your plans",
+  flowConnected: "Connected",
+  // Where they run
+  flowWhere: "Where should they run?",
+  flowWhereAbout: "{plans} run through an app on a computer. We set it up, and keep it up to date.",
+  whereCloud: "In the cloud",
+  whereCloudAbout:
+    "Always ready. It sleeps when your agents aren't working, and you pay only while it's awake.",
+  recommended: "Recommended",
+  whereLocal: "On this computer",
+  whereLocalAbout: "Free. Works while this computer is on. Needs one line in your terminal, once.",
+  whereNone: "Open this page on your computer to connect it.",
+  making: "Making your cloud computer…",
+  makeFailed: "Couldn't make your cloud computer: {why}",
+  // The checklist
+  lineComputer: "{computer} is ready",
+  lineWaking: "Waking {computer}… (about 30 seconds)",
+  lineGetting: "Getting {computer} ready…",
+  lineInstalling: "Installing {cli} on {computer}…",
+  lineTesting: "Asking it a short question…",
+  lineAnswered: "It answered: “{text}”",
+  lineLimit:
+    "Connected. Your {plan} is at its limit right now: your agents use it again when it resets.",
+  failShared: "{computer} is shared with others' agents, so plans can't run on it.",
+  failInstall: "{cli} didn't install on {computer}. What its installer said is below.",
+  failWindows: "Install {cli} on {computer} from its terminal, once:",
+  orInstall: "Or install it from {computer}'s terminal, then check again:",
+  installCommand: "The command that installs {cli}",
+  openTerminal: "Open {computer}'s terminal",
+  failSignIn: "Signing in to {plan} didn't finish.",
+  failTest: "{plan} didn't answer: {why}",
+  useCloud: "Use a cloud computer",
+  tryAgain: "Try again",
+  checkAgain: "Check again",
+  flowDone: "Your agents now run on {plans}.",
+  // A CLI's sign-in, on a line
   stepSignInHere: "Open the sign-in page, and sign in with the account that has your plan.",
-  stepSignInThere:
-    "A sign-in page opens in the browser on {computer}. Sign in there, with the account that has your plan.",
   stepSignInWait: "The sign-in page shows here as soon as {cli} gives it.",
   stepEnterCode:
     "Open the sign-in page, sign in with the account that has your plan, and enter this code there:",
   openSignIn: "Open the sign-in page",
-  notOpened: "Not on that screen? Open it here",
-  stepCode: "Paste the code it gives you",
   codeLabel: "The code from the sign-in page",
   copyCode: "Copy the code",
   codeHint: "If the page shows a code once you've signed in, paste it here.",
   codePlaceholder: "Paste the code",
   send: "Send",
-  gotCode: "The page gave you a code?",
   codeSent: "Code sent: finishing…",
-  waiting: "Waiting for the sign-in to finish…",
   output: "What {cli} says",
-  doneTitle: "Your {plan} is signed in",
-  doneAs: "Signed in as {account}",
-  doneOn: "On {computer}, through {cli}",
-  doneNext: "Your agents run on it from now on, in every conversation and space here.",
-  failedTitle: "{cli} didn't sign in",
-  failedEnded: "It stopped without signing in. Try again, or read what it said below.",
-  failedStart: "Couldn't sign in: {why}",
-  tryAgain: "Try again",
-  anotherComputer: "Another computer",
   cancel: "Cancel",
   close: "Close",
   done: "Done",
 
+  // The welcome's step
+  welcomeNone: "None of these",
+  welcomeNoneThen: "Your agents use the app's models.",
+  welcomeConnect: "Connect them",
+  welcomeLater: "You can connect them later, in Your AI.",
+
   // The command palette
   paletteGroup: "General",
-  palettePlans: "Plans on your computers",
-  paletteSignIn: "Sign in to your {plan}",
-  paletteSignedIn: "Signed in on {computer}",
-  paletteSignedInMany: {
-    one: "Signed in on {count} computer",
-    other: "Signed in on {count} computers",
-  },
-  paletteKeywords: "plan, subscription, sign in, computer, Claude, ChatGPT, Codex, Gemini, Google",
+  paletteConnect: "Connect your {plan}",
+  paletteKeywords:
+    "plan, subscription, sign in, computer, Claude, ChatGPT, Codex, Gemini, Google, Grok, Cursor",
 
   // A computer's Files tab: a folder at a time
   filesWhere: "Where in the folder",
@@ -265,4 +249,22 @@ export const say = defineWords("computers", {
   stepSavesFolder: "Saves a file from this chat in the space's folder",
   stepSent: "Sent {file}",
   stepSends: "Sends {path} to this chat",
+
+  // What a computer the app keeps costs (the `computer.cost` View)
+  costHour: {
+    one: "About {price} per hour of work, and it sleeps {count} minute after.",
+    other: "About {price} per hour of work, and it sleeps {count} minutes after.",
+  },
+  costCoversOnce: {
+    one: "Your {amount} covers about {count} hour of work, after this month's disk.",
+    other: "Your {amount} covers about {count} hours of work, after this month's disk.",
+  },
+  costCoversMonth: {
+    one: "Your {amount} a month covers about {count} hour of work, after the disk.",
+    other: "Your {amount} a month covers about {count} hours of work, after the disk.",
+  },
+  costMonth: "This month: {awake} awake · {price} · disk {disk}",
+  costMonthNoDisk: "This month: {awake} awake · {price}",
+  awakeHours: "{hours}h {minutes}m",
+  awakeMinutes: "{minutes}m",
 });

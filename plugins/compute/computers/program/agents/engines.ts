@@ -11,6 +11,13 @@
  * - `antigravity`: `agy acp`, a native ACP agent, its home its `HOME` (it
  *   has no other): its settings there deny every built-in tool. Its sign-in
  *   may be the system keyring's, shared with the person's own.
+ * - `grok`: Grok Build, through our adapter (grok.ts), its home its `HOME`
+ *   (with `GROK_HOME` in it: Grok reads the person's Claude Code and Cursor
+ *   settings from their home too). It signs in with a device code.
+ * - `cursor`: a person's Cursor plan, which has no CLI: Cursor's SDK, which
+ *   Sign in installs into its home (`npm install`), run by a runner of ours
+ *   written beside it (cursor-runner.ts), with Node: an ACP agent itself,
+ *   and its own sign-in, status and sign-out. Its home is its `HOME`.
  *
  * A session works in a folder of its own under its engine's home, named by
  * its instructions (so a session loaded later is in the same one), and kept
@@ -18,8 +25,8 @@
  * which it has no prompt of its own to replace with.
  *
  * Signing in is the CLI's own, polled like the terminal (`login`), and so is
- * signing out (`logout`), run in its home: Claude Code's and Codex's
- * sign-ins are there, so their home goes when it fails. Antigravity has no
+ * signing out (`logout`), run in its home: Claude Code's, Codex's and
+ * Grok Build's sign-ins are there, so their home goes when it fails. Antigravity has no
  * sign-out of its own here: its sign-in may be the keyring's. The person's
  * own sign-in (`~/.claude`, `~/.codex`) is never touched. Given
  * its official installer (`install`) while the CLI is missing, it runs that
@@ -41,6 +48,8 @@ import { fail } from "../workloads/answer.ts";
 import { childEnv, homeEnv, OWN, signalGroup, WINDOWS } from "../workloads/processes.ts";
 import { claude } from "./claude.ts";
 import { codex } from "./codex.ts";
+import { CURSOR_RUNNER } from "./cursor-runner.ts";
+import { grok } from "./grok.ts";
 import { agentError, spawnPeer } from "./rpc.ts";
 import type { Engine, Peer, Ran } from "./types.ts";
 import { writeWhole } from "./write.ts";
@@ -64,6 +73,9 @@ const CREDENTIALS = [
   "GEMINI_API_KEY",
   "GOOGLE_API_KEY",
   "GOOGLE_APPLICATION_CREDENTIALS",
+  "XAI_API_KEY",
+  "GROK_DEPLOYMENT_KEY",
+  "CURSOR_API_KEY",
   "CLAUDECODE",
 ];
 
@@ -146,6 +158,52 @@ export const ENGINES: Record<string, Engine> = {
         JSON.stringify(DENY_ALL, null, 2) + "\n",
       ),
     login: ["acp", "--login"],
+  },
+  grok: {
+    name: "grok",
+    binary: "grok",
+    places: (user) => [join(user, ".grok", "bin", "grok"), join(user, ".local", "bin", "grok")],
+    // Its own HOME too: Grok reads the person's Claude Code and Cursor settings from there.
+    homeEnv: (home) => ({ HOME: home, GROK_HOME: join(home, ".grok") }),
+    adapter: grok,
+    // A link and a code, on a cloud computer as on a laptop: nothing to paste back.
+    login: ["login", "--device-code"],
+    logout: ["logout"],
+    async signedIn(run) {
+      // "You are logged in with grok.com.", or "You are not authenticated." (its exit is 0 either way).
+      const { code, stdout, stderr } = await run(["models"]);
+      const said = `${stdout}\n${stderr}`;
+      return {
+        signedIn: code === 0 && /logged in with/i.test(said) && !/not authenticated/i.test(said),
+      };
+    },
+  },
+  cursor: {
+    name: "cursor",
+    // Cursor has no CLI: its SDK, in its home, run by our runner (cursor-runner.ts), with Node.
+    binary: "node",
+    places: (
+      user,
+    ) => [join(user, ".local", "bin", "node"), "/opt/homebrew/bin/node", "/usr/local/bin/node"],
+    homeEnv: (home) => ({ HOME: home }),
+    args: ["runner.mjs"],
+    needs: join("node_modules", "@cursor", "sdk", "package.json"),
+    prepare: (home) => writeWhole(join(home, "runner.mjs"), CURSOR_RUNNER),
+    version: ["runner.mjs", "version"],
+    login: ["runner.mjs", "login"],
+    logout: ["runner.mjs", "logout"],
+    async signedIn(run) {
+      const { stdout } = await run(["runner.mjs", "status"]);
+      try {
+        const said = JSON.parse(stdout.trim().split("\n").at(-1) ?? "");
+        return {
+          signedIn: said.signedIn === true,
+          ...(said.signedIn && said.account ? { account: String(said.account) } : {}),
+        };
+      } catch {
+        return { signedIn: false };
+      }
+    },
   },
 };
 
@@ -231,6 +289,9 @@ export function createEngines(options: EnginesOptions): Engines {
     return env;
   };
 
+  /** An engine's own home on this computer. */
+  const homeOf = (name: string) => join(options.root, ".copilotz", "engines", name);
+
   const engineOf = (name: unknown): Engine => {
     if (typeof name !== "string" || !Object.hasOwn(ENGINES, name)) {
       fail(`Unknown engine "${name}": ${Object.keys(ENGINES).join(", ")}`);
@@ -254,8 +315,11 @@ export function createEngines(options: EnginesOptions): Engines {
     const engine = engineOf(name);
     const command = await commandOf(engine);
     if (!command) throw agentError("missing", `${engine.binary} isn't installed on this computer`);
-    const home = join(options.root, ".copilotz", "engines", engine.name);
+    const home = homeOf(engine.name);
     await mkdir(home, { recursive: true, mode: 0o700 });
+    if (engine.needs && !await access(join(home, engine.needs)).then(() => true, () => false)) {
+      throw agentError("missing", `${engine.name} isn't installed on this computer`);
+    }
     await engine.prepare?.(home);
     return { engine, command, home, env: { ...cleanEnv(), ...engine.homeEnv(home) } };
   };
@@ -345,7 +409,7 @@ export function createEngines(options: EnginesOptions): Engines {
       return { engine: name, installed: false, signedIn: false };
     }
     const [ran, signed] = await Promise.all([
-      run(found, ["--version"]),
+      run(found, found.engine.version ?? ["--version"]),
       signedIn(found).catch(() => ({ signedIn: false })),
     ]);
     const line = `${ran.stdout}\n${ran.stderr}`.trim().split("\n")[0] ?? "";
@@ -375,11 +439,14 @@ export function createEngines(options: EnginesOptions): Engines {
       ...OWN,
     });
 
-  /** Its official installer, in the computer's home (nothing to answer: it reads no input). */
-  const installer = (command: string) =>
+  /**
+   * Its official installer, in the computer's home, told the engine's own
+   * (`ENGINE_HOME`: Cursor's SDK goes there). Nothing to answer: it reads no input.
+   */
+  const installer = (command: string, engine: string) =>
     spawn("/bin/sh", ["-c", command], {
       cwd: user,
-      env: cleanEnv(),
+      env: { ...cleanEnv(), ENGINE_HOME: homeOf(engine) },
       stdio: ["ignore", "pipe", "pipe"],
       ...OWN,
     });
@@ -466,7 +533,7 @@ export function createEngines(options: EnginesOptions): Engines {
           .catch((error) => install ? undefined : fail(error.message, "missing"));
         login = found
           ? startLogin(signIn(found))
-          : startLogin(installer(install!), () => find(engine).then(signIn));
+          : startLogin(installer(install!, engine), () => find(engine).then(signIn));
         logins.set(engine, login);
       } else if (input.input && !login.done) {
         login.child.stdin?.write(input.input.endsWith("\n") ? input.input : `${input.input}\n`);

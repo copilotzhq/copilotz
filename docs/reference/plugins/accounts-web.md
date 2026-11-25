@@ -27,9 +27,8 @@ Nobody calls it: it has no Actions, tools or routes.
 
 Its Views show on the web.
 
-- **On the web:** `accounts`, `accounts.keys`, `accounts.palette`, `accounts.uses`.
-- **What it adds to resources:** `conversation` (`accounts`), `palette` (`accounts`), `userMenu`
-  (`accounts`).
+- **On the web:** `accounts`, `accounts.connect`, `accounts.keys`, `accounts.palette`.
+- **What it adds to resources:** `palette` (`accounts`), `userMenu` (`accounts`).
 
 ## What it needs
 
@@ -41,7 +40,7 @@ plugins fill.
 The runtime doesn't start without [`accounts`](accounts.md) and [`web-shell`](web-shell.md): add
 them too.
 
-It ships with `copilotz@1.0.0-rc.64`.
+It ships with `copilotz@1.0.0-rc.66`.
 
 ## Listing
 

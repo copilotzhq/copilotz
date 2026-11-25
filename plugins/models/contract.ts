@@ -14,18 +14,21 @@
  *   the caller may read, holding `type` and `data`; an image made here by default) or
  *   `{ data, type? }` (base64, or a data URL)
  * - the `image` collection: the images made (Image), read by id
- * - `models.check` { model, port: "llm" | "embeddings" | "transcription" | "image" }: throws what's wrong
+ * - `models.check` { model, port: "llm" | "embeddings" | "transcription" | "image" }: throws what's
+ *   wrong; for `llm`, answers the `"provider/model"`s it would try, in order
  * - `models.efforts` { model } → string[] | null: the efforts the catalog says it takes
  * - `models.price` { catalog } → Price
  * - `models.offered` { provider?, search?, model? }: what an agent can be given
  * - `models.keyable` { provider } → boolean: whether a key can be brought for it
  * - the `modelKeys` resource: where orgs' own keys are kept (ModelKeys)
  * - the `modelUse` resource: UseListener entries, told each call's use in the job that made it
+ * - the `connectedPlans` resource: which of a person's plans they've connected (ConnectedPlans)
  */
 import type { Cost } from "./shared/choice.ts";
 
 export type {
   Cost,
+  Harness,
   Media,
   ModelKeys,
   ModelRef,
@@ -55,6 +58,15 @@ export type {
 export type { ModelCall, ModelUse, UseContext, UseListener } from "./shared/use.ts";
 /** Metered uses outside models (a web search) ask and tell the same listeners a model call does. */
 export { mayUse, used } from "./shared/use.ts";
+
+/**
+ * A `connectedPlans` resource: the Action saying which plans (providers with
+ * `harness`) the person a call is for has connected now: `{}` in, called as
+ * them or an agent working for them; provider names out (`["chatgpt"]`). The
+ * accounts plugin says for the accounts people connect, the computers plugin
+ * for the plans signed in on their computers.
+ */
+export type ConnectedPlans = { action: string };
 
 /** What `models.price` answers: the catalog's cost for a model, and which catalog said it. */
 export type Price = { cost?: Cost; source: string };

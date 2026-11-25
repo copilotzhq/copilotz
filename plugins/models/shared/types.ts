@@ -61,6 +61,14 @@ export type LlmChunk =
    */
   | { type: "thinking" }
   /**
+   * The model runs on a computer that's waking (a person's plan on a cloud
+   * computer): it answers once the computer is awake, in about `seconds` when
+   * the app says, `slower` than usual when it says so (no machine ready at
+   * this hour). Only adapters that run on a computer send it; the next chunk,
+   * of any kind, means it's awake.
+   */
+  | { type: "waking"; seconds?: number; slower?: true }
+  /**
    * The call broke (the network, a silent stream, the provider busy): what it
    * sent so far is void, and it's tried again in `wait` ms (its `attempt`th
    * time). Only `generate` sends it; adapters don't.

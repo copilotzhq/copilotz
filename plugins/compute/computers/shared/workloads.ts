@@ -319,7 +319,7 @@ export type SearchResult = { title: string; url: string; snippet: string };
 
 /**
  * An engine: a plan's CLI on this computer (`claude`, `codex`,
- * `antigravity`), which an agent's model calls can run on. Each has a home of
+ * `antigravity`, `grok`, `cursor`), which an agent's model calls can run on. Each has a home of
  * its own on the computer (its sign-in, its sessions), apart from the
  * person's own use of it.
  */
@@ -362,6 +362,11 @@ export type LoginState = {
   signedIn: boolean;
   /** The sign-in link, once it's shown one. */
   url?: string;
+  /**
+   * Done, whether its CLI is there now, as the app asked it after
+   * (`computer.engine.login` adds it): not, when its installer failed.
+   */
+  installed?: boolean;
 };
 
 /** A tool an engine's model may call, as MCP has it. */

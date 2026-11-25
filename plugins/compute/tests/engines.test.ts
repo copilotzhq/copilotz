@@ -12,7 +12,7 @@
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { join } from "node:path";
 import process from "node:process";
-import { type Actor, createRuntime, definePlugin } from "../../../runtime/mod.ts";
+import { type Actor, createRuntime, defineAction, definePlugin } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models from "../../models/mod.ts";
 import { chat, type Message, tool } from "../../agents/chat/mod.ts";
@@ -23,6 +23,7 @@ import { startComputer } from "../computers/program/computer.ts";
 import { host, tempDir, test } from "../../../testing/mod.ts";
 import { fakeCli } from "./fake-cli.ts";
 import { fakeComputer } from "./fake-computer.ts";
+import { servingOrder } from "../computers/shared/serving.ts";
 
 const ana: Actor = { kind: "person", id: "ana" };
 const cy: Actor = { kind: "person", id: "cy" };
@@ -78,6 +79,19 @@ async function setup(
   const topic = `engines-test.${crypto.randomUUID()}`;
   const app = definePlugin({
     name: "app",
+    actions: {
+      // Which plans `actor` has connected here, as the tiers ask on each turn.
+      "test.connected": defineAction({
+        input: { type: "object" },
+        run: (ctx, input: { actor: Actor }) => ctx.as(input.actor).call("computer.connected", {}),
+      }),
+      // Her computer, gone quiet (as it last said: still signed in).
+      "test.offline": defineAction({
+        input: { type: "object" },
+        run: (ctx) =>
+          ctx.as().db.collection("computer").updateMany({}, { $set: { online: false } }),
+      }),
+    },
     resources: {
       shared: { thread: {}, message: {} },
       agents: {
@@ -218,13 +232,68 @@ test("someone with no plan signed in goes straight to the next model, and no com
   });
 });
 
-test("signing in asked to install sends the plan's official installer, and only then", async () => {
+test("which plans someone has connected: signed in on a computer of theirs that's on or wakes", async () => {
+  await setup(async (s) => {
+    const plans = (actor: Actor) => s.rt.call<string[]>("test.connected", { actor });
+    const north = (person: Actor): Actor => ({ kind: "agent", id: "north", for: person });
+    // As her, or an agent working for her; never anyone else's.
+    assertEquals(await plans(ana), ["claude-plan"]);
+    assertEquals(await plans(north(ana)), ["claude-plan"]);
+    assertEquals(await plans(north(cy)), []);
+    // A routine's turn, with nobody there: a plan's CLI doesn't run then.
+    const routine = { kind: "routine", id: "r1", name: "Morning news", rev: 1 };
+    assertEquals(await plans({ ...north(ana), for: { ...ana, origin: routine } }), []);
+    // Her laptop, off: not until it's on again. A cloud computer asleep wakes when asked.
+    await s.rt.call("test.offline", {});
+    assertEquals(await plans(north(ana)), []);
+    const [mine] = await s.rt.call<{ computer: string }[]>("computer.engines", {}, { actor: ana });
+    await s.rt.call("computer.mark", {
+      computer: mine.computer,
+      status: { kind: "cloud", state: "asleep" },
+    });
+    assertEquals(await plans(north(ana)), ["claude-plan"]);
+    // Each plan serves its maker's models, by their own names.
+    const plansOnly = ["claude-plan/claude-haiku-5-5", "codex-plan/gpt-6-luna"];
+    assertEquals(
+      await s.rt.call("models.check", {
+        model: { model: [...plansOnly, "gemini-plan/gemini-4-neon"], harnesses: ["gemini-plan"] },
+        port: "llm",
+      }),
+      ["gemini-plan/gemini-4-neon"],
+    );
+    assertEquals(
+      await s.rt.call("models.check", {
+        model: { model: plansOnly, harnesses: ["codex-plan", "claude-plan"] },
+        port: "llm",
+      }),
+      plansOnly,
+    );
+    // Cursor serves every maker's it names, by the same names (not GPT-6 Luna), and its own.
+    assertEquals(
+      await s.rt.call("models.check", {
+        model: { model: [...plansOnly, "cursor-plan/composer-2.5"], harnesses: ["cursor-plan"] },
+        port: "llm",
+      }),
+      ["cursor-plan/claude-haiku-5-5", "cursor-plan/composer-2.5"],
+    );
+  });
+});
+
+test("signing in asked to install sends the plan's official installer, and only then; done, it says whether the CLI is there", async () => {
   await setup(async (s) => {
     const [mine] = await s.rt.call<{ computer: string }[]>("computer.engines", {}, { actor: ana });
     const login = (more: Record<string, unknown> = {}) =>
       s.rt.call("computer.engine.login", { computer: mine.computer, engine: "codex", ...more }, {
         actor: ana,
       });
+    // Done, it says whether the CLI is there now, as the computer says after (of Claude Code).
+    assertEquals(
+      await s.rt.call("computer.engine.login", { computer: mine.computer, engine: "claude" }, {
+        actor: ana,
+      }),
+      { state: "done", output: "", signedIn: true, installed: true },
+    );
+    s.logins.length = 0;
     await login();
     await login({ install: true });
     await login({ install: false });
@@ -416,4 +485,35 @@ test("two conversations that start alike are two answers: their prompts' ids dif
     assertEquals(fresh.length, 2);
     assert(fresh[0].id !== fresh[1].id, "each conversation's own");
   });
+});
+
+test("which computer a plan runs on: online, then one the app keeps (it wakes), then one that's off; where the session is first in each", () => {
+  const seen = (s: string) => `2026-11-25T${s}:00.000Z`;
+  const signed = { claude: { installed: true, signedIn: true, at: seen("09:00") } };
+  const laptop = { _id: "laptop", online: false, seen: seen("10:00"), engines: signed };
+  const cloud = {
+    _id: "cloud",
+    online: false,
+    seen: seen("08:00"),
+    status: { kind: "cloud", state: "asleep" },
+    engines: signed,
+  };
+  const desk = { _id: "desk", online: true, seen: seen("07:00"), engines: signed };
+  const old = { _id: "old", online: true, seen: seen("06:00"), engines: signed };
+  const unsigned = { _id: "unsigned", online: true, seen: seen("11:00"), engines: {} };
+  const ids = (list: { _id: string }[]) => list.map((c) => c._id);
+
+  // A laptop that's off, seen last, comes after a cloud computer asleep: that one wakes.
+  assertEquals(ids(servingOrder([laptop, cloud], "claude")), ["cloud", "laptop"]);
+  // Online first, the most recently seen first; not signed in, not at all.
+  assertEquals(ids(servingOrder([laptop, cloud, old, desk, unsigned], "claude")), [
+    "desk",
+    "old",
+    "cloud",
+    "laptop",
+  ]);
+  // Where the session is goes first among its own, never before one that's online.
+  assertEquals(ids(servingOrder([desk, old], "claude", "old")), ["old", "desk"]);
+  assertEquals(ids(servingOrder([desk, cloud], "claude", "cloud")), ["desk", "cloud"]);
+  assertEquals(servingOrder([desk], "codex"), []);
 });

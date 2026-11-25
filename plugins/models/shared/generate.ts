@@ -263,6 +263,9 @@ export async function* generate(ctx: Reach, request: Generate): AsyncGenerator<L
             // At work, nothing written yet: the silence it ends isn't a dropped call.
             thinking = true;
             yield chunk;
+          } else if (chunk.type === "waking") {
+            // Its computer is waking: nothing written, so failing after it still hands over.
+            yield chunk;
           } else {
             wrote = true;
             call.first();

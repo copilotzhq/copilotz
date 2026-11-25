@@ -25,7 +25,7 @@ It keeps 10 collections, 7 of them on the record.
 | `file`     | documents                           | `name`, `type`, `size`, `data`, `draft`, `voice`, `transcript`, `thread`, `in`, `private`, `at`                                                                                                                                                  |
 | `grant`    | documents                           | `owner`, `agent`, `work`, `on`, `thread`, `once`, `origin`, `rev`, `at`                                                                                                                                                                          |
 | `intent`   | documents                           | `thread`, `agent`, `step`, `text`, `state`, `told`, `calls`, `outputs`, `asks`, `again`, `at`                                                                                                                                                    |
-| `live`     | in memory, gone on restart          | `thread`, `agent`, `turn`, `text`, `calls`, `retry`, `open`, `in`, `at`                                                                                                                                                                          |
+| `live`     | in memory, gone on restart          | `thread`, `agent`, `turn`, `text`, `calls`, `retry`, `waking`, `open`, `in`, `at`                                                                                                                                                                |
 | `message`  | documents                           | `thread`, `from`, `to`, `text`, `toolCalls`, `private`, `replyTo`, `expectReply`, `subthread`, `hops`, `turn`, `failed`, `in`, `files`, `drew`, `held`, `stopped`, `tap`, `via`, `back`, `state`, `told`, `knew`, `at`; private: `state`, `told` |
 | `shown`    | records, appended and never changed | `thread`, `in`, `key`, `after`, `medium`, `fallback`, `note`, `at`                                                                                                                                                                               |
 | `thread`   | documents                           | `title`, `renamable`, `agents`, `parent`, `fork`, `in`, `about`, `held`, `archived`, `messages`, `opened`, `latest`, `at`                                                                                                                        |
@@ -122,7 +122,7 @@ It also reads `agentModel`, `agentSources`, `agents`, `contactSend`, `context`, 
 
 The runtime doesn't start without [`models`](models.md): add it too.
 
-It ships with `copilotz@1.0.0-rc.64`.
+It ships with `copilotz@1.0.0-rc.66`.
 
 ## What it does on its own
 

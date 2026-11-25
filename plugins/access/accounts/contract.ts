@@ -5,16 +5,17 @@
  * the rest by name:
  *
  * - the `account` collection, each person reading their own;
- * - its queries `account.providers` (what can be connected, and how) and
- *   `account.uses` (which models would run on the asker's accounts);
+ * - its query `account.providers` (what can be connected, and how);
  * - its Actions `account.connect`, `account.complete`, `account.disconnect`
- *   (a person's), and `account.token` (trusted code only: a model provider,
- *   a tool calling the provider's API for its person);
+ *   (a person's), `account.token` (trusted code only: a model provider, a
+ *   tool calling the provider's API for its person) and `account.connected`
+ *   (trusted code only: the plans a person has connected, for the models
+ *   plugin's `connectedPlans` resource);
  * - its event `account.changed`, as an account is connected, lost or
  *   disconnected;
  * - on the web, the `accountSections` resource: a section of another front
- *   end's on the Connected accounts page, below the providers
- *   (`AccountSection`).
+ *   end's on Your AI, over the providers (`AccountSection`); and the
+ *   `accounts.connect` View: one account's connecting, in place.
  *
  * A provider is a resource: the OAuth endpoints, the client, its scopes, how
  * to tell who the account is, and the headers its token goes in:
@@ -33,7 +34,6 @@
  * ```
  */
 import type { IconName } from "../../../hosts/web/mod.ts";
-import type { ModelRef } from "../../models/contract.ts";
 
 /** Whether an account can be used: it can, it needs signing in again, or the provider ended it. */
 export type Status = "connected" | "needs_reconnect" | "revoked";
@@ -129,34 +129,22 @@ export type ProviderShown = {
 };
 
 /**
- * An `accountSections` resource: a section another front end adds to the
- * Connected accounts page, below the providers (a person's plans on their
- * own computers). Its View gets item `{}` and hints `{ query, mode }`: the
- * page's address query, for its own parameters (`?signin=claude`), and
- * `full` or `panel`. Lowest `order` first; `null` takes one out.
+ * An `accountSections` resource: a section another front end adds to Your
+ * AI, over the providers (a person's plans, their computers). Its View gets
+ * item `{}` and hints `{ query, mode }`: the page's address query, for its
+ * own parameters (`?connect=claude-plan`), and `full` or `panel`. Lowest
+ * `order` first; `null` takes one out. `plans`: it shows the person's plans,
+ * the accounts that pay for models among them (`models`: ChatGPT), so the
+ * page doesn't show those as cards of their own.
  *
  * ```ts
- * resources: { accountSections: { plans: { view: "computer.plans", order: 10 } } }
+ * resources: { accountSections: { plans: { view: "computer.plans", order: 10, plans: true } } }
  * ```
  */
-export type AccountSection = { view: string; order?: number };
+export type AccountSection = { view: string; order?: number; plans?: boolean };
 
 /** What `account.connect` answers: where to sign in, and (to paste back) where the person lands. */
 export type Connecting = { url: string; paste?: string };
-
-/** `account.uses`: for each agent, the account its model would run on, or one that needs reconnecting. */
-export type Uses = Record<string, Use>;
-export type Use = {
-  provider: string;
-  title: string;
-  label?: string;
-  plan?: string;
-  /** It would run there, but the account needs signing in again: it runs on the app's instead. */
-  reconnect?: true;
-};
-
-/** `account.uses`' params: the models agents use, by agent. */
-export type UsesParams = { models: Record<string, ModelRef> };
 
 /** `account.changed`: an account connected, lost (needs reconnecting, revoked) or disconnected. */
 export type Changed = {

@@ -6,46 +6,42 @@
 import type { Words } from "../words.ts";
 
 export const computers: Words = {
-  "computers.anotherComputer": "Outro computador",
-  "computers.antigravityAbout":
-    "Seus agentes rodam no seu plano do Google AI, pelo Antigravity no seu computador.",
   "computers.antigravityCli": "Antigravity",
-  "computers.antigravityPlan": "plano do Google AI",
   "computers.antigravityTitle": "Plano do Google AI, pelo Antigravity",
-  "computers.askMeFirst": "Perguntar a mim antes em {spaces}",
+  "computers.awakeHours": "{hours}h {minutes}min",
+  "computers.awakeMinutes": "{minutes}min",
   "computers.cancel": "Cancelar",
   "computers.checkAgain": "Verificar de novo",
   "computers.checkFailed": "Não deu para verificar seus computadores: {why}",
-  "computers.checkedAt": "verificado por último {time}",
-  "computers.checking": "Verificando seus computadores…",
-  "computers.claudeAbout":
-    "Seus agentes rodam no seu plano do Claude, pelo Claude Code no seu computador.",
   "computers.claudeCli": "Claude Code",
-  "computers.claudePlan": "plano do Claude",
   "computers.claudeTitle": "Plano do Claude",
   "computers.close": "Fechar",
   "computers.codeHint": "Se a página mostrar um código depois que você entrar, cole aqui.",
   "computers.codeLabel": "O código da página de login",
   "computers.codePlaceholder": "Cole o código",
   "computers.codeSent": "Código enviado: finalizando…",
-  "computers.codexAbout":
-    "Seus agentes rodam no seu plano do ChatGPT, pelo Codex no seu computador.",
   "computers.codexCli": "Codex",
-  "computers.codexPlan": "plano do ChatGPT",
   "computers.codexTitle": "Plano do ChatGPT, pelo Codex",
-  "computers.connectComputer": "Conectar um computador",
   "computers.copyCode": "Copiar o código",
+  "computers.costCoversMonth": {
+    one: "Seus {amount} por mês cobrem cerca de {count} hora de trabalho, depois do disco.",
+    other: "Seus {amount} por mês cobrem cerca de {count} horas de trabalho, depois do disco.",
+  },
+  "computers.costCoversOnce": {
+    one: "Seus {amount} cobrem cerca de {count} hora de trabalho, depois do disco deste mês.",
+    other: "Seus {amount} cobrem cerca de {count} horas de trabalho, depois do disco deste mês.",
+  },
+  "computers.costHour": {
+    one: "Cerca de {price} por hora de trabalho, e ele dorme {count} minuto depois.",
+    other: "Cerca de {price} por hora de trabalho, e ele dorme {count} minutos depois.",
+  },
+  "computers.costMonth": "Este mês: {awake} acordado · {price} · disco {disk}",
+  "computers.costMonthNoDisk": "Este mês: {awake} acordado · {price}",
+  "computers.cursorCli": "Cursor",
+  "computers.cursorTitle": "Plano do Cursor",
   "computers.done": "Pronto",
-  "computers.doneAs": "Conectado como {account}",
-  "computers.doneNext":
-    "Seus agentes rodam nele a partir de agora, em todas as conversas e espaços daqui.",
-  "computers.doneOn": "Em {computer}, pelo {cli}",
-  "computers.doneTitle": "Seu {plan} está conectado",
   "computers.dropTitle": "Solte para enviar",
   "computers.dropTo": "Para {folder} em {computer}",
-  "computers.failedEnded": "Ele parou sem entrar. Tente de novo, ou leia abaixo o que ele disse.",
-  "computers.failedStart": "Não deu para entrar: {why}",
-  "computers.failedTitle": "O {cli} não entrou",
   "computers.filesDownload": "Baixar {name}",
   "computers.filesEmpty": "Nada aqui ainda",
   "computers.filesEmptyDrop":
@@ -71,63 +67,29 @@ export const computers: Words = {
     other:
       "{count} pastas não foram enviadas: pastas não podem ser. Solte os arquivos delas, ou um zip de cada uma.",
   },
-  "computers.gotCode": "A página deu um código?",
-  "computers.hideInstall": "Ocultar",
-  "computers.howToFix": "Como usar",
-  "computers.howToInstall": "Como instalar",
-  "computers.installAndSignIn": "Instalar o {cli} e entrar",
-  "computers.installAnywhere": "Num terminal nesse computador, rode:",
   "computers.installCommand": "O comando que instala o {cli}",
-  "computers.installFailedText":
-    "O instalador parou. O que ele disse por último está abaixo, e como instalar você mesmo.",
-  "computers.installFailedTitle": "O {cli} não foi instalado em {computer}",
-  "computers.installIn": "Num terminal em {computer}, rode:",
-  "computers.installMissing":
-    "O {cli} ainda não está instalado em {computer}. Num terminal lá, rode:",
-  "computers.installRuns":
-    "O {cli} ainda não está instalado em {computer}. Para entrar, o instalador oficial do {cli} roda lá antes:",
-  "computers.installThen": "Depois verifique de novo aqui. É a instalação oficial do {cli}.",
-  "computers.keepAsIs": "Deixar como está",
   "computers.keepBoth": "Manter os dois",
   "computers.listMore": "{rest} e {last}",
   "computers.listPair": "{first} e {second}",
-  "computers.moreOn": "Mais de {computer}",
   "computers.newFile": "Novo arquivo",
   "computers.newFileMake": "Criar o arquivo",
   "computers.newFileName": "O nome do novo arquivo",
   "computers.newFilePlaceholder": "notas.md, ou src/novo.ts",
-  "computers.noComputerText":
-    "Os planos rodam pelos apps deles num computador seu, um Mac, um PC com Linux ou Windows, " +
-    "enquanto ele estiver ligado. Conecte um, e entre aqui.",
-  "computers.noComputerTitle": "Conecte um computador seu primeiro",
-  "computers.notOpened": "Não está nessa tela? Abra aqui",
   "computers.offline": "Offline",
-  "computers.offlineNote":
-    "{computer} está offline. Ligue-o, ou abra o programa do computador nele, e tente de novo.",
   "computers.openSignIn": "Abrir a página de login",
-  "computers.openSpace": "Abrir {space}",
-  "computers.optionAsleep": "Dormindo: ele acorda primeiro",
-  "computers.optionReady": "Pronto para entrar",
   "computers.output": "O que o {cli} diz",
-  "computers.ownSignIn":
-    "É o login dos seus agentes: o seu próprio uso do {cli} nesse computador continua como está.",
   "computers.paletteGroup": "Geral",
   "computers.paletteKeywords":
-    "plano, assinatura, entrar, login, computador, Claude, ChatGPT, Codex, Gemini, Google",
-  "computers.palettePlans": "Planos nos seus computadores",
-  "computers.paletteSignIn": "Entrar no seu {plan}",
-  "computers.paletteSignedIn": "Conectado em {computer}",
-  "computers.paletteSignedInMany": {
-    one: "Conectado em {count} computador",
-    other: "Conectado em {count} computadores",
-  },
-  "computers.personal": "seu espaço Pessoal",
+    "plano, assinatura, entrar, login, computador, Claude, ChatGPT, Codex, Gemini, Google, Grok, Cursor",
   "computers.plansAbout":
-    "Seus agentes podem rodar num plano que você já paga, em vez de uma chave de API. Entre uma " +
-    "vez, pelo app dele num computador seu, e ele vale em todas as conversas e espaços daqui.",
+    "Seus agentes rodam nos planos de IA que você já paga, em vez dos modelos do app. " +
+    "Conecte cada um uma vez, e ele vale em todas as conversas e espaços daqui.",
+  "computers.plansCloud":
+    "Um computador na nuvem que você usa para ele é cobrado enquanto está acordado.",
+  "computers.plansPaid": "Seu plano paga pela IA.",
   "computers.plansPrivate":
-    "Nada é cobrado aqui por essas chamadas. O login fica no seu computador: este app nunca o vê.",
-  "computers.plansTitle": "Planos nos seus computadores",
+    "Os logins ficam nos seus computadores, ou lacrados no servidor: ninguém mais os vê.",
+  "computers.plansTitle": "Seus planos",
   "computers.replace": "Substituir",
   "computers.replaceAll": {
     one: "Fazer o mesmo com o outro arquivo que já está lá",
@@ -142,63 +104,23 @@ export const computers: Words = {
   "computers.replaceThere": "O que está lá: {size}, alterado {time}",
   "computers.replaceTitle": "Substituir “{name}”?",
   "computers.replaceYours": "O seu: {size}, alterado {time}",
-  "computers.rowInstalled": "Instalado, sem login",
-  "computers.rowMissing": "O {cli} não está instalado",
-  "computers.rowOld": "Não respondeu: o programa do computador talvez precise de atualização",
-  "computers.rowSharedSomewhere":
-    "Seu plano roda no seu próprio computador. Este, compartilhado, roda as ferramentas dos seus agentes.",
-  "computers.rowSignedIn": "Conectado",
-  "computers.rowSignedInAs": "Conectado como {account}",
-  "computers.rowUnchecked": "Ainda não verificado",
-  "computers.runsWhileOn":
-    "Seus agentes o usam enquanto {computer} estiver ligado; até lá, usam os modelos do app.",
   "computers.send": "Enviar",
   "computers.shareOwnWarning":
     "Os agentes de {space} rodam em {computer} como você: eles podem ler tudo o que você pode lá, inclusive seus próprios logins (Claude Code, Codex, chaves SSH). Compartilhe só com pessoas de confiança.",
   "computers.shareSignedIn":
     "{computer} está conectado ao seu {plan}. Saia dele primeiro: um computador compartilhado com outros não pode manter logins de planos.",
-  "computers.sharedFix":
-    "Para usá-lo no seu plano, faça os agentes deles perguntarem a você antes lá: assim nada roda " +
-    "nele sem o seu sim. Ou tire-o de {spaces}, pelo menu dele lá.",
-  "computers.sharedNotice":
-    "{computer} está compartilhado com agentes de outros em {spaces}, então seus planos não rodam nele.",
-  "computers.sharedNoticeSomewhere":
-    "{computer} está compartilhado com agentes de outros, então seus planos não rodam nele.",
-  "computers.sharedTitle": "{computer} está compartilhado com agentes de outros",
-  "computers.sharedWhy":
-    "Em {spaces}, os agentes de cada pessoa trabalham em {computer} como você. Com login lá, " +
-    "seu plano também seria deles para usar, então ele não pode rodar nele.",
-  "computers.sharedWhySomewhere":
-    "Agentes de outros trabalham em {computer} como você, onde ele está compartilhado. Com login " +
-    "lá, seu plano também seria deles para usar, então ele não pode rodar nele.",
-  "computers.signIn": "Entrar",
-  "computers.signInAgain": "Entrar de novo",
-  "computers.signInOn": "Pelo {cli}, em {computer}.",
-  "computers.signInOther": "Entrar em outro computador",
-  "computers.signInThrough": "Pelo {cli}, num computador seu.",
-  "computers.signInTitle": "Entrar no seu {plan}",
-  "computers.signOut": "Sair",
   "computers.signOutFailed": "Não deu para sair em {computer}: {why}",
-  "computers.signedIn": "Conectado",
   "computers.skip": "Pular",
-  "computers.start": "Começar o login",
-  "computers.stepCode": "Cole o código que ela der",
   "computers.stepEnterCode":
     "Abra a página de login, entre com a conta que tem o seu plano, e digite este código lá:",
-  "computers.stepInstall": "Instalando o {cli} em {computer}",
   "computers.stepSaved": "Salvou {file} em {path}",
   "computers.stepSaves": "Salva {file} em {path}",
   "computers.stepSavesFile": "Salva um arquivo desta conversa em {path}",
   "computers.stepSavesFolder": "Salva um arquivo desta conversa na pasta do espaço",
   "computers.stepSends": "Envia {path} para esta conversa",
   "computers.stepSent": "Enviou {file}",
-  "computers.stepSignIn": "Entre no seu {plan}",
   "computers.stepSignInHere": "Abra a página de login, e entre com a conta que tem o seu plano.",
-  "computers.stepSignInThere":
-    "Uma página de login abre no navegador de {computer}. Entre lá, com a conta que tem o seu plano.",
   "computers.stepSignInWait": "A página de login aparece aqui assim que o {cli} a mostrar.",
-  "computers.stepStart": "Abrindo o {cli} em {computer}",
-  "computers.stepWake": "Acordando {computer}",
   "computers.tryAgain": "Tentar de novo",
   "computers.upload": "Enviar",
   "computers.uploadAsking": "Já tem um com este nome",
@@ -253,10 +175,81 @@ export const computers: Words = {
   },
   "computers.uploadsHide": "Ocultar envios",
   "computers.uploadsLeft": "faltam {size}",
-  "computers.version": "versão {version}",
-  "computers.waiting": "Esperando o login terminar…",
-  "computers.wakeNote": "{computer} acorda primeiro: leva um momento.",
-  "computers.whichComputer": "Em qual computador?",
-  "computers.whichHint":
-    "As chamadas dos seus agentes rodam lá, então ele precisa estar ligado enquanto eles trabalham.",
+  "computers.connect": "Conectar",
+  "computers.fix": "Resolver",
+  "computers.signOutOn": "Sair em {computer}",
+  "computers.signOutServer": "Desconectar {plan}",
+  "computers.moreFor": "Mais de {plan}",
+  "computers.cardReadyServer": "Conectado como {account}, no servidor: sempre pronto.",
+  "computers.cardReady": "Rodando no {computer} ({state}).",
+  "computers.cardReadyBackup":
+    "Rodando no {computer} ({state}), com o {backup} pronto como reserva.",
+  "computers.cardOnline": "ligado",
+  "computers.cardAsleep": "dormindo: acorda quando seus agentes precisam",
+  "computers.cardAway": {
+    one:
+      "Conectado no {computers}, que está desligado. Seus agentes usam os modelos do app até ele ligar.",
+    other:
+      "Conectado em {computers}, que estão desligados. Seus agentes usam os modelos do app até um ligar.",
+  },
+  "computers.cardReconnect": "O {plan} precisa que você entre de novo.",
+  "computers.cardOff": "Não conectado: seus agentes usam os modelos do app.",
+  "computers.cardLimited":
+    "No limite desde {time}: seus agentes usam seu próximo plano, ou os modelos do app, até ele voltar.",
+  "computers.orderTitle": "Usar meus planos nesta ordem",
+  "computers.orderAbout":
+    "Quando um modelo roda em mais de um dos seus planos, seus agentes tentam nesta ordem.",
+  "computers.moveUp": "Subir",
+  "computers.notConnected": "não conectado",
+  "computers.orderFailed": "Não deu para salvar a ordem: {why}",
+  "computers.yoursTitle": "Seus computadores",
+  "computers.yoursAbout": "Onde seus planos rodam, e o trabalho dos seus agentes.",
+  "computers.yoursServes": "Roda {plans}",
+  "computers.yoursServesNone": "Nenhum plano conectado aqui",
+  "computers.yoursNone":
+    "Nenhum computador ainda. Um plano que roda pelo app dele precisa de um: conectá-lo monta um para você.",
+  "computers.terminal": "Terminal",
+  "computers.online": "Online",
+  "computers.seenAt": "visto por último {time}",
+  "computers.flowTitle": "Conectar seus planos",
+  "computers.flowConnected": "Conectado",
+  "computers.flowWhere": "Onde eles devem rodar?",
+  "computers.flowWhereAbout":
+    "{plans} rodam por um app num computador. Nós o montamos, e o mantemos atualizado.",
+  "computers.whereCloud": "Na nuvem",
+  "computers.whereCloudAbout":
+    "Sempre pronto. Dorme quando seus agentes não estão trabalhando, e você paga só enquanto está acordado.",
+  "computers.recommended": "Recomendado",
+  "computers.whereLocal": "Neste computador",
+  "computers.whereLocalAbout":
+    "Grátis. Funciona enquanto este computador está ligado. Precisa de uma linha no seu terminal, uma vez.",
+  "computers.whereNone": "Abra esta página no seu computador para conectá-lo.",
+  "computers.making": "Criando seu computador na nuvem…",
+  "computers.makeFailed": "Não deu para criar seu computador na nuvem: {why}",
+  "computers.lineComputer": "{computer} está pronto",
+  "computers.lineWaking": "Acordando {computer}… (uns 30 segundos)",
+  "computers.lineGetting": "Preparando {computer}…",
+  "computers.lineInstalling": "Instalando o {cli} em {computer}…",
+  "computers.lineTesting": "Fazendo uma pergunta curta…",
+  "computers.lineAnswered": "Respondeu: “{text}”",
+  "computers.lineLimit":
+    "Conectado. Seu {plan} está no limite agora: seus agentes voltam a usá-lo quando ele voltar.",
+  "computers.failShared":
+    "{computer} está compartilhado com agentes de outras pessoas, então planos não rodam nele.",
+  "computers.failInstall":
+    "O {cli} não instalou em {computer}. O que o instalador disse está abaixo.",
+  "computers.failWindows": "Instale o {cli} em {computer} pelo terminal dele, uma vez:",
+  "computers.orInstall": "Ou instale pelo terminal de {computer}, e verifique de novo:",
+  "computers.openTerminal": "Abrir o terminal de {computer}",
+  "computers.failSignIn": "O login no {plan} não terminou.",
+  "computers.failTest": "O {plan} não respondeu: {why}",
+  "computers.useCloud": "Usar um computador na nuvem",
+  "computers.flowDone": "Seus agentes agora rodam em {plans}.",
+  "computers.welcomeNone": "Nenhum destes",
+  "computers.welcomeNoneThen": "Seus agentes usam os modelos do app.",
+  "computers.welcomeConnect": "Conectar",
+  "computers.welcomeLater": "Você pode conectá-los depois, em Sua IA.",
+  "computers.paletteConnect": "Conectar seu {plan}",
+  "computers.grokCli": "Grok Build",
+  "computers.grokTitle": "Plano do Grok",
 };

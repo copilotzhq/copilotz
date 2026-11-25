@@ -25,6 +25,14 @@
  * - **Every turn:** chat asks `tiers.model` through its `agentModel` resource,
  *   for every agent, with the kind it works like. A change applies from each
  *   conversation's next reply.
+ * - **Plans first:** where the app has people's plans (providers with
+ *   `harness`: Claude Code, ChatGPT…), a turn's chain goes with the plans its
+ *   person has connected now (each `connectedPlans` source says), in their
+ *   order (`tiers.harnesses`; `modelChoice.harnesses` lists them), and each
+ *   model runs on those that serve it before any API. A tier names models;
+ *   an entry naming a plan (`claude-plan/…`) stands for its model on plans
+ *   only. `plansFor` (shared/plans.ts) is what a turn goes with, and
+ *   `models.check` what a chain would try.
  *
  * Its queries (`modelChoice.offered`, `modelChoice.agent`) show the tiers
  * with what a typical message comes to at the org's prices (the app's
@@ -61,6 +69,7 @@ import { definePlugin, type Plugin } from "copilotz";
 import {
   capAction,
   chooseAction,
+  harnessesAction,
   kindAction,
   removeAction,
   restoreAction,
@@ -86,6 +95,7 @@ export const tiers: Plugin = definePlugin({
     "tiers.remove": removeAction,
     "tiers.restore": restoreAction,
     "tiers.kind": kindAction,
+    "tiers.harnesses": harnessesAction,
   },
   resources: {
     // Chat asks it which model chain each agent thinks with.

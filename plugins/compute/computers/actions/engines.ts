@@ -23,13 +23,14 @@ import {
   type EngineName,
   ENGINES,
   type EngineSeen,
+  engineStatus,
   sharedWithOthers,
   signedOut,
 } from "../shared/engines.ts";
 import { INSTALL } from "../shared/install.ts";
 import { failed } from "../shared/failed.ts";
 import { wake } from "../shared/wake.ts";
-import { type EngineStatus, type LoginState, WORK } from "../shared/workloads.ts";
+import { type LoginState, WORK } from "../shared/workloads.ts";
 
 /** One computer of theirs, and its engines. */
 export type ComputerEngines = {
@@ -42,30 +43,6 @@ export type ComputerEngines = {
   shared: boolean;
   engines: Partial<Record<EngineName, EngineSeen>>;
 };
-
-/** Keeps what a computer said of its engines on it. */
-async function keep(
-  ctx: Parameters<Parameters<typeof defineAction>[0]["run"]>[0],
-  computer: Computer,
-  said: EngineStatus[],
-): Promise<Partial<Record<EngineName, EngineSeen>>> {
-  const at = new Date().toISOString();
-  const engines = { ...(computer.engines as Partial<Record<EngineName, EngineSeen>> | undefined) };
-  for (const status of said) {
-    if (!(ENGINES as readonly string[]).includes(status.engine)) continue;
-    engines[status.engine as EngineName] = {
-      installed: status.installed,
-      signedIn: status.signedIn,
-      ...(status.version ? { version: status.version } : {}),
-      ...(status.account ? { account: status.account } : {}),
-      at,
-    };
-  }
-  await ctx.as().db.collection<Computer>("computer").updateOne({ _id: computer._id }, {
-    $set: { engines },
-  });
-  return engines;
-}
 
 /** Wakes `computer` when it's off and can be (a cloud computer); else fails with `offline`. */
 async function awake(
@@ -92,16 +69,9 @@ export const enginesAction = defineAction({
       .find({ owner: ctx.actor!.id }, { sort: { seen: -1 } });
     return await Promise.all(computers.map(async (computer) => {
       let engines = (computer.engines ?? {}) as Partial<Record<EngineName, EngineSeen>>;
-      if (computer.online) {
-        const said = await ctx.workers.call<EngineStatus[] | { error: unknown }>(
-          "computer",
-          computer._id,
-          WORK.agentsStatus,
-          {},
-        ).catch(() => undefined);
-        // An older computer program doesn't know the work: it shows nothing installed.
-        if (Array.isArray(said)) engines = await keep(ctx, computer, said);
-      }
+      // An older computer program doesn't know the work: what it last said stays.
+      const said = computer.online ? await engineStatus(ctx, computer._id) : undefined;
+      if (said) engines = { ...engines, ...said };
       return {
         computer: computer._id,
         ...(computer.name ? { name: computer.name } : {}),
@@ -152,16 +122,11 @@ export const engineLoginAction = defineAction({
     });
     const error = failed(answer);
     if (error) throw error;
-    if (answer.state === "done") {
-      const said = await ctx.workers.call<EngineStatus[]>(
-        "computer",
-        computer._id,
-        WORK.agentsStatus,
-        { engines: [input.engine] },
-      ).catch(() => undefined);
-      if (Array.isArray(said)) await keep(ctx, computer, said);
-    }
-    return answer;
+    if (answer.state !== "done") return answer;
+    // Done: what's true there now, kept, and whether its CLI is there (an installer may have failed).
+    const said = (await engineStatus(ctx, computer._id, [input.engine as EngineName]))
+      ?.[input.engine as EngineName];
+    return said ? { ...answer, installed: said.installed } : answer;
   },
 });
 
@@ -188,14 +153,8 @@ export const engineLogoutAction = defineAction({
     });
     const error = failed(answer);
     if (error) throw error;
-    const said = await ctx.workers.call<EngineStatus[]>(
-      "computer",
-      computer._id,
-      WORK.agentsStatus,
-      { engines: [input.engine] },
-    ).catch(() => undefined);
-    if (Array.isArray(said)) await keep(ctx, computer, said);
-    else await signedOut(ctx, computer._id, input.engine as EngineName);
+    const said = await engineStatus(ctx, computer._id, [input.engine as EngineName]);
+    if (!said) await signedOut(ctx, computer._id, input.engine as EngineName);
     return { ok: true };
   },
 });

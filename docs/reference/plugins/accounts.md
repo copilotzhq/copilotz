@@ -30,12 +30,11 @@ Its named queries read for callers, as the rules let them:
 | Query               | Who outside runs it                            |
 | ------------------- | ---------------------------------------------- |
 | `account.providers` | people, agents for a person, keys and routines |
-| `account.uses`      | people, agents for a person, keys and routines |
 | `modelKey.mine`     | people, agents for a person, keys and routines |
 
 ## What it lets callers do
 
-Of its 11 Actions, people may call 7; agents may call 1; contacts and someone signed out may call
+Of its 12 Actions, people may call 7; agents may call 1; contacts and someone signed out may call
 none.
 
 | Action               | Person | Agent | Contact | Anyone | Key | Routine | What it does                                                                |
@@ -51,8 +50,8 @@ none.
 An agent works for a person, and calls what both may. A key calls only what its scope names. A
 routine is work done for a person, which they set going.
 
-Only the app's own code calls `account.refresh`, `account.token`, `modelKey.list` and
-`modelKey.open`: its plugins, its schedules and the system.
+Only the app's own code calls `account.connected`, `account.refresh`, `account.token`,
+`modelKey.list` and `modelKey.open`: its plugins, its schedules and the system.
 
 It answers 1 route over HTTP:
 
@@ -66,8 +65,8 @@ It also adds rules every read and write keeps to (`guard`).
 
 It has no Views of its own: its front ends show it, [`accounts-web`](accounts-web.md).
 
-- **What it adds to resources:** `accountProviders` (`chatgpt`), `cost` (`chatgpt/*`), `modelKeys`
-  (`list`, `may`, `open`), `provider` (`chatgpt`).
+- **What it adds to resources:** `accountProviders` (`chatgpt`), `connectedPlans` (`accounts`),
+  `cost` (`chatgpt/*`), `modelKeys` (`list`, `may`, `open`), `provider` (`chatgpt`).
 
 ## What it needs
 
@@ -78,13 +77,13 @@ You set it in `resources.accounts`, and 1 is a secret, kept out of your code.
 | `accounts.key` | `string` | no       | Secret.    |
 | `accounts.url` | `string` | no       |            |
 
-It also reads `accountProviders`, `model` and `org`, resource kinds the app and other plugins fill.
+It also reads `accountProviders` and `org`, resource kinds the app and other plugins fill.
 
 ## What it requires
 
 It builds on no other plugin.
 
-It ships with `copilotz@1.0.0-rc.64`.
+It ships with `copilotz@1.0.0-rc.66`.
 
 ## What it does on its own
 

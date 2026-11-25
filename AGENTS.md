@@ -4,7 +4,7 @@ A guide for coding agents (Claude Code, Codex, Cursor, Gemini) building an app w
 it whole before you write code. The last section is for work on Copilotz itself.
 
 It ships in the package (`node_modules/copilotz/AGENTS.md`, and `@copilotz/copilotz` on JSR) and
-goes with `copilotz@1.0.0-rc.65`. The [reading list](llms.txt) links to every docs page in the
+goes with `copilotz@1.0.0-rc.66`. The [reading list](llms.txt) links to every docs page in the
 installed package. The same pages are online at https://copilotz.com/llms.txt. When you're unsure of
 a name, fetch its page or read the package's types (`node_modules/copilotz/**/*.d.ts`). Don't guess.
 
@@ -149,14 +149,41 @@ It runs on Node 24+, Deno 2.9+ and Bun.
 
 **Computers and plans**
 
-- Keep a cloud computer's installed CLIs across sleep → `startPool` (its home: `<disk>/home`) →
-  [What a cloud computer keeps](docs/guides/agents-on-peoples-plans.md#what-a-cloud-computer-keeps).
+- Run a tier's models on each person's plans first, in their order → `harness` on a provider,
+  `tiers.harnesses`, `modelChoice.harnesses`, `connectedPlans` →
+  [Plans first](docs/guides/agents-on-peoples-plans.md#plans-first).
+- See what a chain would try for someone → `models.check` with `harnesses` →
+  [Plans first](docs/guides/agents-on-peoples-plans.md#plans-first).
+- Run agents on a person's Grok plan → `grok-plan`, engine `grok` →
+  [The providers](docs/guides/agents-on-peoples-plans.md#the-providers).
+- Run agents on a person's Cursor plan → `cursor-plan`, engine `cursor` (Cursor's SDK, with Node) →
+  [The providers](docs/guides/agents-on-peoples-plans.md#the-providers).
+- Connect a person's plans without a terminal → the connect flow, `/accounts?connect=<plan>` →
+  [Connecting plans: one flow](docs/guides/agents-on-peoples-plans.md#connecting-plans-one-flow).
+- Ready a computer for plans (woken, updated, checked) → `computer.prepare` →
+  [Readying a computer](docs/guides/agents-on-peoples-plans.md#readying-a-computer).
 - Install a missing plan CLI, then sign in → `computer.engine.login` (`install: true`) →
   [A missing CLI](docs/guides/agents-on-peoples-plans.md#a-missing-cli).
+- Check that a person's plan answers → `llm.test` →
+  [A test, on the plan](docs/guides/agents-on-peoples-plans.md#a-test-on-the-plan).
+- Show a person's plans and computers → Your AI, `accountSections` (`plans: true`), `planList` →
+  [Your AI](docs/guides/agents-on-peoples-plans.md#your-ai).
+- Ask about plans in the app's welcome → `computer.plans.welcome` →
+  [Your AI](docs/guides/agents-on-peoples-plans.md#your-ai).
 - Sign a plan out on one computer → `computer.engine.logout` →
   [Signing out](docs/guides/agents-on-peoples-plans.md#signing-out).
 - Share a computer signed in to a plan → `computer.share` (`plan_signed_in`) →
   [Signing out](docs/guides/agents-on-peoples-plans.md#signing-out).
+- Keep a cloud computer's installed CLIs across sleep → `startPool` (its home: `<disk>/home`) →
+  [What a cloud computer keeps](docs/guides/agents-on-peoples-plans.md#what-a-cloud-computer-keeps).
+- Keep cloud computers on the app's release → `offerUpdate` (a pool's `ready`) →
+  [What a cloud computer keeps](docs/guides/agents-on-peoples-plans.md#what-a-cloud-computer-keeps).
+- Say a plan's computer is waking, and how long → `computerWake.estimate`, the `waking` chunk →
+  [Waking a computer](docs/guides/agents-on-peoples-plans.md#waking-a-computer).
+- Price a tier at what the person would run → `TierShown.yours`, `ModelShown.plan` →
+  [What a plan costs](docs/guides/agents-on-peoples-plans.md#what-a-plan-costs).
+- Show what a cloud computer costs → `computer.cost`, `computerWake.prices` →
+  [What a plan costs](docs/guides/agents-on-peoples-plans.md#what-a-plan-costs).
 
 ## How Copilotz works, in one minute
 
@@ -204,7 +231,7 @@ Plugins reach each other only through the runtime, by name. One that builds on a
 Start on Node 24 or newer:
 
 ```sh
-npx copilotz@1.0.0-rc.65 init orders
+npx copilotz@1.0.0-rc.66 init orders
 cd orders
 npm run check
 npm run dev
@@ -223,7 +250,7 @@ for fields such as `requires`, `defaults` and `guard`, `lib/web/` for React comp
 names in `copilotz-env.d.ts`. Commit that declaration and ignore `.copilotz/build/`. The server
 imports `#copilotz/plugins/<name>/mod.ts`, the browser `web.ts` and the terminal `terminal.ts` from
 the same folder. The starter's dev script watches declarations and the server. On Deno, the compiler
-entry is `deno run -A jsr:@copilotz/copilotz@1.0.0-rc.65/gen`.
+entry is `deno run -A jsr:@copilotz/copilotz@1.0.0-rc.66/gen`.
 
 Existing plugins with a hand-written `mod.ts` keep their own assembly and explicit schemas. List
 them alongside generated plugins in `app.ts`. [The compiler](docs/guides/the-compiler.md).
@@ -234,7 +261,7 @@ line `@AGENTS.md` (Claude Code reads `CLAUDE.md`, and follows the import). Keep 
 ```markdown
 # AGENTS.md
 
-This app runs on Copilotz (copilotz@1.0.0-rc.65). Read node_modules/copilotz/AGENTS.md first;
+This app runs on Copilotz (copilotz@1.0.0-rc.66). Read node_modules/copilotz/AGENTS.md first;
 node_modules/copilotz/llms.txt lists the installed guides.
 
 - `npm test` runs offline. Run `npm run build` after editing declarations. `npm run check` checks

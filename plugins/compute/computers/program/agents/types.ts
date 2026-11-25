@@ -95,7 +95,7 @@ export type Run = (args: string[], stdin?: string) => Promise<Ran>;
  * and how it signs in.
  */
 export type Engine = {
-  /** Its name in the contract: `claude`, `codex`, `antigravity`. */
+  /** Its name in the contract: `claude`, `codex`, `antigravity`, `grok`, `cursor`. */
   name: string;
   /** Its executable's name, looked for on the PATH. */
   binary: string;
@@ -109,6 +109,13 @@ export type Engine = {
   args?: string[];
   /** Readies its home before it starts: its settings. */
   prepare?(home: string): Promise<void>;
+  /**
+   * A file its home must have for it to be installed, beside its binary:
+   * Cursor's SDK, which Sign in installs there (`ENGINE_HOME`, to its installer).
+   */
+  needs?: string;
+  /** Its arguments that print its version (`--version`). */
+  version?: string[];
   /** Whether its instructions go as rules in the session's folder (`AGENTS.md`): no prompt of its own to replace. */
   rules?: boolean;
   /** Its CLI's arguments for signing in. */

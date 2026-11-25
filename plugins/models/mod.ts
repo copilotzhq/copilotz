@@ -39,9 +39,13 @@
  * can be chosen, and an org's key for a provider goes on its calls, over the
  * app's (`shared/choice.ts`). Those uses are tagged `paid: "own-key"`.
  *
- * A list of models is tried in order. Any plugin adds adapters of its own
- * under `adapters.llm`, `adapters.embeddings`, `adapters.transcription` or
- * `adapters.image`.
+ * A list of models is tried in order. Given a person's plans (`harnesses`:
+ * providers with `harness`, like `claude-plan` or `chatgpt`), each model runs
+ * on theirs that serve it first, and on its API after every plan (see
+ * shared/plans.ts); a `connectedPlans` resource says which they have.
+ *
+ * Any plugin adds adapters of its own under `adapters.llm`,
+ * `adapters.embeddings`, `adapters.transcription` or `adapters.image`.
  *
  * Before every call, whoever plugs into the `modelUse` resource may refuse
  * it, and so may the `spending` check (an org's limits) unless the org's own
@@ -56,6 +60,7 @@ import { generateImage } from "./actions/image.ts";
 import { keyableAction, offered } from "./actions/offered.ts";
 import { price } from "./actions/price.ts";
 import { stream } from "./actions/stream.ts";
+import { test } from "./actions/test.ts";
 import { transcribe } from "./actions/transcribe.ts";
 import { hashEmbeddings } from "./adapters/embeddings/hash.ts";
 import { openai as openaiEmbeddings } from "./adapters/embeddings/openai.ts";
@@ -85,6 +90,7 @@ export const models: Plugin = definePlugin({
   actions: {
     "llm.generate": generate,
     "llm.stream": stream,
+    "llm.test": test,
     "embeddings.embed": embed,
     "transcription.transcribe": transcribe,
     "image.generate": generateImage,

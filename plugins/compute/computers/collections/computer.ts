@@ -5,6 +5,7 @@
  * space, with a folder of its own there (see desk.ts).
  */
 import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
+import { costOf } from "../shared/cost.ts";
 
 const computerSchema = {
   type: "object",
@@ -39,7 +40,7 @@ const computerSchema = {
     },
     /**
      * The plans' CLIs it runs agents' model calls on, by engine (`claude`,
-     * `codex`, `antigravity`), as it last said (see shared/engines.ts):
+     * `codex`, `antigravity`, `grok`, `cursor`), as it last said (see shared/engines.ts):
      * installed, signed in, as whom, and when.
      */
     engines: { type: "object" },
@@ -56,6 +57,20 @@ export const computer = defineCollection({
     mine: {
       allow: people,
       run: (computers) => computers.find({}, { sort: { seen: -1 } }),
+    },
+    /**
+     * What one of the asker's computers the app keeps costs them
+     * (`{ computer }`), or a new one (`{}`): `ComputerCost`, or null when the
+     * app prices none (see shared/cost.ts).
+     */
+    cost: {
+      allow: people,
+      run: (computers, params: { computer?: string } = {}, ctx) =>
+        costOf(
+          ctx,
+          computers as { findOne(filter: { _id: string }): Promise<Computer | null> },
+          params.computer,
+        ),
     },
   },
 });

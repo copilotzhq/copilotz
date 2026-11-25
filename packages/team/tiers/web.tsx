@@ -15,6 +15,9 @@
  *   owners and admins): the tiers as one short choice.
  * - **For team's front end** (`agentKinds`): where to read the kinds of work,
  *   so making an agent asks for its kind instead of a model.
+ * - **For computers' front end** (`planList`): the plans Your AI shows, from
+ *   `modelChoice.harnesses` in the person's order, and saving their order
+ *   with `tiers.harnesses`.
  *
  * Models are chosen with team's picker (`model.pick`). Add it beside them:
  *
@@ -51,6 +54,8 @@ export const tiersWeb: Plugin = definePlugin({
     spaceAgents: { tiers: { view: "tiers.space", row: "tiers.agent", order: 10 } },
     composerControls: { tiers: { view: "tiers.composer", order: 10 } },
     agentKinds: { query: "modelChoice.offered" },
+    // Your AI's plans: the app's, in the person's order, and saving their order (computers' front end).
+    planList: { query: "modelChoice.harnesses", order: "tiers.harnesses" },
     // Chat's welcome, for who runs the org: choosing its tier as they start.
     welcome: {
       tiers: {

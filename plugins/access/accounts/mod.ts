@@ -31,6 +31,9 @@
  *   (resources/models.ts); without a connection the call fails
  *   `account_missing`, and a list of models moves on. Its uses are metered
  *   as the person's plan's (`paid: "subscription"`), at no cost to the app.
+ *   It's a plan (`harness`): a model list given the person's plans runs
+ *   OpenAI's models on it first, and `account.connected` (trusted code only,
+ *   the `connectedPlans` resource) says who has it.
  * - **An org's own keys for model providers** (`modelKey`, the models
  *   plugin's `modelKeys` resource): its owners and admins add one (`modelKey.set`)
  *   for any provider that can take one; each is sealed as tokens are, kept per
@@ -57,6 +60,7 @@ import { callbackAction } from "./actions/callback.ts";
 import { callbackRoute } from "./routes/callback.ts";
 import { completeAction } from "./actions/complete.ts";
 import { connectAction } from "./actions/connect.ts";
+import { connectedAction } from "./actions/connected.ts";
 import { disconnectAction } from "./actions/disconnect.ts";
 import { refreshAction } from "./actions/refresh.ts";
 import { tokenAction } from "./actions/token.ts";
@@ -101,6 +105,7 @@ export const accounts: Plugin = definePlugin({
     "account.disconnect": disconnectAction,
     "account.refresh": refreshAction,
     "account.token": tokenAction,
+    "account.connected": connectedAction,
     "modelKey.set": modelKeySet,
     "modelKey.remove": modelKeyRemove,
     "modelKey.may": modelKeyMay,
@@ -116,6 +121,8 @@ export const accounts: Plugin = definePlugin({
     accountProviders: { chatgpt },
     provider: { chatgpt: chatgptModels },
     modelKeys: { open: "modelKey.open", list: "modelKey.list", may: "modelKey.may" },
+    // Which of a person's plans run here: their connected accounts'.
+    connectedPlans: { accounts: { action: "account.connected" } },
     cost: { "chatgpt/*": chatgptCost },
   },
   check(merged) {

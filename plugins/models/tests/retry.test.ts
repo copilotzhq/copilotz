@@ -115,6 +115,35 @@ test("a model that thinks, then goes silent, hands over: thinking isn't writing"
   assertEquals(chunks.at(-1), { type: "text", text: "the next one's answer" });
 });
 
+test("a model whose computer is waking says so; failing after, it still hands over", async () => {
+  const first: LlmAdapter = {
+    async *generate() {
+      yield { type: "waking", seconds: 40, slower: true };
+      throw Object.assign(new Error("The computer couldn't wake"), { code: "engine_offline" });
+    },
+  };
+  const second: LlmAdapter = {
+    async *generate() {
+      yield { type: "text", text: "the next one's answer" };
+    },
+  };
+  const both = {
+    resources: {
+      provider: { a: { adapter: "a", catalog: false }, b: { adapter: "b", catalog: false } },
+    },
+    adapters: { llm: { a: first, b: second } },
+    signal: new AbortController().signal,
+  };
+  const model = ["a/m", "b/m"];
+  const chunks: LlmChunk[] = [];
+  for await (const chunk of generate(both, { ...ask, model })) chunks.push(chunk);
+  assertEquals(chunks, [
+    { type: "waking", seconds: 40, slower: true },
+    { type: "text", text: "the next one's answer" },
+  ]);
+  assertEquals((await complete(both, { ...ask, model })).text, "the next one's answer");
+});
+
 test("a hand-over is logged, and the model answering instead says on its usage which didn't, and why", async () => {
   const plan: LlmAdapter = {
     async *generate() {

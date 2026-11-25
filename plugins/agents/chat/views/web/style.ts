@@ -118,7 +118,7 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
 .chat-thinking { height: 26px; color: var(--muted-foreground); }
 /* A model's call that broke, tried again: what came stays, dimmed, under how long until the next */
 .live-stale { opacity: .45; transition: opacity .3s; }
-.live-retry { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 6px 0 0;
+.live-retry, .live-waking { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 6px 0 0;
   color: var(--muted-foreground); font-size: 13px; font-variant-numeric: tabular-nums;
   animation: chat-fade .2s ease-out; }
 .live-retry-icon { flex: none; }

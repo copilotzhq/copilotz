@@ -138,6 +138,7 @@ export const tiers = {
   asOrg: "As the org: {tier}",
   agentLine: "{model} · {kind} · on {tier}",
   // Beside the send button
+  onPlans: "on your plans · model $0",
   pickLabel: "Tier: {tier}, {by}",
   pickCap: "Members can use up to {cap}.",
   backToDefault: "Back to the default",

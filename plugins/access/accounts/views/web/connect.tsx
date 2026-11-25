@@ -1,6 +1,8 @@
 /**
- * Connecting an account, in a dialog. It starts the sign-in as it opens
- * (`account.connect`), so the link to it is a plain link: no popup to
+ * Connecting an account, in a dialog: the page's (`ConnectDialog`), and the
+ * connect flow's line for a plan on the server (kind `accounts.connect`,
+ * item `{ provider }`: a button that opens it). It starts the sign-in as it
+ * opens (`account.connect`), so the link to it is a plain link: no popup to
  * block. What it allows comes first, said plainly.
  *
  * - **Pasted back** (ChatGPT): three steps. Sign in at the provider, in a
@@ -11,11 +13,12 @@
  *   puts the cursor in the field. A sign-in that ran out, or was replaced,
  *   starts again in a press.
  * - **Sent back** (most providers): one step, continuing to the provider,
- *   which sends the person back to Connected accounts, saying how it went.
+ *   which sends the person back to Your AI, saying how it went.
  *
  * Connected, it says who the account is, and what happens now.
  */
 import { type ClipboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import type { ViewContext } from "../../../../../runtime/mod.ts";
 import {
   Button,
   Dialog,
@@ -24,16 +27,19 @@ import {
   Input,
   message,
   Notice,
+  sayText,
   Skeleton,
 } from "../../../../../hosts/web/mod.ts";
 import type { Account, Connecting, ProviderShown } from "../../contract.ts";
-import { landed, shortAddress } from "./words.ts";
+import { STYLE } from "./style.ts";
+import { landed, say, shortAddress } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
 /** Ways a sign-in can't be finished that only starting again mends. */
 const STALE = /start again/;
 
+/** Connecting one account, in a dialog. */
 export function ConnectDialog(
   { provider, open, onClose, call, again }: {
     provider: ProviderShown;
@@ -55,7 +61,8 @@ export function ConnectDialog(
   const [leaving, setLeaving] = useState(false);
   const field = useRef<HTMLInputElement>(null);
   // Said as it opened: connecting doesn't make it a reconnect halfway through.
-  const [verb] = useState(again ? "Reconnect" : "Connect");
+  const [reconnect] = useState(!!again);
+  const title = sayText(provider.title);
 
   const start = async () => {
     setStarted(undefined);
@@ -121,7 +128,7 @@ export function ConnectDialog(
       else field.current?.focus();
     } catch {
       field.current?.focus();
-      setProblem({ text: "This browser didn't let the page read what you copied: paste it here." });
+      setProblem({ text: say("noClipboard") });
     }
   };
 
@@ -130,26 +137,28 @@ export function ConnectDialog(
       open={open}
       onClose={onClose}
       size={done ? "sm" : "md"}
-      title={done ? `${provider.title} is connected` : `${verb} ${provider.title}`}
-      description={done ? undefined : provider.allows}
-      footer={done ? <Button variant="primary" onClick={onClose}>Done</Button> : landing
+      title={done
+        ? say("connectedTitle", { provider: title })
+        : say(reconnect ? "reconnectTitle" : "connectTitle", { provider: title })}
+      description={done ? undefined : sayText(provider.allows)}
+      footer={done ? <Button variant="primary" onClick={onClose}>{say("done")}</Button> : landing
         ? (
           <>
-            <Button onClick={onClose}>Cancel</Button>
+            <Button onClick={onClose}>{say("cancel")}</Button>
             <Button
               variant="primary"
               loading={busy}
               disabled={looks !== "yes"}
               onClick={() => void finish(text.trim())}
             >
-              {verb}
+              {say(reconnect ? "reconnect" : "connect")}
             </Button>
           </>
         )
         : started && !failed
         ? (
           <>
-            <Button onClick={onClose}>Cancel</Button>
+            <Button onClick={onClose}>{say("cancel")}</Button>
             <Button
               variant="primary"
               iconEnd="chevron"
@@ -159,11 +168,11 @@ export function ConnectDialog(
                 location.assign(started.url);
               }}
             >
-              Continue to {provider.title}
+              {say("continueTo", { provider: title })}
             </Button>
           </>
         )
-        : <Button onClick={onClose}>Cancel</Button>}
+        : <Button onClick={onClose}>{say("cancel")}</Button>}
     >
       {done
         ? (
@@ -175,15 +184,15 @@ export function ConnectDialog(
               <div>
                 <p className="accounts-done-title">{done.label}</p>
                 <p className="accounts-done-who">
-                  {done.plan ? `${provider.title} ${done.plan} plan` : provider.title}
+                  {done.plan ? say("planOf", { provider: title, plan: done.plan }) : title}
                 </p>
               </div>
             </div>
             <p className="accounts-done-next">
               {provider.models?.length
-                ? `Agents working for you now run on your ${provider.title} plan.`
-                : `Agents working for you can now use your ${provider.title} account.`}
-              {landing ? " You can close the sign-in tab." : ""}
+                ? say("nowRuns", { provider: title })
+                : say("nowUses", { provider: title })}
+              {landing ? ` ${say("closeTab")}` : ""}
             </p>
           </div>
         )
@@ -192,9 +201,9 @@ export function ConnectDialog(
           <Notice
             tone="destructive"
             role="alert"
-            action={<Button size="sm" onClick={() => void start()}>Try again</Button>}
+            action={<Button size="sm" onClick={() => void start()}>{say("tryAgain")}</Button>}
           >
-            Couldn't start connecting: {failed}
+            {say("startFailed", { why: failed })}
           </Notice>
         )
         : !started
@@ -216,7 +225,7 @@ export function ConnectDialog(
                   {opened ? <Icon name="check" size={14} /> : "1"}
                 </span>
                 <div className="accounts-step-body">
-                  <p>Sign in to {provider.title} and allow access. It opens in a new tab.</p>
+                  <p>{say("stepSignIn", { provider: title })}</p>
                   <Button
                     className="accounts-sign-in"
                     variant={opened ? "link" : "primary"}
@@ -226,33 +235,25 @@ export function ConnectDialog(
                     rel="noopener noreferrer"
                     onClick={() => setOpened(true)}
                   >
-                    {opened ? "Open the sign-in again" : `Sign in to ${provider.title}`}
+                    {opened ? say("signInAgain") : say("signInTo", { provider: title })}
                   </Button>
                 </div>
               </li>
               <li className={`accounts-step${opened ? "" : " accounts-step-later"}`}>
                 <span className="accounts-step-number" aria-hidden="true">2</span>
                 <div className="accounts-step-body">
-                  <p>
-                    You'll land on a page that doesn't load, at{" "}
-                    <code>{shortAddress(landing)}</code>. That's expected. Copy that page's whole
-                    address from the address bar.
-                  </p>
+                  <p>{say.nodes("stepLand", { address: <code>{shortAddress(landing)}</code> })}</p>
                 </div>
               </li>
               <li className={`accounts-step${opened ? "" : " accounts-step-later"}`}>
                 <span className="accounts-step-number" aria-hidden="true">3</span>
                 <div className="accounts-step-body">
                   <Field
-                    label="Paste it here"
+                    label={say("pasteHere")}
                     error={looks === "elsewhere"
-                      ? `That's another page's address: it should start with ${
-                        shortAddress(landing)
-                      }`
+                      ? say("elsewhere", { address: shortAddress(landing) })
                       : undefined}
-                    hint={looks === "no" && text.trim()
-                      ? "That doesn't look like it yet: copy the whole address, from the address bar"
-                      : "It connects as soon as you paste it."}
+                    hint={looks === "no" && text.trim() ? say("notYet") : say("connectsOnPaste")}
                   >
                     {(control) => (
                       <Input
@@ -271,8 +272,12 @@ export function ConnectDialog(
                         }}
                         end={canPaste
                           ? (
-                            <Button size="sm" variant="ghost" onClick={() => void fromClipboard()}>
-                              Paste
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => void fromClipboard()}
+                            >
+                              {say("paste")}
                             </Button>
                           )
                           : null}
@@ -285,7 +290,11 @@ export function ConnectDialog(
                         tone={problem.stale ? "warning" : "destructive"}
                         role="alert"
                         action={problem.stale
-                          ? <Button size="sm" onClick={() => void start()}>Start again</Button>
+                          ? (
+                            <Button size="sm" onClick={() => void start()}>
+                              {say("startAgain")}
+                            </Button>
+                          )
                           : null}
                       >
                         {problem.text}
@@ -299,12 +308,39 @@ export function ConnectDialog(
         )
         : (
           <div className="accounts-steps">
-            {provider.note ? <p className="accounts-quiet">{provider.note}</p> : null}
-            <p className="accounts-say">
-              {provider.title} asks you to sign in and allow it, then sends you back here.
-            </p>
+            {provider.note ? <p className="accounts-quiet">{sayText(provider.note)}</p> : null}
+            <p className="accounts-say">{say("sentBack", { provider: title })}</p>
           </div>
         )}
     </Dialog>
+  );
+}
+
+/**
+ * One account to connect, for the connect flow's line of a plan on the
+ * server (kind `accounts.connect`, item `{ provider }`): a button that opens
+ * its dialog. The flow ticks once the account's connected.
+ */
+export const accountsConnectView = (
+  item: { provider?: string },
+  ctx: ViewContext<ReactNode>,
+): ReactNode => {
+  const providers = ctx.db.collection("account").query<ProviderShown[]>("providers", {}).value;
+  const provider = providers?.find((p) => p.name === item.provider);
+  return provider ? <ConnectButton provider={provider} call={ctx.call} /> : null;
+};
+
+function ConnectButton({ provider, call }: { provider: ProviderShown; call: Call }): ReactNode {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <style href="accounts-web" precedence="copilotz">{STYLE}</style>
+      <Button variant="primary" className="accounts-sign-in" onClick={() => setOpen(true)}>
+        {say("connectTitle", { provider: sayText(provider.title) })}
+      </Button>
+      {open
+        ? <ConnectDialog provider={provider} open onClose={() => setOpen(false)} call={call} />
+        : null}
+    </>
   );
 }

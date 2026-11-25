@@ -7,19 +7,11 @@
  * what happened instead, with nothing secret in it. Each person reads only
  * their own (the plugin's rule).
  *
- * Queries, for people: `account.providers`, what can be connected and how;
- * `account.uses`, which of some models would run on the asker's accounts.
+ * Queries, for people: `account.providers`, what can be connected and how.
  */
-import {
-  defineCollection,
-  type Infer,
-  people,
-  personOf,
-  type ReadContext,
-} from "../../../../runtime/mod.ts";
-import type { ProviderShown, Uses, UsesParams } from "../contract.ts";
+import { defineCollection, type Infer, people, type ReadContext } from "../../../../runtime/mod.ts";
+import type { ProviderShown } from "../contract.ts";
 import { providersOf } from "../shared/settings.ts";
-import { usesOf } from "../shared/uses.ts";
 
 const accountSchema = {
   type: "object",
@@ -58,12 +50,6 @@ export const account = defineCollection({
           ...(p.oauth.redirect ? { paste: p.oauth.redirect } : {}),
           ...(p.models?.length ? { models: p.models } : {}),
         })),
-    },
-    /** For each agent's model, the asker's account it would run on (or one to reconnect). */
-    uses: {
-      allow: people,
-      run: async (accounts, params: UsesParams, ctx): Promise<Uses> =>
-        usesOf(ctx, await accounts.find({ person: personOf(ctx.actor) ?? "" }), params),
     },
   },
 });

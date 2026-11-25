@@ -5,7 +5,8 @@
  * becomes the message once written (the same commit). The agent shows as
  * it's named, with its emoji (`hints.who`, by id). When the model's call
  * broke and is tried again (`retry`), it says so, counting down, and what
- * the broken attempt wrote stays, dimmed, until the new one writes.
+ * the broken attempt wrote stays, dimmed, until the new one writes. While
+ * the model waits for its computer to wake (`waking`), it says so.
  */
 import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
@@ -15,6 +16,7 @@ import { agentPath, type Shown } from "./agents.ts";
 import { Retrying } from "./retrying.tsx";
 import { did } from "./steps.tsx";
 import { toolView } from "./tool-view.ts";
+import { Waking } from "./waking.tsx";
 import { say } from "./words.ts";
 
 export const liveView = (l: Live, ctx: ViewContext<ReactNode>): ReactNode => {
@@ -42,6 +44,8 @@ export const liveView = (l: Live, ctx: ViewContext<ReactNode>): ReactNode => {
           <span className="msg-writing">
             {l.retry
               ? say("reconnecting")
+              : l.waking
+              ? say("wakingStatus")
               : l.text
               ? say("writing")
               : l.calls.length
@@ -78,10 +82,11 @@ export const liveView = (l: Live, ctx: ViewContext<ReactNode>): ReactNode => {
               <Markdown text={l.text} streaming={!l.retry} />
             </div>
           )
-          : l.calls.length || l.retry
+          : l.calls.length || l.retry || l.waking
           ? null
           : <Spinner variant="dots" label={say("thinkingLabel")} className="chat-thinking" />}
         {l.retry ? <Retrying retry={l.retry} /> : null}
+        {l.waking ? <Waking waking={l.waking} /> : null}
       </div>
     </article>
   );

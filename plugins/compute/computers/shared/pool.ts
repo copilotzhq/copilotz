@@ -14,6 +14,15 @@ export const POOL = {
   assign: "pool.assign",
   /** Stop serving it: stop its jobs (keeping those it keeps), unmount; then the VM is deleted. */
   release: "pool.release",
+  /** What it is, as a computer says it (`computer.info`): `{ os, arch, version }`. */
+  info: "computer.info",
+  /**
+   * While it's free, a newer release of the program, as a computer takes it
+   * (`computer.update`, an `Offer`): it updates itself and starts again as
+   * it, so computers woken on it run the app's release (`offerUpdate`).
+   * Serving one, it answers `{ updating: false }`.
+   */
+  update: "computer.update",
 } as const;
 
 /**

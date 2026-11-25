@@ -22,14 +22,19 @@
  * there from the computer's page (`PUT /computers/upload`, streamed through
  * to it: routes/upload.ts), where they may change it (`computer.upload`).
  *
- * A computer also runs its owner's plans: Claude Code, Codex or Antigravity,
- * signed in there once (`computer.engines`, `computer.engine.login`, out
- * with `computer.engine.logout`), so an
- * agent's model calls for them run on their plan, through the CLI, instead
- * of on an API key (the `claude-plan`, `codex-plan` and `gemini-plan`
- * providers, see resources/engines.ts and shared/engines.ts). The CLI is
- * only the engine: the agent's instructions replace its own, its built-in
- * tools are off, and the agent's tools reach it from the computer program.
+ * A computer also runs its owner's plans: Claude Code, Codex, Antigravity,
+ * Grok Build or Cursor (its SDK), signed in there once (`computer.prepare`
+ * readies the computer: awake, on the app's release, its CLIs as they are;
+ * `computer.engines`, `computer.engine.login`, out with
+ * `computer.engine.logout`), so an agent's model calls for them run on their
+ * plan, through the CLI, instead of on an API key (the `claude-plan`,
+ * `codex-plan`, `gemini-plan`, `grok-plan` and `cursor-plan` providers, see
+ * resources/engines.ts and shared/engines.ts). The CLI is only the engine:
+ * the agent's instructions replace its own (on Cursor, they go on top of its
+ * own, as a rule), its built-in tools are off, and the agent's tools reach
+ * it from the computer program.
+ * Each is a person's plan to the models plugin (`harness`), and
+ * `computer.connected` (trusted code only) says which they've signed in.
  *
  * ```ts
  * plugins: [models, chat, ...access, computers],
@@ -81,6 +86,8 @@ import { WORK } from "./shared/workloads.ts";
 import { engineAdapter } from "./adapters/engine.ts";
 import { engineAction, engineCancelAction } from "./actions/engine.ts";
 import { engineLoginAction, engineLogoutAction, enginesAction } from "./actions/engines.ts";
+import { connectedAction } from "./actions/connected.ts";
+import { prepareAction } from "./actions/prepare.ts";
 import { engineCost, engineProviders } from "./resources/engines.ts";
 
 export type { Computer } from "./collections/computer.ts";
@@ -88,7 +95,10 @@ export type { Desk } from "./collections/desk.ts";
 export type { EnvVar } from "./collections/env-var.ts";
 export type { Preview } from "./collections/preview.ts";
 export type { ComputersSettings } from "./shared/settings.ts";
-export type { ComputerWake } from "./shared/wake.ts";
+export type { ComputerWake, WakeEstimate } from "./shared/wake.ts";
+export type { ComputerCost, ComputerPrices } from "./shared/cost.ts";
+/** Offers a computer, or a free VM of a pool, the app's release when its program is older. */
+export { offerUpdate } from "./shared/update.ts";
 /** Asks and yeses computers kept before chat kept every ask, kept as chat keeps them now. */
 export { upgradeAsks, type Upgraded } from "./shared/upgrade.ts";
 
@@ -149,6 +159,9 @@ export const computers: Plugin = definePlugin({
     "computer.engines": enginesAction,
     "computer.engine.login": engineLoginAction,
     "computer.engine.logout": engineLogoutAction,
+    // Which of a person's plans are signed in on their computers, for model lists (trusted code).
+    "computer.connected": connectedAction,
+    "computer.prepare": prepareAction,
   },
   // A model call on a plan's CLI (the providers below name it).
   adapters: { llm: { engine: engineAdapter } },
@@ -174,6 +187,7 @@ export const computers: Plugin = definePlugin({
     // People's plans, through their CLIs on their own computers: `claude-plan/…`, `codex-plan/…`.
     provider: engineProviders,
     cost: engineCost,
+    connectedPlans: { computers: { action: "computer.connected" } },
   },
   // Each person reaches their own computers and codes. None of the plugin's records is written
   // directly from outside: which computer a desk or a preview is on is its Actions' to check.

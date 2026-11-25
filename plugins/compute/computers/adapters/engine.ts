@@ -220,6 +220,7 @@ export const engineAdapter: LlmAdapter = {
       const calls: ToolCall[] = [];
       let wrote = false;
       let thought = 0;
+      let waking = false;
       let stale: string | undefined;
       const events = await call<AsyncIterable<EngineEvent>>("computer.engine", {
         engine,
@@ -230,8 +231,16 @@ export const engineAdapter: LlmAdapter = {
       });
       try {
         for await (const event of events) {
+          // Its computer is waking (one that sleeps): said, until it's awake and at work.
+          if (event.type === "waking") {
+            waking = true;
+            yield event;
+            continue;
+          }
           if (event.type === "computer") {
             computer = event.computer;
+            if (waking) yield { type: "thinking" };
+            waking = false;
             continue;
           }
           next = event.i + 1;

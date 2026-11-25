@@ -12,6 +12,7 @@ import {
   createRuntime,
   defineAction,
   definePlugin,
+  personOf,
   type Runtime,
   type Store,
 } from "copilotz";
@@ -20,7 +21,8 @@ import { sqliteStore } from "copilotz/stores/sqlite";
 import models, { type LlmAdapter, type ModelUse } from "copilotz/plugins/models";
 import { chat, type Message } from "copilotz/plugins/agents";
 import { team } from "../team/mod.ts";
-import { type AgentNow, type Shown, tiers } from "../tiers/mod.ts";
+import { type AgentNow, type HarnessShown, type Shown, tiers } from "../tiers/mod.ts";
+import { plansFor } from "../tiers/shared/plans.ts";
 import { ORG } from "copilotz/plugins/access/contract";
 import { access } from "copilotz/plugins/access";
 import { usage } from "copilotz/plugins/billing";
@@ -31,9 +33,13 @@ const ana: Actor = { kind: "person", id: "ana" };
 const bob: Actor = { kind: "person", id: "bob" };
 const cy: Actor = { kind: "person", id: "cy" };
 
-/** Every model call, as its adapter was sent it; `broken` fails before writing anything. */
+/**
+ * Every model call, as its adapter was sent it; `broken` fails before writing
+ * anything, and so does a plan at its limit (`limited`).
+ */
 const calls: { model: string; effort?: string; maxTokens?: number }[] = [];
 const uses: ModelUse[] = [];
+const limited = new Set<string>();
 const script: LlmAdapter = {
   async *generate({ connection, effort, maxTokens }) {
     calls.push({
@@ -42,6 +48,9 @@ const script: LlmAdapter = {
       ...(maxTokens ? { maxTokens } : {}),
     });
     if (connection.model === "broken") throw new Error("This model is down");
+    if (limited.has(connection.model)) {
+      throw Object.assign(new Error("Usage limit reached"), { code: "engine_limit" });
+    }
     yield { type: "text", text: `from ${connection.model}` };
     yield { type: "usage", input: 100, output: 10 };
   },
@@ -49,6 +58,29 @@ const script: LlmAdapter = {
 
 /** The tier the org's plan gives, as a plan would say it. */
 let planTier: string | null = null;
+
+/** Each person's plans, connected now, as the plugins that keep them would say. */
+const connected: Record<string, string[]> = {};
+
+/** A person's plan on the script: the models it serves, each by its own name (`plan-opus`). */
+const plan = (order: number, title: string, name: string, models: string[]) => ({
+  adapter: "s",
+  title,
+  tags: { paid: "subscription" },
+  harness: {
+    order,
+    plan: name,
+    serves: Object.fromEntries(models.map((m) => [`s/${m}`, `plan-${m}`])),
+  },
+});
+
+/** Plans, as an app's plugins declare them: two ways for one plan, and one no tier uses. */
+const PLANS = {
+  "h-claude": plan(10, "Claude plan", "Claude", ["opus", "sonnet", "haiku"]),
+  "h-chatgpt": plan(20, "ChatGPT plan", "ChatGPT", ["sol"]),
+  "h-codex": plan(30, "ChatGPT plan, through Codex", "ChatGPT", ["sol"]),
+  "h-grok": plan(40, "Grok plan", "Grok", ["grok"]),
+};
 
 const TIERS = {
   everyday: {
@@ -69,10 +101,18 @@ const TIERS = {
 };
 
 async function start(
-  more: { prices?: boolean; store?: Store; tiers?: Record<string, unknown>; joined?: boolean } = {},
+  more: {
+    prices?: boolean;
+    store?: Store;
+    tiers?: Record<string, unknown>;
+    joined?: boolean;
+    plans?: boolean;
+  } = {},
 ) {
   calls.length = 0;
   uses.length = 0;
+  limited.clear();
+  for (const person of Object.keys(connected)) delete connected[person];
   planTier = null;
   const rt = await createRuntime({
     store: more.store ?? memoryStore(),
@@ -92,6 +132,22 @@ async function start(
             input: { type: "object" },
             run: () => planTier,
           }),
+          "test.plans": defineAction({
+            record: false,
+            run: (ctx) => connected[personOf(ctx.actor) ?? ""] ?? [],
+          }),
+          // The plans `actor`'s person can run now, in their order, as a page prices them.
+          "test.plansFor": defineAction({
+            input: { type: "object" },
+            run: (ctx, input: { actor: Actor; mine?: string[] }) =>
+              plansFor(ctx.as(input.actor), input.mine),
+          }),
+          // The chain a turn of `actor`'s gets, as chat asks for it.
+          "test.model": defineAction({
+            input: { type: "object" },
+            run: (ctx, input: { actor: Actor; agent: string }) =>
+              ctx.as(input.actor).call("tiers.model", { agent: input.agent }),
+          }),
         },
         resources: {
           shared: { thread: {}, message: {} },
@@ -100,7 +156,9 @@ async function start(
             s: { adapter: "s", apiKey: "k" },
             anthropic: { adapter: "s", apiKey: "k" },
             google: { adapter: "s", apiKey: "k" },
+            ...(more.plans ? PLANS : {}),
           },
+          ...(more.plans ? { connectedPlans: { test: { action: "test.plans" } } } : {}),
           agents: {
             north: { instructions: "I lead.", model: "s/own-north", default: true },
             east: { instructions: "I build.", model: "s/own-east", default: true },
@@ -449,6 +507,145 @@ test("what a page reads: the org's tiers and kinds, prices, each level's choice 
       "space",
       "s/opus",
     ]);
+  } finally {
+    await rt.close();
+  }
+});
+
+test("plans first: a turn runs on its person's plans, in their order, then the APIs", async () => {
+  const rt = await start({ plans: true });
+  try {
+    const launch = await spaceOf(rt, "Launch", ana);
+    await rt.call("tiers.choose", { tier: "expert" }, { actor: ana });
+    const north = (person: Actor) =>
+      rt.call("test.model", { actor: { kind: "agent", id: "north", for: person }, agent: "north" });
+    const chain = TIERS.expert.agents.north;
+    // Nothing connected: the chain as the tier has it, on the APIs.
+    assertEquals(await north(ana), { model: chain, harnesses: [] });
+    assertEquals(await asked(rt, launch), "opus");
+    // Only ChatGPT: it runs on it before any API.
+    connected.ana = ["h-chatgpt"];
+    assertEquals(await north(ana), { model: chain, harnesses: ["h-chatgpt"] });
+    assertEquals(await asked(rt, launch), "plan-sol");
+    // Every plan of hers, in the default order: the tier's model order still decides.
+    connected.ana = ["h-codex", "h-chatgpt", "h-claude"];
+    assertEquals(await north(ana), {
+      model: chain,
+      harnesses: ["h-claude", "h-chatgpt", "h-codex"],
+    });
+    assertEquals(await asked(rt, launch), "plan-opus");
+    // Her own order ranks the plans that serve one model.
+    await rt.call("tiers.harnesses", { harnesses: ["h-codex"] }, { actor: ana });
+    assertEquals(await north(ana), {
+      model: chain,
+      harnesses: ["h-codex", "h-claude", "h-chatgpt"],
+    });
+    assertEquals(
+      await rt.call("models.check", { model: await north(ana), port: "llm" }),
+      ["h-claude/plan-opus", "h-codex/plan-sol", "h-chatgpt/plan-sol", "s/opus", "s/sol"],
+    );
+    // What a page prices for her: the same plans, in the order she keeps.
+    assertEquals(await rt.call("test.plansFor", { actor: ana, mine: ["h-chatgpt"] }), [
+      "h-chatgpt",
+      "h-claude",
+      "h-codex",
+    ]);
+    // Someone with none, or a turn for nobody: the APIs.
+    assertEquals(await rt.call("test.plansFor", { actor: bob }), []);
+    assertEquals(await north(bob), { model: chain, harnesses: [] });
+    assertEquals(await rt.call("tiers.model", { agent: "north" }), { model: chain, harnesses: [] });
+  } finally {
+    await rt.close();
+  }
+});
+
+test("a plan at its limit moves the call to the next plan, not to the API", async () => {
+  const rt = await start({ plans: true });
+  try {
+    const launch = await spaceOf(rt, "Launch", ana);
+    await rt.call("tiers.choose", { tier: "expert" }, { actor: ana });
+    connected.ana = ["h-claude", "h-chatgpt"];
+    limited.add("plan-opus");
+    calls.length = 0;
+    assertEquals(await asked(rt, launch), "plan-sol");
+    assertEquals(calls.map((c) => c.model), ["plan-opus", "plan-sol"]);
+    // Each plan's call with the tier's settings for its model.
+    assertEquals(calls[0], { model: "plan-opus", effort: "medium" });
+    // Said on its use: which plan didn't answer, and why.
+    const used = uses.at(-1)!;
+    assertEquals([used.subject, used.tags?.fallback, used.tags?.fallbackWhy], [
+      "h-chatgpt/plan-sol",
+      "h-claude/plan-opus",
+      "engine_limit",
+    ]);
+  } finally {
+    await rt.close();
+  }
+});
+
+test("a person's order of their plans: kept beside their tier, and the app's plans to order", async () => {
+  const rt = await start({ plans: true });
+  try {
+    const shown = () => rt.query<HarnessShown[]>("modelChoice.harnesses", {}, { actor: ana });
+    // The plans a tier's model runs on, in the default order; Grok's serves none here. Each with
+    // the first model, in tier order, it runs: what a test of it tries.
+    assertEquals(await shown(), [
+      {
+        name: "h-claude",
+        title: "Claude plan",
+        plan: "Claude",
+        connected: false,
+        model: "h-claude/plan-haiku",
+      },
+      {
+        name: "h-chatgpt",
+        title: "ChatGPT plan",
+        plan: "ChatGPT",
+        connected: false,
+        model: "h-chatgpt/plan-sol",
+      },
+      {
+        name: "h-codex",
+        title: "ChatGPT plan, through Codex",
+        plan: "ChatGPT",
+        connected: false,
+        model: "h-codex/plan-sol",
+      },
+    ]);
+    connected.ana = ["h-chatgpt"];
+    await rt.call("tiers.choose", { tier: "expert", mine: true }, { actor: ana });
+    assertEquals(
+      await rt.call("tiers.harnesses", { harnesses: ["h-codex", "h-chatgpt", "h-codex"] }, {
+        actor: ana,
+      }),
+      { harnesses: ["h-codex", "h-chatgpt"] },
+    );
+    assertEquals((await shown()).map((h) => [h.name, h.connected]), [
+      ["h-codex", false],
+      ["h-chatgpt", true],
+      ["h-claude", false],
+    ]);
+    // Her tier for new chats, cleared, leaves her order; her order, cleared, leaves her tier.
+    await rt.call("tiers.choose", { tier: null, mine: true }, { actor: ana });
+    assertEquals((await shown())[0].name, "h-codex");
+    await rt.call("tiers.choose", { tier: "expert", mine: true }, { actor: ana });
+    assertEquals(await rt.call("tiers.harnesses", { harnesses: null }, { actor: ana }), {
+      harnesses: null,
+    });
+    assertEquals((await shown())[0].name, "h-claude");
+    const mine = await rt.query<Shown>("modelChoice.offered", {}, { actor: ana });
+    assertEquals(mine.person, { tier: "expert" });
+    // Only the app's plans, and only by the person themselves.
+    assertEquals(
+      await refused(rt.call("tiers.harnesses", { harnesses: ["s"] }, { actor: ana })),
+      "invalid",
+    );
+    assertEquals(
+      await refused(rt.call("tiers.harnesses", { harnesses: [] }, {
+        actor: { kind: "agent", id: "north", for: ana },
+      })),
+      "forbidden",
+    );
   } finally {
     await rt.close();
   }

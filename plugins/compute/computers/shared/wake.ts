@@ -5,10 +5,25 @@
  * for a computer that's offline wakes it first, and waits for it; every
  * piece of work says it was used, so it stays awake a while. The waking
  * Action answers null for a computer it doesn't keep (a person's own), which
- * stays as it is. Without the resource, nothing changes.
+ * stays as it is. Without the resource, nothing changes. What they cost
+ * (`prices`) and how long a wake takes now (`estimate`) are the app's to
+ * say too: see shared/cost.ts, and the notice a plan's call gives in chat
+ * while it waits.
+ *
+ * `sleep` puts one to sleep now (its VM goes): `computer.prepare` restarts
+ * one whose program is older than the app's release, so it wakes on a VM
+ * running the release.
  *
  * ```ts
- * resources: { computerWake: { wake: "cloud.wake", touch: "cloud.touch" } }
+ * resources: {
+ *   computerWake: {
+ *     wake: "cloud.wake",
+ *     touch: "cloud.touch",
+ *     prices: "cloudComputer.sizes",
+ *     estimate: "cloud.estimate",
+ *     sleep: "cloud.release",
+ *   },
+ * }
  * ```
  */
 import { type Context, personOf } from "../../../../runtime/mod.ts";
@@ -18,9 +33,26 @@ import { desksIn, named, type Where, whereFor } from "./where.ts";
 export type ComputerWake = {
   wake?: string;
   touch?: string;
+  /** Puts one to sleep now, input `{ computer }`: one it doesn't keep, it leaves as it is. */
+  sleep?: string;
   /** The tool an agent makes one with, for what it's told when its space has no computer. */
   make?: string;
+  /**
+   * A named query (`<collection>.<query>`, `{}` in) saying what the app's
+   * computers cost the person asking: `ComputerPrices`. Without it, no cost
+   * is shown.
+   */
+  prices?: string;
+  /**
+   * An Action saying about how long waking `{ computer }` takes now:
+   * `WakeEstimate`, or null when it can't say. Asked just before a wake, for
+   * the notice in chat; without it, the notice gives no time.
+   */
+  estimate?: string;
 };
+
+/** How long a wake should take now (seconds), and whether that's slower than usual (no machine ready). */
+export type WakeEstimate = { seconds: number; slower?: true };
 
 const hookOf = (ctx: Pick<Context, "resources">) =>
   ctx.resources.computerWake as ComputerWake | undefined;
@@ -53,6 +85,22 @@ export async function wake(ctx: Context, computer: string): Promise<boolean | st
 }
 
 /**
+ * Wakes `computer` again on a new VM, when something puts computers to
+ * sleep (`sleep`) and wakes them: what `wake` answers, false when nothing
+ * can, or what it couldn't.
+ */
+export async function restart(ctx: Context, computer: string): Promise<boolean | string> {
+  const hook = hookOf(ctx);
+  if (!hook?.sleep || !hook.wake) return false;
+  try {
+    await ctx.call(hook.sleep, { computer });
+  } catch (error) {
+    return `The computer couldn't restart: ${error instanceof Error ? error.message : error}`;
+  }
+  return await wake(ctx, computer);
+}
+
+/**
  * Says `computer` was used, alongside the work (fire and forget: the work
  * doesn't wait on it), or, `view`, that a person has it open (which keeps
  * it awake longer). What fails is logged. Await what it returns to know
@@ -69,6 +117,43 @@ export function touch(ctx: Context, computer: string, view?: boolean): Promise<v
         error instanceof Error ? error.message : error,
       ),
   );
+}
+
+/** How often work under way says its computer is used: a minute, well inside how long one stays warm. */
+export const TOUCH_MS = 60_000;
+
+/**
+ * Says `computer` is used now, again every `every` ms while work goes on
+ * there (a plan's step: it's use until it ends), and once more when it's
+ * stopped (`stop`, which waits for what's on its way): the time it stays
+ * warm counts from the end of the work, not its start.
+ */
+export function keepTouching(
+  ctx: Context,
+  computer: string,
+  every = TOUCH_MS,
+): { stop(): Promise<void> } {
+  let last = touch(ctx, computer);
+  const timer = setInterval(() => last = touch(ctx, computer), every);
+  return {
+    async stop() {
+      clearInterval(timer);
+      await last;
+      await touch(ctx, computer);
+    },
+  };
+}
+
+/** How long waking `computer` should take now, as the app estimates (`estimate`); none when it can't say. */
+export async function wakeEstimate(
+  ctx: Context,
+  computer: string,
+): Promise<WakeEstimate | undefined> {
+  const hook = hookOf(ctx);
+  if (!hook?.estimate) return undefined;
+  const said = await ctx.call<WakeEstimate | null>(hook.estimate, { computer }).catch(() => null);
+  if (typeof said?.seconds !== "number") return undefined;
+  return { seconds: said.seconds, ...(said.slower ? { slower: true as const } : {}) };
 }
 
 /**

@@ -301,6 +301,9 @@ const turn = async (ctx: Context, event: Event, acting: Acting) => {
         },
       })
     ) {
+      // Its computer is waking (a person's plan on a cloud computer): said until whatever comes next.
+      if (chunk.type === "waking") live.waking(chunk);
+      else live.awake();
       if (chunk.type === "text") {
         text += chunk.text;
         live.text(chunk.text);

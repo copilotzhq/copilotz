@@ -1,7 +1,7 @@
 /**
  * Brazilian Portuguese for the web, out of the box (`copilotz/web/pt-br`): a
  * plugin of the page's whose `words` say every word Copilotz's web front ends
- * show (chat, spaces, the shell, memory, usage, computers' plans, the palette,
+ * show (chat, spaces, the shell, memory, usage, Your AI and its plans, the palette,
  * the toolkit, the host: every key of hosts/web/WORDS.md), and whose `signInPage` says the
  * sign-in page's, with Copilotz's pitch beside the form in Portuguese.
  *
@@ -20,6 +20,7 @@
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
 import { about } from "./about.ts";
+import { accounts } from "./accounts.ts";
 import { chat } from "./chat.ts";
 import { computers } from "./computers.ts";
 import { host } from "./host.ts";
@@ -35,6 +36,7 @@ export const ptBR: Plugin = definePlugin({
   name: "words-pt-br",
   resources: {
     words: {
+      ...accounts,
       ...chat,
       ...computers,
       ...host,

@@ -25,13 +25,16 @@ It keeps 1 collection.
 
 ## What it lets callers do
 
-Of its 10 Actions, people and agents may call 1; contacts and someone signed out may call none.
+Of its 11 Actions, people may call 2; agents may call 1; contacts and someone signed out may call
+none.
 
-| Action           | Person | Agent | Contact | Anyone | Key | What it does                                    |
-| ---------------- | ------ | ----- | ------- | ------ | --- | ----------------------------------------------- |
-| `models.offered` | yes    | yes   | no      | no     | yes | The providers and models an agent can be given. |
+| Action           | Person | Agent | Contact | Anyone | Key | Routine | What it does                                                                      |
+| ---------------- | ------ | ----- | ------- | ------ | --- | ------- | --------------------------------------------------------------------------------- |
+| `llm.test`       | yes    | no    | no      | no     | no  | no      | Tries one model your own plan pays for with a short question, to show it answers. |
+| `models.offered` | yes    | yes   | no      | no     | yes | yes     | The providers and models an agent can be given.                                   |
 
-An agent works for a person, and calls what both may. A key calls only what its scope names.
+An agent works for a person, and calls what both may. A key calls only what its scope names. A
+routine is work done for a person, which they set going.
 
 Only the app's own code calls `embeddings.embed`, `image.generate`, `llm.generate`, `llm.stream`,
 `models.check`, `models.efforts`, `models.keyable`, `models.price` and `transcription.transcribe`:
@@ -56,7 +59,7 @@ resource kinds the app and other plugins fill.
 
 It builds on no other plugin.
 
-It ships with `copilotz@1.0.0-rc.64`.
+It ships with `copilotz@1.0.0-rc.66`.
 
 ## Listing
 

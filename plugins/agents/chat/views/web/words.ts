@@ -96,6 +96,7 @@ export const say = defineWords("chat", {
   working: "working",
   thinking: "thinking",
   thinkingLabel: "Thinking",
+  wakingStatus: "waking its computer",
   // A message waiting for agents
   goesTo: {
     one: "Goes to {names} when it's done",
@@ -108,6 +109,17 @@ export const say = defineWords("chat", {
   retrying: "Retrying…",
   retryNumber: "retry {attempt}",
   why: "Why: {reason}",
+  // A model waiting for its computer to wake
+  waking: "Waking the computer…",
+  wakingAbout: {
+    one: "Waking the computer… (about {count} second)",
+    other: "Waking the computer… (about {count} seconds)",
+  },
+  wakingSlower: {
+    one: "Waking the computer… (about {count} second: it takes longer at this hour)",
+    other: "Waking the computer… (about {count} seconds: it takes longer at this hour)",
+  },
+  stillWaking: "Still waking the computer…",
   // The conversation's scroll
   newMessages: "New messages",
   jumpToLatest: "Jump to latest",

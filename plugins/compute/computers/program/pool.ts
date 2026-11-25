@@ -19,6 +19,12 @@
  * (`busy`) and after (`denied`), as a VM that served one never serves
  * another.
  *
+ * While it's free, it says what it is (`POOL.info`) and takes a newer release
+ * of the program as a computer does (`POOL.update`): it updates itself and
+ * ends (`closed` says `updated`), for its service to start it again as the
+ * new version, so a computer woken on it runs the app's release. Assigned a
+ * computer while it updates, it stops updating and serves it as it is.
+ *
  * It registers as `pool:<token>`: a token given (the local host's), else, on
  * Compute Engine, the VM's identity token for the app (`pool:gce:<jwt>`),
  * fetched for each registration, as it expires.
@@ -28,9 +34,14 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
+import process from "node:process";
 import { POOL, type PoolAssign, type PoolRelease } from "../shared/pool.ts";
+import type { Running } from "../shared/update.ts";
 import { type Computer, type ComputerOptions, startComputer } from "./computer.ts";
+import { newer } from "./release.ts";
 import { connectionOf, loadState, reachable, sameApp, socketUrl, updateState } from "./state.ts";
+import { checkOffer, PROGRAM, updateProgram } from "./update.ts";
+import { VERSION } from "./version.ts";
 import { answer, fail } from "./workloads/answer.ts";
 import { WINDOWS } from "./workloads/processes.ts";
 
@@ -55,6 +66,8 @@ export type PoolOptions = {
   connectMs?: number;
   /** Where its concise log lines go (never a secret). */
   log?: (line: string) => void;
+  /** Its own executable, which it updates while it's free: none run from source (null). */
+  program?: string | null;
 };
 
 export type Pool = {
@@ -62,8 +75,11 @@ export type Pool = {
   vm: string;
   /** When it's first connected and admitted. */
   ready: Promise<void>;
-  /** When it's stopped; it fails (`refused`) when the app turns it away. */
-  closed: Promise<void>;
+  /**
+   * When it's stopped: `updated` when it updated itself, to be started again
+   * as the new version; it fails (`refused`) when the app turns it away.
+   */
+  closed: Promise<"updated" | undefined>;
   /** Releases the computer it serves (if one), and disconnects. */
   stop(): Promise<void>;
 };
@@ -160,6 +176,10 @@ export async function startPool(options: PoolOptions): Promise<Pool> {
   let serving: Serving | undefined;
   /** The computer it served, once it served one: the only one it serves again. */
   let served: string | undefined;
+  const program = options.program === undefined ? PROGRAM : options.program;
+  /** The update it's making while it's free (an assignment stops it), and how it ended. */
+  let updating: AbortController | undefined;
+  let how: "updated" | undefined;
 
   /** Mounts its disk, readies its state, and runs it, until it's connected. */
   async function begin(current: Serving, input: PoolAssign) {
@@ -263,6 +283,8 @@ export async function startPool(options: PoolOptions): Promise<Pool> {
           fail(`${key} must be a string`);
         }
       }
+      // Updating: it serves this as it is instead.
+      updating?.abort();
       // Being released: once it is, the VM is free again (for that computer).
       if (serving?.released) await serving.released.catch(() => {});
       if (serving?.released) fail(`This VM couldn't release ${serving.computer}`, "busy");
@@ -309,7 +331,41 @@ export async function startPool(options: PoolOptions): Promise<Pool> {
       log(`released ${input.computer}`);
       return { ok: true };
     }),
+    [POOL.info]: answer((): Running => ({
+      os: process.platform,
+      arch: process.arch,
+      version: VERSION,
+      serves: Object.keys(workloads),
+    })),
+    // Run from source, there's nothing to update.
+    ...(program ? { [POOL.update]: answer((input: unknown) => update(program, input)) } : {}),
   };
+
+  /** Updates itself to what the app offers, when it's newer and it's free; then it ends. */
+  function update(program: string, input: unknown) {
+    const offer = checkOffer(input, options.app);
+    if (serving || served || updating || !newer(offer.version, VERSION)) {
+      return { updating: !!updating };
+    }
+    const halt = updating = new AbortController();
+    log(`updating to ${offer.version}…`);
+    void updateProgram(program, offer, halt.signal).then(() => {
+      // Assigned meanwhile: it serves that one, as it is.
+      if (halt.signal.aborted || serving || served) return;
+      log(`updated to ${offer.version}; starting again`);
+      how = "updated";
+      return stop();
+    }, (error) => {
+      if (!halt.signal.aborted) {
+        log(
+          `couldn't update to ${offer.version}: ${error instanceof Error ? error.message : error}`,
+        );
+      }
+    }).finally(() => {
+      if (updating === halt) updating = undefined;
+    });
+    return { updating: true };
+  }
 
   // One attempt per process, kept across reconnects, so Oxian can fence a replaced one.
   const attempt = { attemptId: randomUUID(), epoch: Date.now() };
@@ -324,7 +380,7 @@ export async function startPool(options: PoolOptions): Promise<Pool> {
   });
   ready.catch(() => {});
 
-  const closed = (async () => {
+  const closed = (async (): Promise<"updated" | undefined> => {
     for (let failures = 0; !stopping;) {
       const worker = connection = createWorker({
         id: vm,
@@ -364,23 +420,21 @@ export async function startPool(options: PoolOptions): Promise<Pool> {
       }
       await wait(Math.min(30_000, 500 * 2 ** failures++), halt.signal);
     }
+    return how;
   })();
   closed.catch(() => {});
 
   let stopped: Promise<void> | undefined;
-  return {
-    vm,
-    ready,
-    closed,
-    stop() {
-      return stopped ??= (async () => {
-        stopping = true;
-        halt.abort();
-        unready(new Error("The pool VM stopped"));
-        if (serving) await end(serving).catch(() => {});
-        await connection?.stop().catch(() => {});
-        await closed.catch(() => {});
-      })();
-    },
-  };
+  function stop() {
+    return stopped ??= (async () => {
+      stopping = true;
+      halt.abort();
+      updating?.abort();
+      unready(new Error("The pool VM stopped"));
+      if (serving) await end(serving).catch(() => {});
+      await connection?.stop().catch(() => {});
+      await closed.catch(() => {});
+    })();
+  }
+  return { vm, ready, closed, stop };
 }

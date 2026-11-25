@@ -13,7 +13,7 @@ plugin Copilotz ships has [a page of its own](reference/plugins.md), read from t
 
 ## Install
 
-Start a new app with `npx copilotz@1.0.0-rc.65 init orders`. The starter includes the compiler, a
+Start a new app with `npx copilotz@1.0.0-rc.66 init orders`. The starter includes the compiler, a
 plugin, a web page and tests. [Start an app](guides/the-compiler.md#start-an-app).
 
 To add the runtime to an existing project:
@@ -21,19 +21,19 @@ To add the runtime to an existing project:
 ```sh
 npm install copilotz@next                      # Node 24+ (npm, pnpm, yarn)
 bun add copilotz@next                          # Bun
-deno add jsr:@copilotz/copilotz@^1.0.0-rc.65   # Deno 2.9+ (or `deno add npm:copilotz@next`)
+deno add jsr:@copilotz/copilotz@^1.0.0-rc.66   # Deno 2.9+ (or `deno add npm:copilotz@next`)
 ```
 
 Until 1.0, the release candidates are on npm's `next` tag, and a plain `npm install copilotz` or
 `deno add jsr:@copilotz/copilotz` gets an older version. At 1.0, stable installs drop `@next` and
 the version.
 
-On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.65"`), and the
+On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.66"`), and the
 imports read the same everywhere. 3 pieces need a package of their own, installed beside it:
 `esbuild` to bundle the page's code on Node (`bundle`), `@electric-sql/pglite` for PostgreSQL in the
 process, and `@types/react` for the front ends' types. A product's plugins are packages of their own
 too, at Copilotz's version (`npm install @copilotz/work@next`,
-`deno add jsr:@copilotz/work@^1.0.0-rc.65`): see [Product packages](#product-packages).
+`deno add jsr:@copilotz/work@^1.0.0-rc.66`): see [Product packages](#product-packages).
 
 ## Entry points
 
@@ -95,7 +95,7 @@ same plugin, with less code in the server's memory.
 ## Product packages
 
 What a product does its own way, rather than what every app needs, is a package of its own, released
-with Copilotz at its version: `@copilotz/work@1.0.0-rc.65` goes with `copilotz@1.0.0-rc.65`. Each
+with Copilotz at its version: `@copilotz/work@1.0.0-rc.66` goes with `copilotz@1.0.0-rc.66`. Each
 has the same entry points, its plugins (`@copilotz/work`), their front ends (`@copilotz/work/web`)
 and their shapes, for plugins built on them (`@copilotz/work/contract`), with the same names on npm
 and JSR.
@@ -936,6 +936,16 @@ resources: {
   `max`. A level a model doesn't take stops the runtime from starting.
 - **Checked at start:** chat checks every agent's model, history its summarizer, memory its embedder
   and extractor, so a missing provider or a wrong effort fails `createRuntime`, not a turn.
+- **People's plans first:** a provider with `harness` is a person's plan that runs other providers'
+  models (`claude-plan`, `chatgpt`): `harness: { order, serves, plan }`, where `serves` maps API ids
+  (`"anthropic/claude-opus-5-5"`, or every one of a provider's, `"anthropic/*"`) to its own names
+  (`"*"`: the same). A list given `harnesses` (a person's plans, in their order) runs each model on
+  those that serve it first, model by model, then its own entries:
+  `{ model: [opus, sol], harnesses:
+  ["chatgpt"] }` tries `chatgpt/…sol`, then the Anthropic and
+  OpenAI APIs. An entry naming a plan stands for its model on plans only. `models.check` answers
+  what a list would try, in order. The tiers plugin gives each turn's chain its person's plans: see
+  [Agents on people's own plans](guides/agents-on-peoples-plans.md#plans-first).
 
 Action inputs name models and never carry keys, because inputs are recorded. A plugin adds an
 adapter under `adapters.llm`, `adapters.embeddings`, `adapters.transcription` or `adapters.image`,

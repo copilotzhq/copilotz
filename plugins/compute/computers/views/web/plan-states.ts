@@ -1,66 +1,143 @@
 /**
- * A person's plans on their own computers, as the web shows them, in plain
- * functions: the plans (each CLI, the words it's named with and its official
- * install), how one computer stands for one plan (signed in, installed,
- * missing, not checked, or shared with others' agents, so it can't be
- * used), which computer a sign-in goes to first, whether Sign in can
- * install a missing CLI there first, and a CLI's output and links as
- * they're safe to show.
+ * A person's plans, as Your AI and the connect flow show them, in plain
+ * functions: the plans the app uses, each with its ways in (a CLI on a
+ * computer, or a sign-in on the server), from the app's tiers when it has
+ * them (the `planList` resource: their list, in the person's order) or
+ * else every plan the app has; how a plan stands for the person (a card's
+ * state: ready on a computer or the server, with its backup; off on the
+ * computers it's signed in on; its account to sign in again; not connected); a computer as
+ * a plan needs it (shared with others' agents, reachable); and a CLI's
+ * sign-in: asked again until it's done, its output and links as they're
+ * safe to show.
  */
+import type { Account, ProviderShown } from "../../../../access/accounts/contract.ts";
 import type { Computer } from "../../collections/computer.ts";
 import type { Desk } from "../../collections/desk.ts";
 import type { EngineName, EngineSeen } from "../../shared/engines.ts";
-import { INSTALL } from "../../shared/install.ts";
+import { servingOrder } from "../../shared/serving.ts";
 import { say } from "./words.ts";
 
-/** A plan: its engine (the CLI), its provider, and the command that installs the CLI. */
-export type Plan = {
-  engine: EngineName;
+/** Each plan provider of the computers plugin's, and the engine (the CLI) it runs on. */
+export const ENGINE_OF: Readonly<Record<string, EngineName>> = {
+  "claude-plan": "claude",
+  "codex-plan": "codex",
+  "gemini-plan": "antigravity",
+  "grok-plan": "grok",
+  "cursor-plan": "cursor",
+};
+
+/** A CLI's name, as people know it. */
+export const cliOf = (engine: EngineName): string =>
+  ({
+    claude: say("claudeCli"),
+    codex: say("codexCli"),
+    antigravity: say("antigravityCli"),
+    grok: say("grokCli"),
+    cursor: say("cursorCli"),
+  })[engine] ?? engine;
+
+/** A way into a plan: a CLI on a computer (`engine`), or a sign-in on the server (`account`). */
+export type Way = {
+  /** Its model provider: `claude-plan`, `chatgpt`. */
   provider: string;
-  install: string;
-  /** The words it's named with (`claudeTitle`, `claudePlan`, `claudeCli`, `claudeAbout`). */
+  /** What it's called: "ChatGPT plan, through Codex". */
   title: string;
+  /** The plan it's a way into, as people know it ("ChatGPT plan"): ways of a plan show as one. */
   plan: string;
-  cli: string;
-  about: string;
+  engine?: EngineName;
+  /** The account provider that signs it in (`accountProviders`, whose `models` name it). */
+  account?: string;
+  /** What a test tries on it (`llm.test`): the first model the app's chains use there. */
+  model?: string;
+  /** Signed in, as the app's list says (a CLI's, on a computer of theirs; an account). */
+  connected?: boolean;
 };
 
-const OF: Record<EngineName, { provider: string; install: string }> = {
-  claude: { provider: "claude-plan", install: INSTALL.claude },
-  codex: { provider: "codex-plan", install: INSTALL.codex },
-  antigravity: { provider: "gemini-plan", install: INSTALL.antigravity },
+/** A plan, and its ways in, in the person's order. */
+export type PlanShown = { plan: string; ways: Way[] };
+
+/**
+ * A plan as the app's tiers list them (`planList`'s query, the tiers'
+ * `modelChoice.harnesses`: the plans the app uses, in the person's order,
+ * each marked connected or not), as far as the web reads it: its provider
+ * (`name`), and the first model the app's chains use on it (`model`).
+ */
+export type Listed = {
+  name: string;
+  title?: string;
+  plan?: string;
+  model?: string;
+  connected?: boolean;
 };
 
-/** The plans, in their order, named in the app's words. */
-export const plans = (): Plan[] => [
-  {
-    engine: "claude",
-    ...OF.claude,
-    title: say("claudeTitle"),
-    plan: say("claudePlan"),
-    cli: say("claudeCli"),
-    about: say("claudeAbout"),
-  },
-  {
-    engine: "codex",
-    ...OF.codex,
-    title: say("codexTitle"),
-    plan: say("codexPlan"),
-    cli: say("codexCli"),
-    about: say("codexAbout"),
-  },
-  {
-    engine: "antigravity",
-    ...OF.antigravity,
-    title: say("antigravityTitle"),
-    plan: say("antigravityPlan"),
-    cli: say("antigravityCli"),
-    about: say("antigravityAbout"),
-  },
-];
+/**
+ * The `planList` resource: the query that lists the plans the app uses, in
+ * the person's order (`<collection>.<query>`), and the Action that saves
+ * their order, `{ harnesses: string[] | null }` (null: the app's own). The tiers
+ * front end gives it; without it, every plan the app has shows, in its order.
+ */
+export type PlanList = { query: string; order?: string };
 
-export const planOf = (engine: string | undefined): Plan | undefined =>
-  plans().find((p) => p.engine === engine);
+/**
+ * The plans to show, each with its ways in that this front end can connect:
+ * as the app's tiers list them (`listed`), else every plan the app has: the
+ * accounts that pay for models (ChatGPT, on the server), then each CLI.
+ */
+export function plansOf(listed: Listed[] | undefined, accounts: ProviderShown[]): PlanShown[] {
+  const accountOf = (provider: string) => accounts.find((a) => a.models?.includes(provider));
+  const ways: Way[] = listed
+    ? listed.flatMap((h): Way[] => {
+      const engine = ENGINE_OF[h.name];
+      const account = accountOf(h.name)?.name;
+      if (!engine && !account) return [];
+      const title = h.title ?? h.name;
+      return [{
+        provider: h.name,
+        title,
+        plan: h.plan ?? title,
+        ...(engine ? { engine } : {}),
+        ...(account ? { account } : {}),
+        ...(h.model ? { model: h.model } : {}),
+        ...(h.connected !== undefined ? { connected: h.connected } : {}),
+      }];
+    })
+    : [
+      ...accounts.filter((a) => a.models?.length).map((a): Way => ({
+        provider: a.models![0],
+        title: a.title,
+        plan: a.title,
+        account: a.name,
+      })),
+      ...Object.entries(ENGINE_OF).map(([provider, engine]): Way => {
+        const title = titleOf(engine);
+        return { provider, title, plan: title, engine };
+      }),
+    ];
+  const plans: PlanShown[] = [];
+  for (const way of ways) {
+    const found = plans.find((p) => p.plan === way.plan);
+    if (found) found.ways.push(way);
+    else plans.push({ plan: way.plan, ways: [way] });
+  }
+  return plans;
+}
+
+/** A plan's name, as the app's own computers name it (without tiers to list them). */
+const titleOf = (engine: EngineName): string =>
+  ({
+    claude: say("claudeTitle"),
+    codex: say("codexTitle"),
+    antigravity: say("antigravityTitle"),
+    grok: say("grokTitle"),
+    cursor: say("cursorTitle"),
+  })[engine];
+
+/** The ways the flow connects for each plan picked: its first, unless one was asked for. */
+export const waysFor = (plans: PlanShown[], picked: string[]): Way[] =>
+  plans.flatMap((p) => {
+    const asked = p.ways.find((w) => picked.includes(w.provider));
+    return asked ? [asked] : picked.includes(p.plan) ? [p.ways[0]] : [];
+  });
 
 /** A space a computer of theirs is shared into, where others' agents work on it as them. */
 export type SharedIn = { _id: string; name: string };
@@ -75,98 +152,95 @@ export type Machine = {
   shared: SharedIn[] | true | false;
 };
 
-/** How one computer stands for one plan. */
-export type Standing =
-  | { state: "shared" }
-  | { state: "signedIn"; account?: string; version?: string; at?: string }
-  | { state: "installed"; version?: string; at?: string }
-  | { state: "missing"; at?: string }
-  | { state: "unchecked" };
-
 /** Whether others' agents work on it as its owner, so their plan can't run there. */
 export const isShared = (m: Machine): boolean =>
   Array.isArray(m.shared) ? m.shared.length > 0 : m.shared;
 
-export function standingOf(machine: Machine, engine: EngineName): Standing {
-  if (isShared(machine)) return { state: "shared" };
-  const seen = (machine.computer.engines as Partial<Record<EngineName, EngineSeen>> | undefined)
-    ?.[engine];
-  if (!seen) return { state: "unchecked" };
-  const at = seen.at ? { at: seen.at } : {};
-  if (seen.signedIn) {
-    return {
-      state: "signedIn",
-      ...(seen.account ? { account: seen.account } : {}),
-      ...(seen.version ? { version: seen.version } : {}),
-      ...at,
-    };
-  }
-  if (seen.installed) {
-    return { state: "installed", ...(seen.version ? { version: seen.version } : {}), ...at };
-  }
-  return { state: "missing", ...at };
-}
-
-/** Whether it can be asked now: online, or a cloud computer, which wakes. */
+/** Whether it can be asked now: online, or one the app keeps (a cloud computer), which wakes. */
 export const reachable = (m: Machine) => m.computer.online || !!m.kind;
 
-/** Whether a sign-in can start there now: reachable, not shared, and its CLI there (or not said). */
-export function startable(m: Machine, engine: EngineName): boolean {
-  const { state } = standingOf(m, engine);
-  return reachable(m) && state !== "shared" && state !== "missing";
+/** What `computer` last said of `engine`. */
+export const seenOf = (computer: Computer, engine: EngineName): EngineSeen | undefined =>
+  (computer.engines as Partial<Record<EngineName, EngineSeen>> | undefined)?.[engine];
+
+/** The plan `computer` is signed in to, as it last said, named: it isn't shared with others' agents while it is. */
+export function signedPlan(computer: Computer): string | undefined {
+  const engine = Object.values(ENGINE_OF).find((e) => seenOf(computer, e)?.signedIn);
+  return engine ? titleOf(engine) : undefined;
 }
 
 /**
- * Whether Sign in can install its missing CLI there first, with its
- * official installer: reachable, its CLI missing, and not Windows (there,
- * the person installs it).
+ * The computer the flow readies for a person's CLIs: the best of theirs not
+ * shared with others' agents: online, then one the app keeps (it wakes),
+ * then the rest, the most recently seen first. None: they have no computer
+ * that can run plans.
  */
-export const installable = (m: Machine, engine: EngineName): boolean =>
-  reachable(m) && standingOf(m, engine).state === "missing" &&
-  (m.computer.info as { os?: string } | undefined)?.os !== "win32";
+export function bestComputer(machines: Machine[]): Machine | undefined {
+  const usable = machines.filter((m) => !isShared(m));
+  const tier = (m: Machine) => m.computer.online ? 0 : m.kind ? 1 : 2;
+  return [...usable].sort((a, b) =>
+    tier(a) - tier(b) || (b.computer.seen ?? "").localeCompare(a.computer.seen ?? "")
+  )[0];
+}
 
-/**
- * The computers a sign-in may go to, best first: not shared; reachable
- * (online before asleep); its CLI installed and not signed in, then not
- * said, then signed in already (to sign in again), then missing; then the
- * most recently seen.
- */
-export function ranked(machines: Machine[], engine: EngineName): Machine[] {
-  const STATE: Record<Standing["state"], number> = {
-    installed: 0,
-    unchecked: 1,
-    signedIn: 2,
-    missing: 3,
-    shared: 4,
-  };
-  const score = (m: Machine) =>
-    (isShared(m) ? 100 : 0) + (m.computer.online ? 0 : m.kind ? 10 : 20) +
-    STATE[standingOf(m, engine).state];
-  return [...machines].sort((a, b) =>
-    score(a) - score(b) || (b.computer.seen ?? "").localeCompare(a.computer.seen ?? "")
-  );
+/** How a plan stands for the person, as its card says it. */
+export type Card =
+  /** Its agents' calls run on it now: on the server, or on a computer (`on`), with a backup. */
+  | {
+    state: "ready";
+    way: Way;
+    account?: Account;
+    on?: Machine;
+    backup?: Machine;
+    /** When it reached its limit there, if it's at it. */
+    limited?: string;
+  }
+  /** Signed in only on computers of theirs that are off. */
+  | { state: "away"; way: Way; on: Machine[] }
+  /** Its account needs them to sign in again. */
+  | { state: "reconnect"; way: Way }
+  | { state: "off" };
+
+/** The computers a way's plan is signed in on, in the order calls try them (shared ones apart). */
+export function servingOn(machines: Machine[], engine: EngineName): Machine[] {
+  const usable = machines.filter((m) => !isShared(m));
+  return servingOrder(usable.map((m) => m.computer), engine)
+    .map((c) => usable.find((m) => m.computer === c)!);
 }
 
 /**
- * Where "Sign in" goes at once, with nothing to choose: the one computer a
- * sign-in can start on now, when there's only one and its CLI is there.
+ * How `plan` stands for the person, from what's kept (accounts, and what
+ * each computer last said): the first of its ways, in their order, that
+ * runs now (with the next computer that could, as its backup); else one
+ * whose account needs them; else one signed in only on computers that are
+ * off; else not connected.
  */
-export function straightTo(machines: Machine[], engine: EngineName): Machine | undefined {
-  const ready = machines.filter((m) => startable(m, engine));
-  if (ready.length !== 1) return undefined;
-  const [one] = ready;
-  return standingOf(one, engine).state === "unchecked" ? undefined : one;
+export function cardOf(plan: PlanShown, machines: Machine[], accounts: Account[]): Card {
+  let later: Card | undefined;
+  for (const way of plan.ways) {
+    if (way.account) {
+      const account = accounts.find((a) => a.provider === way.account);
+      if (account?.status === "connected") return { state: "ready", way, account };
+      if (account && later?.state !== "reconnect") later = { state: "reconnect", way };
+    } else if (way.engine) {
+      const on = servingOn(machines, way.engine);
+      const [now, backup] = on.filter(reachable);
+      if (!now) {
+        if (on.length) later ??= { state: "away", way, on };
+        continue;
+      }
+      const limited = seenOf(now.computer, way.engine)?.limited;
+      return {
+        state: "ready",
+        way,
+        on: now,
+        ...(backup ? { backup } : {}),
+        ...(limited ? { limited } : {}),
+      };
+    }
+  }
+  return later ?? { state: "off" };
 }
-
-/** The first plan `computer` is signed in to, as it last said: it isn't shared with others' agents while it is. */
-export const signedPlan = (computer: Computer): Plan | undefined =>
-  plans().find((p) =>
-    (computer.engines as Partial<Record<EngineName, EngineSeen>> | undefined)?.[p.engine]?.signedIn
-  );
-
-/** The computers a plan is signed in on (shared ones can't count). */
-export const signedOn = (machines: Machine[], engine: EngineName): Machine[] =>
-  machines.filter((m) => standingOf(m, engine).state === "signedIn");
 
 /**
  * Where others' agents work on a computer as its owner, from its desks:
@@ -233,19 +307,14 @@ export function shownCode(output: string): string | undefined {
   return said?.[1];
 }
 
-/** Whether what a CLI said asks for a code to be pasted back to it (not one it shows). */
-export const asksForCode = (output: string): boolean =>
-  !shownCode(output) &&
-  /\b(paste|enter|input)\b[^\n]{0,40}\b(code|token)\b|\b(code|token)\b[^\n]{0,20}:\s*$/im.test(
-    output,
-  );
-
 /** What a sign-in answers each time it's asked (`computer.engine.login`, shared/workloads.ts). */
 export type LoginStep = {
   state: "running" | "done";
   output: string;
   signedIn: boolean;
   url?: string;
+  /** Done: whether its CLI is there now (not, when its installer failed). */
+  installed?: boolean;
 };
 
 /** What a sign-in under way says: each answer, or why it couldn't go on. */

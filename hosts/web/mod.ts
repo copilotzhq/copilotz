@@ -123,7 +123,7 @@ export { Heading, Text, type TextTone } from "./toolkit/text.tsx";
 export { AppBar, type AppBarItem, TopBar } from "./toolkit/app-bar.tsx";
 export { type Tile, TileGrid } from "./toolkit/tile-grid.tsx";
 // Tables: rows to read, find and act on, their pages, and their files.
-export { DataTable, type ExportChoice } from "./toolkit/data-table.tsx";
+export { DataTable, type ExportChoice, TableExportFormats } from "./toolkit/data-table.tsx";
 export { Pagination } from "./toolkit/pagination.tsx";
 export {
   type Column,
@@ -136,10 +136,12 @@ export { tableAddress, tableQuery, tableState } from "./table-address.ts";
 export {
   download,
   EXPORT_FORMATS,
+  type ExportCell,
   exportFile,
   type ExportFormat,
   type ExportOptions,
   type Sheet,
+  type TableExportFormat,
   toCsv,
   toExcel,
   toJson,
@@ -247,3 +249,5 @@ export { clock } from "./toolkit/clock.ts";
 export { type Client, type ClientLink, connect, type Known } from "../../runtime/client.ts";
 // What a route is handed of the app's widgets (the server's half, `copilotz/web/server`).
 export type { Widgets } from "./widgets.ts";
+
+export { tableSheet } from "./toolkit/table.ts";

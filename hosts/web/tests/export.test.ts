@@ -6,7 +6,7 @@
  * page per page of rows; JSON, XML, SQL and the HTML `.xls` escape what
  * they must.
  */
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
 import { test } from "../../../testing/mod.ts";
 import {
   exportFile,
@@ -19,6 +19,7 @@ import {
   toXlsx,
   toXml,
 } from "../toolkit/export.ts";
+import { barcodePng, pdfImage, tableSheet } from "../export.ts";
 import { tablePdf, winAnsi } from "../toolkit/pdf.ts";
 import { crc32, zip } from "../toolkit/zip.ts";
 
@@ -167,4 +168,166 @@ test("a file per format: its name, type, and CSV's byte-order mark", () => {
   assertEquals(exportFile("excel", sheet, "s").file, "s.xls");
   assert(exportFile("pdf", sheet, "s").content instanceof Uint8Array);
   assertEquals(exportFile("sql", sheet, "s").type, "application/sql");
+});
+
+test("CSV dialect quotes only what needs it and keeps the formula guard", () => {
+  const input = {
+    headers: ["First", "Second"],
+    rows: [["=1", 'quote"'], ["a;b", "a\nb"]],
+    footerRows: [["Total", 7]],
+  };
+  assertEquals(
+    toCsv(input, {
+      csv: {
+        quote: "needed",
+        delimiter: ";",
+        header: false,
+        lineEnding: "\r\n",
+        finalNewline: true,
+      },
+    }),
+    '\'=1;"quote"""\r\n"a;b";"a\nb"\r\nTotal;7\r\n',
+  );
+  assertEquals(
+    toCsv({ headers: ["A"], rows: [] }, { csv: { header: false, finalNewline: true } }),
+    "",
+  );
+  assertEquals(
+    toCsv(input, { csv: { delimiter: "\t", lineEnding: "\r" } }).split("\r")[0],
+    '"First"\t"Second"',
+  );
+  assertThrows(() => toCsv(input, { csv: { delimiter: "" } }));
+});
+
+test("custom serializers get the projected sheet, totals, base name and options", () => {
+  const data = [{ price: 2.5, paid: false, note: null }];
+  const columns = [
+    {
+      key: "price",
+      title: "Price",
+      text: (r: typeof data[number]) => "$" + r.price.toFixed(2),
+    },
+    { key: "paid", title: "Paid" },
+    { key: "note", title: "Note" },
+    { key: "edit", title: "" },
+  ];
+  const totals = [{ price: 2.5 }];
+  const shown = tableSheet(columns, data, totals);
+  assertEquals(shown.rows, [["$2.50", "false", ""]]);
+  assertEquals(shown.keys, ["price", "paid", "note"]);
+  const raw = tableSheet(columns, data, totals, "raw");
+  assertEquals(raw.rows, [[2.5, false, null]]);
+  assertEquals(raw.footerRows, [[2.5, "", ""]]);
+  const custom = exportFile("csv", raw, "invoices", {
+    formats: {
+      csv: {
+        label: "Binary",
+        type: "application/octet-stream",
+        extension: "bin",
+        serialize(sheet, name) {
+          assertEquals(sheet, raw);
+          assertEquals(name, "invoices");
+          return Uint8Array.of(4, 2);
+        },
+      },
+    },
+  });
+  assertEquals(custom, {
+    file: "invoices.bin",
+    type: "application/octet-stream",
+    content: Uint8Array.of(4, 2),
+  });
+  const sql = exportFile("sql", raw, "invoices", { tableName: "invoice_lines" });
+  assertEquals(sql.file, "invoices.sql");
+  assertStringIncludes(
+    String(sql.content),
+    "INSERT INTO `invoice_lines` (`Price`,`Paid`,`Note`) VALUES (2.5,FALSE,NULL);",
+  );
+  assertEquals(JSON.parse(toJson(raw))[0], { Price: 2.5, Paid: false, Note: null });
+  assertThrows(() => exportFile("toString", raw, "orders"), RangeError);
+});
+
+test("all eight built-in formats include the supplied totals", () => {
+  const sheet = {
+    headers: ["Product", "Price"],
+    rows: [["Pen", 2]],
+    footerRows: [["Grand Total", 2]],
+  };
+  for (const format of ["csv", "txt", "xlsx", "excel", "sql", "pdf", "json", "xml"]) {
+    const { content } = exportFile(format, sheet, "products");
+    const text = typeof content === "string" ? content : new TextDecoder().decode(content);
+    assertStringIncludes(text, "Grand Total");
+  }
+  assertEquals(JSON.parse(toJson(sheet, { json: "table" })).data.at(-1), {
+    0: "Grand Total",
+    1: "2",
+  });
+});
+
+test("a table PDF repeats headings, lays out its logo and titles, and aligns its totals", async () => {
+  const image = await pdfImage(await barcodePng("ORDER"));
+  const sheet = {
+    headers: ["Order", "Amount"],
+    rows: Array.from({ length: 4 }, (_, i) => [i, 10]),
+    footerRows: [["Total", 40]],
+  };
+  const file = String.fromCharCode(
+    ...tablePdf(sheet, {
+      size: [300, 200],
+      fontSize: 10,
+      title: ["Orders", "November"],
+      subtitle: "Paid invoices",
+      headerImage: { image, width: 40, height: 16 },
+      columns: [{ width: 130 }, { align: "right" }],
+    }),
+  );
+  assertStringIncludes(file, "/MediaBox [0 0 300 200]");
+  assertStringIncludes(file, "/Count 2");
+  for (const line of ["Orders", "November", "Paid invoices", "Total"]) {
+    assertEquals(file.split("(" + line + ") Tj").length, 2);
+  }
+  assertEquals(file.split("(Amount) Tj").length, 3);
+  assertStringIncludes(file, "q 40 0 0 16 36 148 cm /Im1 Do Q");
+  const x = Number(file.match(/Tf ([\d.]+) [\d.]+ Td \(40\) Tj/)![1]);
+  assertEquals(x, 249.88); // right edge 264, minus padding 3 and Helvetica Bold's 11.12 points
+  const letter = String.fromCharCode(
+    ...tablePdf(sheet, { size: "letter", orientation: "portrait" }),
+  );
+  assertStringIncludes(letter, "/MediaBox [0 0 612 792]");
+  assertThrows(() => tablePdf(sheet, { size: [100, 150], columns: [{ width: 90 }] }));
+});
+
+test("an Action makes invoice attachments through the server export entry point", async () => {
+  const { createRuntime, definePlugin } = await import("../../../runtime/mod.ts");
+  const { memoryStore } = await import("../../../stores/memory/mod.ts");
+  const { exportFile } = await import("../export.ts");
+  const runtime = await createRuntime({
+    store: memoryStore(),
+    plugins: [definePlugin({
+      name: "invoices",
+      actions: {
+        "invoice.attachments": {
+          run() {
+            const sheet = { headers: ["Order"], rows: [["Order 12"]] };
+            const pdf = exportFile("pdf", sheet, "invoice");
+            const csv = exportFile("csv", sheet, "orders");
+            return {
+              type: pdf.type,
+              pdfHeader: new TextDecoder().decode((pdf.content as Uint8Array).subarray(0, 8)),
+              csv: csv.content,
+            };
+          },
+        },
+      },
+    })],
+  });
+  try {
+    assertEquals(await runtime.call("invoice.attachments", {}), {
+      type: "application/pdf",
+      pdfHeader: "%PDF-1.4",
+      csv: '﻿"Order"\n"Order 12"',
+    });
+  } finally {
+    await runtime.close();
+  }
 });

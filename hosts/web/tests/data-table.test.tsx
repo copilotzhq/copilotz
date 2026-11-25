@@ -12,7 +12,8 @@ import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "../../../testing/mod.ts";
 import { tableQuery, tableState } from "../table-address.ts";
-import { type Column, DataTable } from "../toolkit/data-table.tsx";
+import { type Column, DataTable, TableExportFormats } from "../toolkit/data-table.tsx";
+import { Barcode } from "../toolkit/barcode.tsx";
 import { Pagination } from "../toolkit/pagination.tsx";
 
 type Row = { id: number; name: string; total: number };
@@ -235,4 +236,73 @@ test("a fixed layout is a class; the scroll box is the positioned one and cell f
   assertStringIncludes(css, ".copilotz-table-box { position: relative; overflow-x: auto;");
   assertStringIncludes(css, "width: 100%; min-width: 0; }");
   assertStringIncludes(css, "table-layout: fixed");
+});
+
+test("an app offers a format to its tables, and a table can replace it or a built-in", () => {
+  const format = {
+    label: "Order lines",
+    extension: "lines",
+    type: "text/plain",
+    serialize: () => "Order",
+  };
+  const base = { columns, rows: rows.slice(0, 1), rowKey: (r: Row) => r.id };
+  const render = (table: React.ReactNode) =>
+    html(<TableExportFormats value={{ lines: format }}>{table}</TableExportFormats>);
+  const shared = render(<DataTable {...base} />);
+  assertStringIncludes(shared, ">Order lines<");
+  assertStringIncludes(shared, ">CSV<");
+  const local = render(
+    <DataTable
+      {...base}
+      formats={{
+        csv: { ...format, label: "Order CSV" },
+        lines: { ...format, label: "Invoice lines" },
+      }}
+    />,
+  );
+  assertStringIncludes(local, ">Invoice lines<");
+  assertStringIncludes(local, ">Order CSV<");
+  assert(!local.includes(">Order lines<"));
+  assert(!local.includes(">CSV<"));
+  const explicit = render(<DataTable {...base} exports={["csv"]} />);
+  assert(!explicit.includes(">Order lines<"));
+});
+
+test("toolbar buttons keep selection off, a single page size can show, and visible totals align", () => {
+  const page = html(
+    <DataTable
+      columns={columns}
+      rows={rows.slice(0, 1)}
+      rowKey={(r) => r.id}
+      toolbar={<button>New order</button>}
+      pageSizes={[25]}
+      showSinglePageSize
+      footerRows={[{ name: "Total", total: 42, secret: "Private" }]}
+    />,
+  );
+  assertStringIncludes(page, ">New order<");
+  assert(!page.includes('aria-label="Select all rows"'));
+  assertStringIncludes(page, 'aria-label="25 rows per page"');
+  assertStringIncludes(page, "<tfoot><tr><td");
+  assertStringIncludes(page, ">42</td>");
+  assert(!page.includes("Private"));
+  const slotOnly = html(
+    <DataTable
+      columns={columns}
+      rows={[]}
+      rowKey={(r) => r.id}
+      toolbar={<button>New order</button>}
+      chooseColumns={false}
+      search={false}
+      exports={false}
+    />,
+  );
+  assertStringIncludes(slotOnly, ">New order<");
+});
+
+test("a product SVG shows its complete EAN under the bars", () => {
+  const svg = html(<Barcode value="590123412345" format="ean13" caption />);
+  assertStringIncludes(svg, 'aria-label="5901234123457"');
+  assertStringIncludes(svg, ">5901234123457</span>");
+  assertStringIncludes(svg, "<path");
 });

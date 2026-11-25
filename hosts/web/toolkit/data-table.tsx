@@ -33,9 +33,12 @@
  * ```
  */
 import {
+  type Context,
+  createContext,
   Fragment,
   type MouseEvent,
   type ReactNode,
+  useContext,
   useEffect,
   useId,
   useMemo,
@@ -49,9 +52,9 @@ import { cx } from "./cx.ts";
 import {
   download,
   EXPORT_FORMATS,
-  type ExportFormat,
+  type ExportCell,
   type ExportOptions,
-  type Sheet,
+  type TableExportFormat,
 } from "./export.ts";
 import { Icon } from "./icon.tsx";
 import { Input } from "./input.tsx";
@@ -67,6 +70,7 @@ import {
   type Key,
   PAGE_SIZES,
   sortedBy,
+  tableSheet,
   type TableState,
   tableView,
   textOf,
@@ -76,7 +80,12 @@ import { say } from "./words.ts";
 export { type Column, type Key, PAGE_SIZES, type TableState };
 
 /** A format in the export menu: by name, or with the menu's own words for it. */
-export type ExportChoice = ExportFormat | { format: ExportFormat; label: string };
+export type ExportChoice = string | { format: string; label: string };
+
+/** Provide named formats around the app's screens. A table may add or replace them locally. */
+export const TableExportFormats: Context<Record<string, TableExportFormat>> = createContext<
+  Record<string, TableExportFormat>
+>({});
 
 const CELL = "var(--table-cell-padding, 10px 12px)";
 const LINE = "var(--table-border-color, var(--border))";
@@ -186,6 +195,7 @@ const ownClick = (event: MouseEvent) => !!(event.target as Element).closest?.(OW
 
 const ALIGN = { left: undefined, right: "copilotz-table-right", center: "copilotz-table-center" };
 
+/** Lists, searches and exports the visible columns of a page or a client-side list. */
 export function DataTable<R>(props: {
   columns: Column<R>[];
   rows: R[];
@@ -201,6 +211,8 @@ export function DataTable<R>(props: {
   pageSize?: number;
   /** The page sizes to choose from (10, 25, 50, 100; `false`: no choosing). */
   pageSizes?: number[] | false;
+  /** Keep the page-size menu when only one size is offered. */
+  showSinglePageSize?: boolean;
   /** A box to tick per row: yes when there are `actions`. */
   selectable?: boolean;
   /** The toolbar's start: the page's actions, given the ticked rows' keys (Delete, Email…). */
@@ -217,6 +229,10 @@ export function DataTable<R>(props: {
   exportAll?: boolean;
   /** How the files are made (see `export.ts`). */
   exportOptions?: ExportOptions;
+  /** Additional or replacement formats for this table, keyed by name. */
+  formats?: Record<string, TableExportFormat>;
+  /** Totals by column key, shown below the body and included in each file. */
+  footerRows?: Record<string, ExportCell>[];
   /** What it says when no row shows ("Nothing to show"). */
   empty?: ReactNode;
   loading?: boolean;
@@ -234,8 +250,8 @@ export function DataTable<R>(props: {
    * (by the columns' `width`s, the rest shared evenly; cells never widen their column).
    */
   layout?: "auto" | "fixed";
-  /** The toolbar, and the pages under the rows (both, by default). */
-  toolbar?: boolean;
+  /** A button or filter beside the built-in tools. False hides the entire toolbar. */
+  toolbar?: ReactNode;
   pagination?: boolean;
   /** The table element's id. */
   id?: string;
@@ -248,7 +264,7 @@ export function DataTable<R>(props: {
     actions,
     search = true,
     chooseColumns = true,
-    exports = ["csv", "xlsx", "pdf"],
+    exports,
     toolbar = true,
     pagination = true,
   } = props;
@@ -307,19 +323,34 @@ export function DataTable<R>(props: {
 
   const titled = columns.filter((column) => !isLinks(column as Column<unknown>));
   const visibleTitled = visible.filter((column) => !isLinks(column as Column<unknown>));
-  const sheetOf = (): Sheet => ({
-    headers: visibleTitled.map((column) => column.title),
-    rows: (props.exportAll ? matching : page).map((row) =>
-      visibleTitled.map((column) => textOf(column, row))
-    ),
+  const sharedFormats = useContext(TableExportFormats);
+  const definitions = { ...sharedFormats, ...props.exportOptions?.formats, ...props.formats };
+  const choices = exports ?? [...new Set(["csv", "xlsx", "pdf", ...Object.keys(definitions)])];
+  const formats = choices === false ? [] : choices.map((choice) => {
+    if (typeof choice !== "string") return choice;
+    const label = Object.hasOwn(definitions, choice)
+      ? definitions[choice].label
+      : EXPORT_FORMATS.find((f) => f.format === choice)?.label ?? choice;
+    return { format: choice, label };
   });
-  const formats = exports === false
-    ? []
-    : exports.map((choice) =>
-      typeof choice === "string"
-        ? EXPORT_FORMATS.find((f) => f.format === choice) ?? { format: choice, label: choice }
-        : choice
+  const save = (format: string) => {
+    const sheet = tableSheet(
+      visibleTitled,
+      props.exportAll ? matching : page,
+      props.footerRows,
+      props.exportOptions?.values,
     );
+    const pdf = props.exportOptions?.pdf;
+    const columns = visibleTitled.map((c) => ({
+      align: c.align,
+      ...pdf?.columns?.[titled.indexOf(c)],
+    }));
+    download(format, sheet, props.exportName ?? "export", {
+      ...props.exportOptions,
+      formats: definitions,
+      pdf: { ...pdf, columns },
+    });
+  };
   const always = props.detailOpen === true;
   const toggles = !!props.detail && !always;
   const span = visible.length + (selectable ? 1 : 0) + (toggles ? 1 : 0);
@@ -334,8 +365,9 @@ export function DataTable<R>(props: {
     column.width === undefined
       ? undefined
       : { width: typeof column.width === "number" ? `${column.width}px` : column.width };
-  const showsToolbar = toolbar &&
-    (actions !== undefined || search || (chooseColumns && titled.length > 1) || formats.length > 0);
+  const showsToolbar = toolbar !== false &&
+    (toolbar !== true && toolbar != null || actions !== undefined || search ||
+      (chooseColumns && titled.length > 1) || formats.length > 0);
 
   return (
     <div className={cx("copilotz-table", props.className)}>
@@ -343,7 +375,7 @@ export function DataTable<R>(props: {
       {showsToolbar
         ? (
           <div className="copilotz-table-toolbar">
-            <div className="copilotz-table-actions">{actions?.(selected, clear)}</div>
+            <div className="copilotz-table-actions">{toolbar}{actions?.(selected, clear)}</div>
             <div className="copilotz-table-tools">
               {search
                 ? (
@@ -401,13 +433,7 @@ export function DataTable<R>(props: {
                     )}
                     items={formats.map(({ format, label }) => ({
                       label,
-                      onSelect: () =>
-                        download(
-                          format,
-                          sheetOf(),
-                          props.exportName ?? "export",
-                          props.exportOptions,
-                        ),
+                      onSelect: () => save(format),
                     }))}
                   />
                 )
@@ -573,7 +599,26 @@ export function DataTable<R>(props: {
                 );
               })}
           </tbody>
-          {props.footer ? <tfoot>{props.footer}</tfoot> : null}
+          {props.footer || props.footerRows?.length
+            ? (
+              <tfoot>
+                {props.footerRows?.map((row, i) => (
+                  <tr key={i}>
+                    {toggles && <td />}
+                    {selectable && <td />}
+                    {visible.map((column) => (
+                      <td key={column.key} className={cellClass(column)}>
+                        {column.title && Object.hasOwn(row, column.key)
+                          ? String(row[column.key] ?? "")
+                          : ""}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+                {props.footer}
+              </tfoot>
+            )
+            : null}
         </table>
       </div>
       {pagination && total > 0
@@ -583,6 +628,7 @@ export function DataTable<R>(props: {
             state={state}
             onState={setState}
             sizes={props.pageSizes ?? PAGE_SIZES}
+            showSinglePageSize={props.showSinglePageSize}
           />
         )
         : null}

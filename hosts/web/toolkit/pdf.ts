@@ -25,13 +25,22 @@
  * ]], { size: "receipt" });
  * ```
  */
+import type { ExportCell, Sheet } from "./export.ts";
 import type { PdfImage } from "./pdf-image.ts";
 import { type BarcodeOptions, bars } from "./code128.ts";
 
 /** How the PDF looks: its page, its title, and its colours (`#rrggbb`). */
 export type PdfOptions = {
   /** A line over the table, on the first page. */
-  title?: string;
+  title?: string | string[];
+  /** Smaller lines under the title, on the first page. */
+  subtitle?: string | string[];
+  /** Paper in points. Named paper defaults to landscape, a pair keeps its given orientation. */
+  size?: "a4" | "letter" | [number, number];
+  /** Columns in visible order. Widths are points. Unspecified columns share what remains. */
+  columns?: { width?: number; align?: "left" | "center" | "right" }[];
+  /** A prepared logo beside the first page's title. Width and height are in points. */
+  headerImage?: { image: PdfImage; width: number; height: number };
   /** Landscape (the default: tables are wide) or portrait, on A4. */
   orientation?: "landscape" | "portrait";
   /** The header band's colour, and its text's. */
@@ -95,64 +104,147 @@ function rgb(colour: string): string {
   return [0, 2, 4].map((i) => (parseInt(hex.slice(i, i + 2), 16) / 255).toFixed(3)).join(" ");
 }
 
-/** A table as PDF bytes: `headers` over `rows`. */
+/** A printable table, with repeated column headings and totals after its final row. */
 export function tablePdf(
-  { headers, rows }: { headers: string[]; rows: (string | number)[][] },
+  { headers, rows, footerRows = [] }: Sheet<ExportCell>,
   options: PdfOptions = {},
 ): Uint8Array {
-  const [W, H] = options.orientation === "portrait" ? [595, 842] : [842, 595];
-  const M = 36, SIZE = options.fontSize ?? 9, LINE = Math.round(SIZE * 2);
-  const CHAR = SIZE * 0.52; // Helvetica's average width, near enough to fit columns
-  const cells = rows.map((row) => headers.map((_, i) => winAnsi(String(row[i] ?? ""))));
-  const heads = headers.map(winAnsi);
-  const want = heads.map((h, i) =>
-    Math.min(40, Math.max(h.length, ...cells.map((r) => r[i].length), 3))
+  const paper = options.size ?? "a4";
+  const [a, b] = Array.isArray(paper) ? paper : [SIZES[paper].width, Number(SIZES[paper].height)];
+  const orientation = options.orientation ?? (Array.isArray(paper) ? undefined : "landscape");
+  const W = orientation === "portrait"
+    ? Math.min(a, b)
+    : orientation === "landscape"
+    ? Math.max(a, b)
+    : a;
+  const H = a + b - W;
+  const M = 36, SIZE = options.fontSize ?? 9, LINE = Math.max(1, Math.round(SIZE * 2));
+  const available = W - 2 * M;
+  if (![W, H, SIZE].every(Number.isFinite) || SIZE <= 0 || available <= 0 || H < 2 * M + 2 * LINE) {
+    throw new RangeError("The page must have room for a table heading and a row.");
+  }
+  const cells = [...rows, ...footerRows].map((row) =>
+    headers.map((_, i) => winAnsi(String(row[i] ?? "")))
   );
-  const sum = want.reduce((a, b) => a + b, 0) || 1;
-  const widths = want.map((w) => ((W - 2 * M) * w) / sum);
-  const fit = (text: string, width: number) => {
-    const room = Math.max(1, Math.floor((width - 6) / CHAR));
-    return text.length > room ? `${text.slice(0, Math.max(1, room - 1))}\x85` : text;
-  };
-  const title = options.title ? winAnsi(options.title) : "";
-  const top = H - M - (title ? LINE * 1.5 : 0);
-  const perPage = Math.max(1, Math.floor((top - M) / LINE) - 1);
-  const head = rgb(options.headerColor ?? "#334058");
-  const headText = rgb(options.headerText ?? "#ffffff");
+  const heads = headers.map(winAnsi);
+  const columns = options.columns ?? [];
+  const weights = heads.map((h, i) =>
+    columns[i]?.width === undefined ? Math.max(3, Math.min(40, h.length)) : 0
+  );
+  for (const row of cells) {
+    row.forEach((v, i) => {
+      if (weights[i]) weights[i] = Math.max(weights[i], Math.min(40, v.length));
+    });
+  }
+  const fixed = heads.reduce((sum, _, i) => {
+    const width = columns[i]?.width;
+    if (width !== undefined && (!Number.isFinite(width) || width <= 0)) {
+      throw new RangeError("Invalid PDF column width.");
+    }
+    return sum + (width ?? 0);
+  }, 0);
+  const sum = weights.reduce((a, b) => a + b, 0);
+  if (fixed > available || (sum && fixed >= available)) {
+    throw new RangeError("Columns exceed the page width.");
+  }
+  const widths = weights.map((w, i) => columns[i]?.width ?? (available - fixed) * w / sum);
+  const tableWidth = widths.reduce((a, b) => a + b, 0);
+  const lines = (s?: string | string[]) =>
+    (Array.isArray(s) ? s : s ? [s] : []).flatMap((v) => v.split(/\r?\n/));
+  const titles = lines(options.title), subtitles = lines(options.subtitle);
+  const logo = options.headerImage;
+  if (
+    logo &&
+    (![logo.width, logo.height].every((n) => Number.isFinite(n) && n > 0) || logo.width > available)
+  ) {
+    throw new RangeError("Invalid PDF header image size.");
+  }
+  const captionX = M + (logo && (titles.length || subtitles.length) ? logo.width + 8 : 0);
+  const headingHeight = Math.max(
+    titles.length * (SIZE + 8) + subtitles.length * (SIZE + 4),
+    logo?.height ?? 0,
+  );
+  const firstTop = H - M - headingHeight - (headingHeight ? 8 : 0);
+  if (firstTop - M < LINE * (cells.length ? 2 : 1)) {
+    throw new RangeError("The table heading is too tall for this page.");
+  }
+  const head = rgb(options.headerColor ?? "#334058"),
+    headText = rgb(options.headerText ?? "#ffffff");
   const stripe = options.stripeColor === null ? null : rgb(options.stripeColor ?? "#f1f4f9");
-
-  const pages: string[] = [];
-  for (let start = 0; start === 0 || start < cells.length; start += perPage) {
+  const pages: { width: number; height: number; stream: string }[] = [];
+  let start = 0;
+  do {
     const ops: string[] = [];
-    const line = (texts: string[], y: number, font: string, ink: string, fill: string | null) => {
-      if (fill) {
-        ops.push(`${fill} rg ${M} ${(y - LINE / 2 + 1).toFixed(1)} ${W - 2 * M} ${LINE} re f`);
-      }
-      let x = M;
-      texts.forEach((text, i) => {
-        const shown = literal(fit(text, widths[i]));
+    let top = H - M;
+    if (!pages.length) {
+      if (logo) {
         ops.push(
-          `${ink} rg BT /${font} ${SIZE} Tf ${(x + 3).toFixed(1)} ${
-            (y - SIZE / 3).toFixed(1)
-          } Td (${shown}) Tj ET`,
+          `q ${n(logo.width)} 0 0 ${n(logo.height)} ${M} ${n(top - logo.height)} cm /Im1 Do Q`,
+        );
+      }
+      const caption = (line: string, size: number, font: string) => {
+        const { shown } = fitCell(winAnsi(line), W - M - captionX, size, font === "F2");
+        ops.push(
+          `0 0 0 rg BT /${font} ${n(size)} Tf ${n(captionX)} ${n(top - size)} Td (${
+            literal(shown)
+          }) Tj ET`,
+        );
+        top -= size + 4;
+      };
+      titles.forEach((line) => caption(line, SIZE + 4, "F2"));
+      subtitles.forEach((line) => caption(line, SIZE, "F1"));
+      top = firstTop;
+    }
+    const line = (texts: string[], bold: boolean, ink: string, fill?: string | null) => {
+      if (fill) ops.push(`${fill} rg ${M} ${n(top - LINE)} ${n(tableWidth)} ${LINE} re f`);
+      let x = M;
+      texts.forEach((value, i) => {
+        const room = Math.max(0, widths[i] - 6);
+        const { shown, width } = fitCell(value, room, SIZE, bold);
+        const align = columns[i]?.align;
+        const offset = align === "right"
+          ? room - width
+          : align === "center"
+          ? (room - width) / 2
+          : 0;
+        ops.push(
+          `${ink} rg BT /${bold ? "F2" : "F1"} ${SIZE} Tf ${n(x + 3 + offset)} ${
+            n(top - LINE / 2 - SIZE / 3)
+          } Td (${literal(shown)}) Tj ET`,
         );
         x += widths[i];
       });
+      top -= LINE;
     };
-    if (start === 0 && title) {
-      ops.push(`0 0 0 rg BT /F2 ${SIZE + 4} Tf ${M} ${H - M - SIZE} Td (${literal(title)}) Tj ET`);
+    line(heads, true, headText, head);
+    const end = Math.min(cells.length, start + Math.floor((top - M) / LINE));
+    for (let i = start; i < end; i++) {
+      line(cells[i], i >= rows.length, "0 0 0", (i - start) % 2 ? stripe : null);
     }
-    let y = (start === 0 ? top : H - M) - LINE / 2;
-    line(heads, y, "F2", headText, head);
-    cells.slice(start, start + perPage).forEach((row, i) => {
-      y -= LINE;
-      line(row, y, "F1", "0 0 0", i % 2 && stripe ? stripe : null);
-    });
-    pages.push(ops.join("\n"));
-    if (cells.length === 0) break;
-  }
+    start = end;
+    pages.push({ width: W, height: H, stream: ops.join("\n") });
+  } while (start < cells.length);
+  return assemble(pages, ["regular", "bold"], logo ? new Map([[logo.image, "Im1"]]) : undefined);
+}
 
-  return assemble(pages.map((stream) => ({ width: W, height: H, stream })), ["regular", "bold"]);
+/** Fits WinAnsi text to the available points, including the ellipsis and the chosen face. */
+function fitCell(value: string, room: number, size: number, bold: boolean) {
+  let width = 0;
+  const ellipsis = size; // Helvetica's ellipsis is one em.
+  let cut = 0, truncatedWidth = 0;
+  for (let i = 0; i < value.length; i++) {
+    width += charWidth(value[i], bold) * size / 1000;
+    if (width <= room - ellipsis) {
+      cut = i + 1;
+      truncatedWidth = width;
+    }
+    if (width > room) {
+      return room >= ellipsis
+        ? { shown: value.slice(0, cut) + "\x85", width: truncatedWidth + ellipsis }
+        : { shown: "", width: 0 };
+    }
+  }
+  return { shown: value, width };
 }
 
 /** Helvetica's four faces, and their names in a page's resources. */

@@ -53,7 +53,7 @@ const SHEET = sheet(
 );
 
 export function Pagination(
-  { total, state, onState, sizes = PAGE_SIZES, className }: {
+  { total, state, onState, sizes = PAGE_SIZES, showSinglePageSize = false, className }: {
     /** How many rows there are in all. */
     total: number;
     /** Where it is: `offset` and `limit` (the rest is kept as it is). */
@@ -61,6 +61,8 @@ export function Pagination(
     onState(state: TableState): void;
     /** The page sizes to choose from (`false`: no choosing). */
     sizes?: number[] | false;
+    /** Show the size menu even if there is a single choice. */
+    showSinglePageSize?: boolean;
     className?: string;
   },
 ): ReactNode {
@@ -92,7 +94,7 @@ export function Pagination(
             total: formatNumber(total),
           })}
         </span>
-        {choices.length > 1
+        {choices.length > 1 || (showSinglePageSize && choices.length === 1)
           ? (
             <span className="copilotz-pagination-sizes">
               {say.nodes("rowsPerPage", {

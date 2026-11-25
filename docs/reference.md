@@ -364,7 +364,26 @@ write's statement and params, so a secret is written through an Action, never th
 
 ### Actions
 
-What can be done, by name. `defineAction` types `run`'s input from the schema.
+What can be done, by name. With an explicit `input`, `defineAction` types `run`'s input from the
+schema. In a plugin built by `copilotz gen`, you can write the type on the second parameter instead:
+
+```ts
+import { defineAction } from "copilotz";
+
+export default defineAction({
+  description: "Calculate an order line's total in cents.",
+  run: (_ctx, input: {
+    /** @minimum 1 */
+    quantity: number;
+    /** @integer */
+    unitPrice: number;
+  }) => input.quantity * input.unitPrice,
+});
+```
+
+The generator puts the JSON Schema in the plugin's `mod.ts`. Each caller gets the same input check,
+and tools see the field descriptions. The app needs `typescript` as a devDependency to generate the
+schema. A hand-written `input` always wins. With a hand-written `mod.ts`, supply `input` yourself.
 
 | Field         | What it does                                                                                     |
 | ------------- | ------------------------------------------------------------------------------------------------ |

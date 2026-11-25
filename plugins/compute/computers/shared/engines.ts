@@ -18,6 +18,7 @@
 import { type Context, failure } from "../../../../runtime/mod.ts";
 import type { Computer } from "../collections/computer.ts";
 import type { Desk } from "../collections/desk.ts";
+import { servingOrder } from "./serving.ts";
 
 /** The engines a computer program runs, by its own name for each. */
 export const ENGINES = ["claude", "codex", "antigravity"] as const;
@@ -52,12 +53,11 @@ export async function sharedWithOthers(ctx: Context, computer: string): Promise<
 }
 
 /**
- * The computer `person`'s calls on `engine` run on: theirs, signed in to it
- * when it last said, and not shared with others' agents; one online first
- * (`wanted`, where their session is, before others), then the most recently
- * seen.
- * With none it fails at once, without asking any computer, so a model list
- * moves on to its next without a wait.
+ * The computer `person`'s calls on `engine` run on: the first in
+ * `servingOrder` (online, then one the app keeps, which wakes, then the
+ * rest) that others' agents don't work on as them. With none it fails at
+ * once, without asking any computer, so a model list moves on to its next
+ * without a wait.
  */
 export async function engineComputer(
   ctx: Context,
@@ -65,20 +65,14 @@ export async function engineComputer(
   engine: EngineName,
   wanted?: string,
 ): Promise<Computer> {
-  const computers = await ctx.as().db.collection<Computer>("computer")
-    .find({ owner: person }, { sort: { seen: -1 } });
-  const signed = computers.filter((c) =>
-    (c.engines as Record<string, EngineSeen> | undefined)?.[engine]?.signedIn
-  );
-  if (!signed.length) {
+  const computers = await ctx.as().db.collection<Computer>("computer").find({ owner: person });
+  const ranked = servingOrder(computers, engine, wanted);
+  if (!ranked.length) {
     throw engineFailure(
       "engine_signed_out",
-      "Your plan isn't signed in on a computer of yours: sign in from Connected accounts.",
+      "Your plan isn't signed in on a computer of yours: connect it from Your AI.",
     );
   }
-  const ranked = signed.sort((a, b) =>
-    Number(b.online) - Number(a.online) || Number(b._id === wanted) - Number(a._id === wanted)
-  );
   for (const computer of ranked) {
     if (!await sharedWithOthers(ctx, computer._id)) return computer;
   }

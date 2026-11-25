@@ -306,7 +306,7 @@
         {
           "title": "Agents on people's own plans",
           "slug": "guides/agents-on-peoples-plans",
-          "description": "An agent's model calls can run on the plan of the person it works for (Claude, ChatGPT through Codex, Google AI through Antigravity), through the plan's CLI on a computer of theirs: the providers, signing in once (installing a missing CLI), signing out, what a cloud computer keeps, and what runs where."
+          "description": "An agent's model calls can run on the plan of the person it works for (Claude, ChatGPT through Codex, Google AI through Antigravity), through the plan's CLI on a computer of theirs: the providers, connecting plans in one flow (a computer readied, a missing CLI installed, signed in, tested), Your AI, signing out, which computer a call runs on, a plan at its limit, what a cloud computer keeps, and what runs where."
         },
         {
           "title": "A public MCP server: docs and data for anyone",

@@ -52,6 +52,11 @@ export function readEnd(text: string, pattern: string, locale: string): DayTime 
   return value.length === 16 ? `${value}:00` : value;
 }
 
+/**
+ * A range's end to the second, typed: its day and time written by `pattern` in the page's
+ * language, read back as it's typed (`readEnd`), and handed to `onEnd` when it's within `low` and
+ * `high`. What `DateRangePicker` shows as From and To with `seconds`.
+ */
 export function DayTimeField(
   { label, value, pattern, low, high, onEnd }: {
     label: string;

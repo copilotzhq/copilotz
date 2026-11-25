@@ -30,7 +30,15 @@
  * />
  * ```
  */
-import { type ReactNode, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
+import {
+  type ReactNode,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { Button } from "./button.tsx";
 import {
   askedNow,
@@ -59,41 +67,43 @@ export type ConfirmDialogProps = Omit<ConfirmOptions, "onConfirm"> & {
   onClose(): void;
 };
 
-export function ConfirmDialog({ onClose, ...props }: ConfirmDialogProps): ReactNode {
-  return <Asking {...props} onDone={onClose} onCancel={onClose} />;
+export function ConfirmDialog(props: ConfirmDialogProps): ReactNode {
+  return props.open === false ? null : <Question {...props} />;
 }
 
-/** A confirm dialog that tells being done from being cancelled, as `confirm()` needs. */
-function Asking(
-  { open = true, onConfirm, onDone, onCancel, toast: done, ...asked }:
-    & Omit<ConfirmOptions, "onConfirm">
-    & { open?: boolean; onConfirm?(): unknown; onDone(): void; onCancel(): void },
-): ReactNode {
+function Question({ onConfirm, onClose, toast: done, ...asked }: ConfirmDialogProps): ReactNode {
   const [state, setState] = useState<Confirming>({ busy: false });
-  const running = useRef(false);
+  const running = useRef<symbol | undefined>(undefined);
   const id = useId();
-  // Opened again, it starts over.
-  useEffect(() => {
-    if (open) setState({ busy: false });
-  }, [open]);
+  useLayoutEffect(() => {
+    // Activity can reconnect this question after its pending confirmation was dropped.
+    setState((previous) => previous.busy ? { busy: false } : previous);
+    return () => {
+      running.current = undefined;
+    };
+  }, []);
   const confirmIt = async () => {
     if (running.current) return;
-    running.current = true;
-    const finished = await runConfirm(onConfirm, setState, say("notDone"));
-    running.current = false;
+    const question = Symbol();
+    running.current = question;
+    const finished = await runConfirm(onConfirm, (state) => {
+      if (running.current === question) setState(state);
+    }, say("notDone"));
+    if (running.current !== question) return;
+    running.current = undefined;
     if (!finished) return;
     if (done) toast(done, "success");
-    onDone();
+    onClose();
   };
   return (
     <ConfirmView
       {...asked}
       id={id}
-      open={open}
+      open
       busy={state.busy}
       error={state.error}
       onConfirm={confirmIt}
-      onCancel={onCancel}
+      onCancel={onClose}
     />
   );
 }

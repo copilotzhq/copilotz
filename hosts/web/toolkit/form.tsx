@@ -108,6 +108,8 @@ export function Form(
     & FormAttributes,
 ): ReactNode {
   const parts = useRef(new Set<{ current: PartSubmit }>());
+  const latest = useRef(onSubmit);
+  latest.current = onSubmit;
   const attempt = useRef<AbortController | null>(null);
   const [submitting, setSubmitting] = useState(false);
   useLayoutEffect(() => {
@@ -150,13 +152,15 @@ export function Form(
     setError(undefined);
     setRefused(NOTHING);
     const form = event.currentTarget;
-    const handlers = [...parts.current].map((handler) => handler.current);
+    const handlers = [...parts.current].map((handler): PartSubmit => (element, signal) =>
+      handler.current(element, signal)
+    );
     const { signal } = controller;
     const finished = () => onSubmittingChange?.(false, form);
     const done = await submitAll(
       form,
       handlers,
-      (values) => onSubmit?.(values, form, signal),
+      (values) => latest.current?.(values, form, signal),
       signal,
       () => {
         signal.addEventListener("abort", finished, { once: true });

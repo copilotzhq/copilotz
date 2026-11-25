@@ -3,7 +3,7 @@
  * (the stop's thirteen), set B says text as it is, `auto` packs digits two
  * to a symbol in set C, and the check symbol is the weighted sum's.
  */
-import { assertEquals, assertThrows } from "@std/assert";
+import { assertEquals } from "@std/assert";
 import { test } from "../../../testing/mod.ts";
 import { bars, code128, symbols } from "../toolkit/code128.ts";
 
@@ -76,5 +76,6 @@ test("bars: whole-pixel modules as wide as fit, with the scanners' margin when a
   const quiet = bars("POS 12", 300, { set: "B", quiet: true });
   assertEquals(quiet.module, Math.floor(300 / (modules + 20)));
   assertEquals(quiet.bars[0].x, 10 * quiet.module);
-  assertThrows(() => bars("POS 12", 10), RangeError);
+  assertEquals(bars("POS 12", 10).module, 1);
+  assertEquals(bars("SKU-12345", 120, { quiet: true }).width, 143);
 });

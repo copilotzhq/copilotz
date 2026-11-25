@@ -296,10 +296,12 @@ otherwise, unless `confirmLabel` says (`cancelLabel` for Cancel's).
   Cancel, so Enter never deletes. Escape cancels. It's an `alertdialog`, named by its title and
   described by its message, and closed, focus goes back to what opened it.
 - **A component, or a call.** As a component it's controlled: open while `open`, `true` by default,
-  so a dialog View at an address returns it as it is. `confirm(options)` asks the same from anywhere
-  (a row's button, a table's `actions`, a handler) with no state of the caller's, and resolves
-  `true` once confirmed (and `onConfirm` done), `false` when cancelled. It shows where `<Toasts />`
-  is (the Copilotz shell has one, and an app's own frame draws it once), one question at a time.
+  so a dialog View at an address returns it as it is. Closing and reopening it starts a fresh
+  question. A pending answer from the previous question cannot dismiss it. `confirm(options)` asks
+  the same from anywhere (a row's button, a table's `actions`, a handler) with no state of the
+  caller's, and resolves `true` once confirmed (and `onConfirm` done), `false` when cancelled. It
+  shows where `<Toasts />` is (the Copilotz shell has one, and an app's own frame draws it once),
+  one question at a time.
 - **Its words** are the toolkit's: `toolkit.confirm`, `toolkit.delete`, `toolkit.cancel`, and
   `toolkit.notDone` for a failure with none of its own.
 
@@ -388,9 +390,12 @@ Every field has its `name` (the record's field), `label`, and may have `required
   `values`, what `onSubmit` gets, and the function child's `values`.
 
 ```tsx
+// Defined once at module scope so the defaults identify the same draft across renders.
+const newProduct = { unit: "each", active: true, codes: [] };
+
 <EntityDialog<Product>
   title="New product"
-  values={{ unit: "each", active: true, codes: [] }}
+  values={newProduct}
   fields={[
     { name: "name", label: "Name", required: true },
     { name: "price", label: "Price", type: "number", min: 0, step: 0.01, required: true },
@@ -433,13 +438,20 @@ onSubmit={(record, _form, unset) =>
     : customers.insertOne(record)}
 ```
 
-The dialog stays busy from the first form part through the save. Cancel, Escape and backdrop
-dismissal wait. Closing the dialog externally or changing its record discards pending form parts and
-field errors. A save that already started can finish without closing the next dialog.
+The dialog identifies the record by `values._id` when present. Without an id, keep the same `values`
+object across renders while editing. A different record or a new object without an id starts a fresh
+draft and clears field errors.
 
-`Form` captures its part handlers and submit callback when submission starts. Its optional
-`onSubmittingChange(busy, form)` reports progress. The third argument to the form's own
-`onSubmit(values, form, signal)` is an `AbortSignal` that aborts when the form unmounts.
+The dialog stays busy from the first form part through the save. Cancel, Escape and backdrop
+dismissal wait. After the parts finish, the save reads the latest draft and the live form's enabled
+named controls in document order. Keep named controls enabled while saving. Disabled controls
+contribute no form value. Closing the dialog externally or switching records aborts the attempt's
+signal. A pending part can no longer submit the old record. An `onSubmit` already running can
+observe cancellation through its fourth argument, `signal`, and its eventual result is discarded.
+
+`Form` runs its parts in the order they joined, using each part's current handler when its turn
+comes and the current `onSubmit(values, form, signal)` after the last part. Its optional
+`onSubmittingChange(busy, form)` reports progress.
 
 When the last `<Toasts />` host unmounts, unanswered `confirm()` calls resolve to `false`. An
 operation already confirmed resolves with its outcome and runs once across a host handoff.
@@ -755,9 +767,9 @@ time has a seconds field, typed or stepped as the others, and the value's ends a
 `23:59:59`, so a stored time compares with the ends as text, to the second:
 `at >= range.start && at <= range.end`.
 
-- **Typed ends.** From and To show the day in the field's format, and read a day, or a whole day and
-  time typed or pasted in that format (`16/11/2026 14:30:05`, seconds or none): the day moves the
-  range, and the time goes to that end's fields.
+- **Typed ends.** Type or paste a date in From or To using the displayed date format. Set its time
+  in the adjacent hour, minute and optional second fields. Pasting a whole day-time marks the date
+  input invalid and preserves the range.
 - **A day-time pattern.** With a time, `format` may be the app's day-time pattern
   (`dd/MM/yyyy HH:mm:ss`, `MM/dd/yyyy hh:mm:ss a`): it writes each end whole, in the field and the
   foot, and From and To show its day alone. A day pattern (`dd/MM/yyyy`) writes the time after it,
@@ -788,7 +800,9 @@ writes seconds or they were typed. What isn't a real day and time (February 30th
 words) is `undefined`, so a field can mark it. Unquoted spaces between fields may vary. With no
 pattern, it reads the language's own short date and time with flexible spacing and an optional
 comma, and a day-time as the toolkit keeps one (`2026-11-16 14:30`, or with a `T`). `locale` names
-the months and AM and PM: the page's is `lang()`.
+the months and AM and PM: the page's is `lang()`. The helper supports Gregorian dates (including the
+ISO calendar). Unsupported calendars and ambiguous readings return `undefined`. For example,
+`2026/211 14:30` in `yyyy/dM HH:mm` could mean January 21 or November 2.
 
 A date alone is `parsePattern(text, pattern, locale)`: `parsePattern("31/12/2026", "dd/MM/yyyy")` is
 `"2026-12-31"`, and `"31/02/2026"` is `undefined`.
@@ -948,11 +962,12 @@ import { Barcode } from "copilotz/web";
 <Barcode format="ean13" value="590123412345" width={300} height={60} caption />;
 ```
 
-Barcode widths must fit at least one whole unit per module, including the requested quiet margins.
-An undersized barcode raises a `RangeError` with its minimum width. EAN-13 with quiet margins
-requires 113 pixels for PNG or 113 points for PDF. In `documentPdf`, omitting the barcode's `width`
-uses the space from its `x` position to the page edge. All printed bars must fit on the page. The
-blank quiet margins can extend beyond its edges.
+Barcode widths grow to fit at least one whole unit per module, including the requested quiet
+margins. For example, Code 128 with `SKU-12345` and quiet margins grows from a requested 120 units
+to 143. EAN-13 with quiet margins requires 113 pixels for PNG or 113 points for PDF. In
+`documentPdf`, omitting the barcode's `width` uses the space from its `x` position to the page edge.
+Printed bars extending beyond the page raise a `RangeError`. The blank quiet margins can extend
+beyond its edges.
 
 ## A route's own page
 

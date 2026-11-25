@@ -218,7 +218,7 @@ test("a record's dialog with its fields as children: Fields, or a function of th
                 {...control}
                 type="tel"
                 value={values.phone ?? ""}
-                disabled={saving}
+                readOnly={saving}
                 onChange={(e) => set({ phone: e.target.value })}
               />
             )}

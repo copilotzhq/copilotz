@@ -62,23 +62,23 @@ guides ship with the runtime.
   valid reading.
 - JSON records keep sparse cells as `""` and explicit `null` as `null`. Table-shaped JSON with raw
   values preserves each cell's type.
-- A `Form` keeps the part handlers and submit callback it started with, so a dialog switched to
-  another record mid-upload doesn't save one record's file onto the other. `EntityDialog` stays busy
-  from its first part to the save (Cancel and Escape wait), starts fresh for each record, and passes
-  cleared fields to `onSubmit(record, form, unset)` for an `$unset`.
-- `EntityDialog` reads the final values of named controls that were enabled when submission began,
-  including controls disabled while saving. Remounted same-name fields are read in live form order.
-  If a remount makes it impossible to tell which fields participated, the form shows an error.
-  Removed controls are skipped.
+- As in rc.63, a `Form` uses the current handler when each part runs and the current submit callback
+  when the parts finish. `EntityDialog` then reads the draft and the live form's enabled named
+  controls. Previously populated fields cleared to `undefined` are passed to the save as `unset`.
+- `EntityDialog` stays busy from its first part through the save. Cancel and Escape wait. Closing
+  the dialog or switching records aborts the attempt and clears its draft and field errors. The
+  record is identified by `values._id` or, without an id, by the `values` object itself.
 - A `Form` that unmounts or is hidden by React `Activity` during a save calls
   `onSubmittingChange(false, form)` once. Showing it again allows a new submission. Each attempt's
   parts receive the live form and its `AbortSignal`. After each `await`, a part should check
   `signal.aborted` before touching the form.
 - An unanswered `confirm()` resolves `false` when the last `<Toasts />` leaves, instead of showing
-  later with an old callback.
-- A timed `DateRangePicker` reads back the date and 24-hour time it shows. `parseDayTime` reads a
-  locale's decimal digits in numeric fields. `dateOfDayTime` resolves a skipped time forward and a
-  repeated one to its earlier instant, in the browser's zone and a named one alike.
+  later with an old callback. Closing and reopening a controlled `ConfirmDialog` starts a new
+  question. Only its own confirmation can close it.
+- The From and To inputs of a timed `DateRangePicker` read dates. The time comes from each end's
+  time fields. The separate `parseDayTime` helper reads locale digits and returns `undefined` for
+  ambiguous day-times and unsupported calendars. `dateOfDayTime` resolves a skipped time forward and
+  a repeated one to its earlier instant, in the browser's zone and a named one alike.
 - Date patterns read short months such as `nov.` in French and Portuguese. Digits in quoted text
   stay as written when the parser reads the surrounding date and time.
 - `tableSheet` accepts inline `DataTable` columns with `align` and `render` and infers the row type.
@@ -86,7 +86,7 @@ guides ship with the runtime.
   one empty field (`""`). `copilotz/web/export`'s types need no React.
 - A barcode with no `width` grows to fit its whole modules and quiet margins on screen and in PNG.
   In `documentPdf`, an omitted width uses the space from `x` to the page edge. An undersized
-  explicit width raises a `RangeError` with the minimum required. Printed bars must fit on the page.
+  explicit width grows to the minimum of one unit per module. Printed bars must fit on the page.
   Their quiet margins may extend past the edge. `Drawn` keeps its rc.63 variants and numeric barcode
   `width`. The wider `documentPdf` input also accepts images and barcodes with an omitted width.
 

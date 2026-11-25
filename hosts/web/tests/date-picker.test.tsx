@@ -231,7 +231,7 @@ test("a range to the second: a seconds field at each end, and ends that always h
   assertStringIncludes(html, 'aria-valuenow="30"');
   // An end kept to the minute is at its `:00`.
   assertStringIncludes(html, 'aria-label="Report: 01/11/2026 08:15:30 – 16/11/2026 17:45:00"');
-  // From and To are typed as days, and read a whole day and time typed too.
+  // From and To each show the date alongside its time fields.
   assertStringIncludes(html, 'value="01/11/2026"');
   assertStringIncludes(html, 'value="16/11/2026"');
 });

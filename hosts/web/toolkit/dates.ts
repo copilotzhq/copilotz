@@ -307,7 +307,7 @@ function localeDigits(locale: string): string[] {
 }
 
 /** Reads decimal digits as the locale writes them, keeping ASCII input valid too. */
-export function asciiDigits(text: string, locale: string): string {
+function asciiDigits(text: string, locale: string): string {
   if (!/(?![0-9])\p{Nd}/u.test(text)) return text;
   const digits = localeDigits(locale);
   return text.replace(/\p{Nd}/gu, (digit) => {
@@ -326,15 +326,16 @@ function readPattern(
   text: string,
   pattern: string,
   locale: string,
-  localeSeparators: boolean,
+  syntax: "picker" | "pattern" | "locale",
   interpret: (read: Read) => string | undefined,
-  widths?: { d: number; M: number },
 ): string | undefined {
   const order: string[] = [];
   const tokens = [...pattern.matchAll(TOKENS)];
   const timed = tokens.some(([token]) => TIME_LETTERS.has(token));
+  if (syntax === "picker" && timed) return undefined;
   const seconds = tokens.some(([token]) => token === "ss");
   let source = "";
+  let optionalSeconds = "";
   let last = 0;
   // Where the words since the last letter start, in `source`: what seconds left out take along.
   let words = 0;
@@ -342,8 +343,7 @@ function readPattern(
     source += spaced(pattern.slice(last, end));
   };
   const digits = (kind: string) => {
-    const width = widths && (kind === "d" || kind === "M") ? widths[kind] : "1,2";
-    source += `(\\p{Nd}{${width}})`;
+    source += "(\\p{Nd}{1,2})";
     order.push(kind);
   };
   for (const hit of tokens) {
@@ -352,7 +352,7 @@ function readPattern(
     const token = hit[0];
     if (token[0] === "'") {
       const quoted = token.slice(1, -1);
-      source += localeSeparators ? spaced(quoted).replace(/,/g, ",?") : escaped(quoted);
+      source += syntax === "locale" ? spaced(quoted).replace(/,/g, ",?") : escaped(quoted);
       continue;
     }
     if (token === "yyyy") {
@@ -374,12 +374,14 @@ function readPattern(
       digits("m");
       // Seconds the pattern doesn't write may still be typed.
       if (!seconds) {
-        source += "(?::(\\p{Nd}{1,2}))?";
+        optionalSeconds = ":(\\p{Nd}{1,2})";
+        source += `(?:${optionalSeconds})?`;
         order.push("s");
       }
     } else if (token === "ss") {
       // Seconds may be left out, and the words before them too.
-      source = `${source.slice(0, words)}(?:${source.slice(words)}(\\p{Nd}{1,2}))?`;
+      optionalSeconds = `${source.slice(words)}(\\p{Nd}{1,2})`;
+      source = `${source.slice(0, words)}(?:${optionalSeconds})?`;
       order.push("s");
     } else if (token === "a") {
       source += "(\\p{L}+\\.?(?:\\s?\\p{L}+\\.?)?)";
@@ -388,57 +390,76 @@ function readPattern(
     words = source.length;
   }
   literal(pattern.length);
-  const match = new RegExp(`^${source}$`, "iu").exec(text.trim());
-  if (!match) return undefined;
-  const read: Read = {};
-  let localizedDate = false;
-  for (const [i, kind] of order.entries()) {
-    const token = match[i + 1];
-    if (token === undefined) continue; // seconds left out
-    if (kind === "a") {
-      read.period = token;
-      continue;
-    }
-    if (kind === "MMM" || kind === "MMMM") {
-      const wanted = token.toLowerCase().replace(/\.$/, "");
-      let found: number | undefined;
-      for (let month = 1; month <= 12; month++) {
-        const name = formatPattern(dayOf(2000, month, 1), kind, locale);
-        if (name.toLowerCase().replace(/\.$/, "") !== wanted) continue;
-        if (found !== undefined) return undefined;
-        found = month;
+  const input = text.trim();
+  const match = (expression: string) => new RegExp(`^${expression}$`, "iu").exec(input);
+  const first = match(source);
+  if (!first) return undefined;
+  const readMatch = (captures: RegExpExecArray) => {
+    const read: Read = {};
+    for (const [i, kind] of order.entries()) {
+      const token = captures[i + 1];
+      if (!token) continue; // seconds omitted
+      if (kind === "a") {
+        read.period = token;
+        continue;
       }
-      if (found === undefined) return undefined;
-      read.month = found;
-      continue;
-    }
-    const part = asciiDigits(token, locale);
-    if (part !== token && ["y", "yy", "M", "d"].includes(kind)) localizedDate = true;
-    const value = Number(part);
-    if (!Number.isInteger(value)) return undefined;
-    if (kind === "y") read.year = value;
-    else if (kind === "yy") read.year = part.length === 4 ? value : 2000 + value;
-    else if (kind === "M") read.month = value;
-    else if (kind === "d") read.day = value;
-    else if (kind === "H") read.hour = value;
-    else if (kind === "h") Object.assign(read, { hour: value, twelve: true });
-    else if (kind === "m") read.minute = value;
-    else if (kind === "s") read.second = value;
-  }
-  let value = interpret(read);
-  if (localizedDate && !widths && order.includes("d") && order.includes("M")) {
-    // rc.63 never read locale digits. For that extension, try both widths of each
-    // numeric date field so compact input cannot silently select one of two dates.
-    for (const d of [1, 2]) {
-      for (const M of [1, 2]) {
-        const candidate = readPattern(text, pattern, locale, localeSeparators, interpret, { d, M });
-        if (candidate === undefined) continue;
-        if (value !== undefined && value !== candidate) return undefined;
-        value = candidate;
+      if (kind === "MMM" || kind === "MMMM") {
+        const wanted = token.toLowerCase().replace(/\.$/, "");
+        let found: number | undefined;
+        for (let month = 1; month <= 12; month++) {
+          const name = formatPattern(dayOf(2000, month, 1), kind, locale);
+          if (name.toLowerCase().replace(/\.$/, "") !== wanted) continue;
+          if (found !== undefined) return undefined;
+          found = month;
+          if (syntax === "picker") break;
+        }
+        if (found === undefined) return undefined;
+        read.month = found;
+        continue;
       }
+      const part = syntax === "picker" ? token : asciiDigits(token, locale);
+      const value = Number(part);
+      if (!Number.isInteger(value)) return undefined;
+      if (kind === "y") read.year = value;
+      else if (kind === "yy") read.year = part.length === 4 ? value : 2000 + value;
+      else if (kind === "M") read.month = value;
+      else if (kind === "d") read.day = value;
+      else if (kind === "H") read.hour = value;
+      else if (kind === "h") Object.assign(read, { hour: value, twelve: true });
+      else if (kind === "m") read.minute = value;
+      else if (kind === "s") read.second = value;
     }
-  }
-  return value;
+    return interpret(read);
+  };
+
+  // Keep rc.63's first match for ASCII date-only input. Locale digits and day-times must
+  // have a unique reading, even when adjacent fields have no separator.
+  if (
+    syntax === "picker" || !timed &&
+      !order.some((kind, i) => ["y", "yy", "M", "d"].includes(kind) && /[^0-9]/.test(first[i + 1]))
+  ) return readMatch(first);
+
+  const readings = new Set<string>();
+  const collect = (expression: string) => {
+    if (readings.size > 1) return;
+    const captures = match(expression);
+    if (!captures) return;
+    // Resolve one variable-width numeric capture at a time. A branch ends as soon as it
+    // cannot match the input. Literal braces in a pattern have already been escaped.
+    if (expression.includes("{1,2}")) {
+      collect(expression.replace("{1,2}", "{1}"));
+      collect(expression.replace("{1,2}", "{2}"));
+    } else {
+      const value = readMatch(captures);
+      if (value !== undefined) readings.add(value);
+    }
+  };
+  if (optionalSeconds) {
+    const group = `(?:${optionalSeconds})?`;
+    collect(source.replace(group, () => optionalSeconds));
+    collect(source.replace(group, "()")); // preserve the capture order
+  } else collect(source);
+  return readings.size === 1 ? readings.values().next().value : undefined;
 }
 
 /** The day a reading names, if it's a real one: no February 30th, no 13th month. */
@@ -464,7 +485,12 @@ export function parsePattern(
   localeSeparators = false,
 ): string | undefined {
   if (hasTime(pattern)) return undefined;
-  return readPattern(text, pattern, locale, localeSeparators, dayRead);
+  return readPattern(text, pattern, locale, localeSeparators ? "locale" : "pattern", dayRead);
+}
+
+/** Range inputs keep rc.63's ASCII numeric fields and literal separators. */
+export function parsePickerDay(text: string, pattern: string, locale: string): string | undefined {
+  return readPattern(text, pattern, locale, "picker", dayRead);
 }
 
 /** Whether a pattern shows seconds: a clock that doesn't ticks once a minute. */
@@ -711,7 +737,8 @@ export function dayTimePattern(locale = "en"): string {
  * Seconds may be left out, or typed where the pattern has none; the value has them when the
  * pattern writes them, or when they were typed. Spacing between fields can vary. A locale's
  * generated separators also allow a comma to be left out. Text that isn't a real day and time
- * (February 30th, 25:00, 13 PM) is `undefined`.
+ * (February 30th, 25:00, 13 PM) is `undefined`. Ambiguous input and calendars other than
+ * Gregorian or ISO also return `undefined`.
  *
  * With no pattern, it reads the language's own short date and time (`dayTimePattern`), and a
  * day-time as the toolkit keeps one (`2026-11-16 14:30`, or with a `T`). `locale` is the
@@ -724,21 +751,28 @@ export function parseDayTime(
   locale = "en",
   localeSeparators = pattern === undefined,
 ): DayTime | undefined {
+  let calendar: string;
+  try {
+    calendar = new Intl.DateTimeFormat(locale).resolvedOptions().calendar;
+  } catch {
+    return undefined;
+  }
+  if (calendar !== "gregory" && calendar !== "iso8601") return undefined;
   const typed = text.trim();
   if (pattern === undefined) {
     const kept = typed.replace(/^(\d{4}-\d{2}-\d{2})T/, "$1 ");
     if (isDayTime(kept)) return kept;
   }
   const by = pattern ?? dayTimePattern(locale);
-  return readPattern(typed, by, locale, localeSeparators, (read) => {
+  return readPattern(typed, by, locale, localeSeparators ? "locale" : "pattern", (read) => {
     const day = dayRead(read);
     if (!day || read.hour === undefined) return undefined;
     let hour = read.hour;
+    const pm = read.period === undefined ? undefined : afternoon(read.period, locale);
     if (read.twelve) {
-      const pm = read.period === undefined ? false : afternoon(read.period, locale);
       if (hour < 1 || hour > 12 || pm === undefined) return undefined;
       hour = (hour % 12) + (pm ? 12 : 0);
-    }
+    } else if (read.period !== undefined && pm !== (hour >= 12)) return undefined;
     const minute = read.minute ?? 0;
     if (hour > 23 || minute > 59 || (read.second ?? 0) > 59) return undefined;
     // Seconds the app's pattern writes are always there; the language's, only when typed.

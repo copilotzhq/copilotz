@@ -9,10 +9,16 @@
  * on says where it came from (the socket's peer: `clientAddress`), which
  * what's this machine's alone goes by (dev sign-in). Bun and Deno run it
  * too, through their Node compatibility.
+ *
+ * Serving a runtime's own handler (`runtime.fetch`), it also stops when that
+ * runtime loses its store to another owner (`runtime.lost`): it stops
+ * listening (its sockets close, and clients reconnect, to whoever serves
+ * then) and the process exits with code 1, so the platform starts a new one.
  */
+import process from "node:process";
 import type { Hypervisor } from "@oxian/oxian-js";
 import { serve as oxian } from "@oxian/oxian-js/adapters/node";
-import { upgradeOf } from "../../../runtime/fetch.ts";
+import { lostOf, upgradeOf } from "../../../runtime/fetch.ts";
 
 /** Where to listen. */
 export type ListenOptions = {
@@ -22,7 +28,17 @@ export type ListenOptions = {
   port?: number;
   /** Stops listening when it aborts. */
   signal?: AbortSignal;
+  /**
+   * Said once it has stopped by itself, with the code the process exits
+   * with: the runtime it serves (`runtime.fetch` itself) lost its store, 1.
+   * By default the process exits with it (`process.exit`); an app that has
+   * more to close first says so here, and exits itself.
+   */
+  stopped?: (code: number) => void;
 };
+
+/** What a process does once its server stopped by itself, unless the app says: it exits. */
+const exit = (code: number) => process.exit(code);
 
 /** A server listening: where, when it's done, and how to stop it (runtimes stay the app's). */
 export type Listener = {
@@ -34,12 +50,15 @@ export type Listener = {
   shutdown(): Promise<void>;
 };
 
-/** Serves a fetch handler (`runtime.fetch`): every request, sockets' upgrades included. */
+/**
+ * Serves a fetch handler (`runtime.fetch`): every request, sockets' upgrades
+ * included. A runtime's own handler, lost, stops it and the process (above).
+ */
 export async function listen(
   fetch: (request: Request) => Response | Promise<Response>,
   options: ListenOptions = {},
 ): Promise<Listener> {
-  const { hostname = "127.0.0.1", port = 0, signal } = options;
+  const { hostname = "127.0.0.1", port = 0, signal, stopped = exit } = options;
   // Oxian's adapter asks what it serves only to prepare requests, after asking once if it's open.
   // A runtime's own socket goes to its Hypervisor's decision directly (`upgradeOf`); any other
   // answer, a route's socket included, as it is.
@@ -50,13 +69,29 @@ export async function listen(
     },
     snapshot: () => ({ acceptingConnections: true }),
   };
-  return await oxian({ hypervisor: front as unknown as Hypervisor, hostname, port, signal });
+  const server = await oxian({
+    hypervisor: front as unknown as Hypervisor,
+    hostname,
+    port,
+    signal,
+  });
+  // Stopped already (the app's shutdown, its signal), it's the app's to say how the process ends.
+  let over = false;
+  void server.finished.then(() => over = true, () => over = true);
+  void lostOf(fetch)?.then(async () => {
+    if (over) return;
+    await server.shutdown().catch(() => {});
+    stopped(1);
+  });
+  return server;
 }
 
 /** What `serve` serves: a runtime, or anything that answers requests and closes like one. */
 export type App = {
   fetch(request: Request): Response | Promise<Response>;
   close(options?: { drain?: number }): Promise<void>;
+  /** Resolves if it stops serving by itself: a runtime that lost its store (`runtime.lost`). */
+  lost?: Promise<unknown>;
 };
 
 /** What `serve` gives the lease it holds (`lease` from `copilotz/stores/postgres` takes it all). */
@@ -83,8 +118,10 @@ export type ServeOptions = ListenOptions & {
   /** How long running work gets to finish when it stops, in ms: 8 000 by default. */
   drain?: number;
   /**
-   * Said once it has stopped by itself (it handed over: 0; it lost the lease:
-   * 1) or by its `signal` (0); a process exits with it.
+   * Said once it has stopped by itself (it handed over: 0; it lost the lease,
+   * or the app its store: 1) or by its `signal` (0). By default the process
+   * exits with it (`process.exit`); an app that has more to close first (its
+   * pool) says so here, and exits itself.
    */
   stopped?: (code: number) => void;
 };
@@ -97,7 +134,10 @@ export type ServeOptions = ListenOptions & {
  * process asks for the lease: it stops listening (its sockets close, and
  * browsers reconnect, to the newer process), the app's running work gets
  * `drain` to finish, and the lease goes to whoever waits. A process that
- * loses the lease stops too, rather than write beside another.
+ * loses the lease stops too, rather than write beside another, and so does
+ * one whose app loses its store (`app.lost`: another process opened it,
+ * without a lease or past it): a runtime has stopped serving by then, and
+ * logged why. Stopped by itself, the process exits (`stopped`).
  *
  * It rejects when it stops before the app is open, or the app fails to open.
  * What the app's `open` opened (its pool) stays the app's to close.
@@ -106,7 +146,14 @@ export async function serve<A extends App>(
   open: () => Promise<A>,
   options: ServeOptions = {},
 ): Promise<{ app: A; server: Listener; stop(): Promise<void> }> {
-  const { hold, starting = startingPage, drain = 8_000, stopped, signal, ...where } = options;
+  const {
+    hold,
+    starting = startingPage,
+    drain = 8_000,
+    stopped = exit,
+    signal,
+    ...where
+  } = options;
   signal?.throwIfAborted();
   /** The app once it's open; until then, requests are told it's starting. */
   let app: A | undefined;
@@ -135,7 +182,7 @@ export async function serve<A extends App>(
     if (said) return;
     said = true;
     if (why) (code ? console.error : console.log)(why);
-    void stop().finally(() => stopped?.(code));
+    void stop().finally(() => stopped(code));
   };
   const aborted = () => stopBy(0);
   signal?.addEventListener("abort", aborted, { once: true });
@@ -153,6 +200,8 @@ export async function serve<A extends App>(
     }
     opening = open();
     app = await opening;
+    // It lost its store: it logged so, and answers 503 meanwhile.
+    void app.lost?.then(() => stopBy(1));
   } catch (error) {
     signal?.removeEventListener("abort", aborted);
     await stop();

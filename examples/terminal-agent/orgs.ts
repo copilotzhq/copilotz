@@ -166,3 +166,6 @@ Deno.serve(
   { port, hostname, onListen: () => console.log(`http://${hostname}:${port}`) },
   dir.fetch,
 );
+// The directory's store taken by another process: this one stopped serving, and goes. (An org's
+// runtime losing its own stays in the pool, answering 503: see `runtimes`.)
+void dir.lost.then(() => Deno.exit(1));

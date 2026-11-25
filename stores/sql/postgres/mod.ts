@@ -222,6 +222,9 @@ export async function postgresStore(options: {
   // A pool of its own holds what a store alone may need: an owner's commits run together.
   const pool = options.pool ?? await postgresPool({ url: options.url!, writes: 5, reads: 5 });
   const schema = options.schema ?? "copilotz";
+  /** Which store this is, in what a fenced owner logs: never its URL, which may hold a password. */
+  const which = `postgres schema ${JSON.stringify(schema)}` +
+    (tenant ? `, tenant ${JSON.stringify(tenant)}` : "");
   const t = (table: string) => `${ident(schema)}.${table}`;
   /** This store's tenant, as SQL: every statement names it. */
   const T = constant(tenant);
@@ -1021,7 +1024,7 @@ export async function postgresStore(options: {
           : ""),
       params,
     );
-    if (Number(row.epoch) !== owner) throw fenced();
+    if (Number(row.epoch) !== owner) throw fenced(which, Number(row.epoch));
     return committedEvents(emitted, at, (row.inserted ?? []) as { id: string; seq: number }[]);
   };
 
@@ -1247,7 +1250,7 @@ export async function postgresStore(options: {
         // A duplicate _id fails the statement on the primary key.
         throw await conflict(error, inserted);
       }
-      if (Number(row.epoch) !== owner) throw fenced();
+      if (Number(row.epoch) !== owner) throw fenced(which, Number(row.epoch));
       const events = ((row.events ?? []) as Row[]).map((e): Event => ({
         seq: Number(e.seq),
         id: String(e.id),
@@ -1327,7 +1330,7 @@ export async function postgresStore(options: {
         const [fence] = (await db.query(
           `SELECT value FROM ${t("meta")} WHERE tenant = ${T} AND key = 'epoch' FOR SHARE`,
         )).rows;
-        if (Number(fence?.value) !== owner) throw fenced();
+        if (Number(fence?.value) !== owner) throw fenced(which, Number(fence?.value));
         const emitted: Omit<Event, "seq" | "at">[] = [];
         const held: Held = { docs: [], blobs: [] };
         const scope = transaction(db, emitted, held, true);
@@ -1394,7 +1397,7 @@ export async function postgresStore(options: {
                   tx,
                   `SELECT value FROM ${t("meta")} WHERE tenant = ${T} AND key = 'epoch' FOR SHARE`,
                 );
-                if (Number(fence?.value) !== owner) throw fenced();
+                if (Number(fence?.value) !== owner) throw fenced(which, Number(fence?.value));
                 ready.resolve(tx);
                 await done.promise;
               });
@@ -1424,7 +1427,7 @@ export async function postgresStore(options: {
                 writer,
                 `SELECT value FROM ${t("meta")} WHERE tenant = ${T} AND key = 'epoch'`,
               );
-              if (Number(fence?.value) !== owner) throw fenced();
+              if (Number(fence?.value) !== owner) throw fenced(which, Number(fence?.value));
               return { result, events: [] };
             }
             const tx = await open.tx;

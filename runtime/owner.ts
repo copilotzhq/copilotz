@@ -152,6 +152,14 @@ export type Stats = {
   misses: number;
 };
 
+/** What `Owner.lost` resolves with: another owner took the store, and this one stopped. */
+export type Lost = {
+  /** The epoch this owner held: a newer owner's `open` moved the store past it. */
+  epoch: number;
+  /** The line it logged: which store, the epoch each holds, and that it stopped serving. */
+  message: string;
+};
+
 /** A large value's bytes (see `Owner.bytes`): how many, and a part of them. */
 export type Bytes = {
   size: number;
@@ -296,10 +304,29 @@ export type Owner<
     ): Promise<WorkerJob>;
   };
   /**
+   * Resolves once another owner has taken the store: a process that opened
+   * it since (a newer deploy, a second instance) moved its fencing epoch,
+   * and this owner found out, at its next write or within `fenceCheck` ms
+   * while idle. By then it has stopped serving, for good: every request gets
+   * a 503 with `retry-after` (sockets and `/health` too); its sockets are
+   * moved off, so browsers and executors reconnect later, to whoever serves
+   * then; its executors and workers are let go; its timers and Processors
+   * stop; nothing more goes to the store; and it has logged one line saying
+   * which store, the epochs, and that it stopped. `close()` after it only
+   * waits for that.
+   *
+   * What's left is the host's: `serve` and `listen` (`copilotz/web/node`)
+   * exit the process with code 1, so the platform starts a new one; a pool
+   * (`runtimes`) keeps it answering 503 a while (see runtimes.ts). Never
+   * resolves for an owner that keeps its store.
+   */
+  lost: Promise<Lost>;
+  /**
    * Stops. No Processor delivery or timer occurrence starts; those running
    * get `drain` ms (5 s by default) to finish, then stop where they are. A
    * delivery that didn't finish keeps its Processor's cursor before its
-   * event, so the next owner delivers it again (`retry`).
+   * event, so the next owner delivers it again (`retry`). Closing again, or
+   * after `lost`, waits for the same stop.
    */
   close(options?: { drain?: number }): Promise<void>;
 };
@@ -327,6 +354,10 @@ const DELIVERY_ATTEMPTS = 3;
 const DRAIN_MS = 5_000;
 /** How long a worker welcomed has to say it's ready (ms) before its connection closes. */
 const READY_MS = 10_000;
+/** How often an owner that hasn't committed since makes sure it still holds its store (ms). */
+const FENCE_CHECK_MS = 5_000;
+/** How long a lost owner lets its connections move off before it shuts the rest (ms). */
+const MOVE_MS = 1_000;
 
 const aborted = Object.freeze({ aborted: true });
 
@@ -395,9 +426,21 @@ export async function createOwner(
      * `false` tells nothing.
      */
     warn?: ((message: string) => void) | false;
+    /**
+     * How often an owner that hasn't committed since makes sure it still
+     * holds its store, in ms (5 000 by default): an empty fenced transaction,
+     * which another owner's `open` makes fail, so an idle owner finds out it
+     * was taken over (`lost`) without waiting for its next write. On the
+     * `clock`. `false` never checks: a store no other process can open.
+     */
+    fenceCheck?: number | false;
   },
 ): Promise<Owner> {
   const { store } = options;
+  const fenceCheck = options.fenceCheck ?? FENCE_CHECK_MS;
+  if (fenceCheck !== false && !(typeof fenceCheck === "number" && fenceCheck > 0)) {
+    throw invalid("fenceCheck is a number of milliseconds over 0, or false");
+  }
   const limited = limitsProblem(options.browsers);
   if (limited) throw invalid(limited);
   const registry = merge(options.plugins);
@@ -646,6 +689,36 @@ export async function createOwner(
   const unsaved = new Map<string, number>();
   let flushing: ReturnType<typeof setTimeout> | undefined;
 
+  /** Once another owner took the store: what every caller is refused with from then on. */
+  let lostWith: { error: Error; lost: Lost } | undefined;
+  const losing = Promise.withResolvers<Lost>();
+  /**
+   * What finding the store lost does (it stops everything: given below, once
+   * all it stops is made). Lost before then, the owner just fails to start.
+   */
+  let lose: (error: Error) => void = () => {};
+  /** Whether a commit went through since the last fence check: it checked the fence itself. */
+  let committedSince = false;
+  /** Refuses anything once the store is lost: nothing more goes to it. */
+  const alive = () => {
+    if (lostWith) throw lostWith.error;
+  };
+  /**
+   * A commit to the store, as every write goes: refused once the store is
+   * lost, and a `fenced` failure means it just was.
+   */
+  const fenced = async <T>(commit: () => Promise<T>): Promise<T> => {
+    alive();
+    try {
+      const done = await commit();
+      committedSince = true;
+      return done;
+    } catch (error) {
+      if ((error as { code?: unknown } | null)?.code === "fenced") lose(error as Error);
+      throw error;
+    }
+  };
+
   /**
    * One store transaction = one owner command. Committed events go out at once.
    * `cursors: false` keeps a commit that only records events from carrying
@@ -659,9 +732,11 @@ export async function createOwner(
     const seen: Seen = [];
     const started = performance.now();
     const durable = (staged?: Transaction) =>
-      store.transaction(epoch, (tx) => work(tx, seen, staged), {
-        ...(saving.length ? { positions: Object.fromEntries(saving) } : {}),
-      });
+      fenced(() =>
+        store.transaction(epoch, (tx) => work(tx, seen, staged), {
+          ...(saving.length ? { positions: Object.fromEntries(saving) } : {}),
+        })
+      );
     // The private memory store publishes its staged changes only when the durable commit returns.
     // It has a single owner and writer, so applying that validated layer cannot be fenced.
     const { result, events } = withMemory && memory
@@ -787,6 +862,7 @@ export async function createOwner(
       // Blobs kept elsewhere are written before anything can refer to them.
       if (options.blobs) await Promise.all(blobs.map((blob) => options.blobs!.put(blob)));
       const saving: [string, number][] = [...unsaved];
+      alive();
       const run = store.command(epoch, {
         steps,
         ...(cause ? { cause } : {}),
@@ -796,7 +872,7 @@ export async function createOwner(
       });
       if (run) {
         const started = performance.now();
-        const { results, events, changes } = await run;
+        const { results, events, changes } = await fenced(() => run);
         measure.commits.record(performance.now() - started, { path: "command" });
         const seen: Seen = writes.flatMap((op, i) =>
           "collection" in op ? [[op.collection, changes[i] ?? []] as [string, Change[]]] : []
@@ -1633,6 +1709,7 @@ export async function createOwner(
 
   const handle = async (request: OpRequest, job: string): Promise<unknown> => {
     calls++;
+    alive();
     const [first] = request.ops;
     if (first?.op === "cancel") {
       if ("tx" in request || request.ops.length !== 1) throw invalid("A cancel goes on its own.");
@@ -1697,6 +1774,8 @@ export async function createOwner(
   const admit: HypervisorOptions["admit"] = async (
     { identity, credential, workloads, capacity },
   ) => {
+    // A lost owner lets nobody in, its own executors coming back included.
+    alive();
     const secret = String(credential.capability);
     const worker = await workerOf(credential);
     if (worker) {
@@ -1805,6 +1884,8 @@ export async function createOwner(
   };
 
   const ready = new Set<string>();
+  /** Every connection that's ready, of any kind, and the worker on it: what a lost owner moves off. */
+  const linked = new Map<string, string>();
   const hypervisor = createHypervisor({
     transports,
     // Its own admission: anyone but its in-process executors may connect, over its socket.
@@ -1855,6 +1936,7 @@ export async function createOwner(
       browsers.take(fence.identity.workerId, fence.connectionId, definition.providerConfig);
     },
     onReady: ({ fence, definition }) => {
+      linked.set(fence.connectionId, fence.identity.workerId);
       if (definition.providerId === BROWSER) {
         return browsers.ready(fence.identity.workerId, fence.connectionId);
       }
@@ -1868,6 +1950,7 @@ export async function createOwner(
       measure.executors.set(ready.size);
     },
     onDisconnect: ({ fence, definition }) => {
+      linked.delete(fence.connectionId);
       browsers.gone(fence.identity.workerId, fence.connectionId);
       if (definition.providerId.startsWith("worker:")) {
         const { kind, id } = definition.providerConfig as { kind: string; id: string };
@@ -1893,7 +1976,14 @@ export async function createOwner(
     watch: (remote, actor) => observers.observe(READ_VIEW, remote, { actor }),
   });
   // The runtime as a fetch handler: its socket, `/connect`, `/api/`, and plugins' routes.
-  const http = createFetch({ registry, runtime: () => api, tickets, hypervisor, api: rest });
+  const http = createFetch({
+    registry,
+    runtime: () => api,
+    tickets,
+    hypervisor,
+    api: rest,
+    lost: { now: () => lostWith !== undefined, promise: losing.promise },
+  });
   /**
    * A worker kind's Action hears one come or go, as the system; its failure
    * is only logged. Closing waits for what it's telling.
@@ -2052,6 +2142,8 @@ export async function createOwner(
       throw Object.assign(new Error("Cancelled"), { code: "cancelled", recorded: !!outcome });
     }
     if (!outcome) {
+      // Cut short because another owner took the store: that's what it says.
+      if (lostWith) throw lostWith.error;
       // The job started and its executor went away: the work may be partly done.
       const reason = lost instanceof Error ? lost.message : "it ended without a result";
       throw Object.assign(new Error(`The executor was lost: ${reason}`), { code: "executor_lost" });
@@ -2326,6 +2418,99 @@ export async function createOwner(
     }
   }
 
+  /** Its stop, once begun: closing again, or once it's lost, waits for the same one. */
+  let stopped: Promise<void> | undefined;
+  const clock = options.clock ?? systemClock;
+  /** Cancels the next fence check (see `arm`). */
+  let unarm: (() => void) | undefined;
+  /**
+   * Stops (see `Owner.close`). A lost owner stops at once and leaves the
+   * store as it is: it saves no cursor and tells no worker kind anything
+   * (the owner that took the store does both), and it moves its connections
+   * off (Oxian's drain: each worker connects again, later, to whoever
+   * answers then) rather than ending them.
+   */
+  const stop = (drain: number): Promise<void> =>
+    stopped ??= (async () => {
+      // What's running (deliveries, timer occurrences) gets a while to finish,
+      // workers still there to serve it; nothing new starts.
+      draining.abort();
+      timers.close();
+      unarm?.();
+      if (drain > 0 && pending && !lostWith) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([
+          (async () => {
+            while (pending) await drained.promise;
+          })(),
+          new Promise((resolve) => timer = setTimeout(resolve, drain)),
+          // Lost while it waits: what's running can't commit anyway.
+          losing.promise,
+        ]);
+        clearTimeout(timer);
+      }
+      // Workers still connected go with it: their kinds hear so while it still runs.
+      if (!lostWith) {
+        for (const [kind, id] of connected.all()) tell(registry.workers[kind]?.gone, id);
+      }
+      connected.clear();
+      await Promise.all(telling);
+      closing.abort();
+      clearTimeout(flushing);
+      // A browser's session is a stream that never ends on its own: end them, so the
+      // shutdown's drain doesn't wait them out.
+      browsers.close();
+      rest.close();
+      resumed.close();
+      tickets.close();
+      if (lostWith) {
+        // Sent elsewhere, they come back when someone serves (until then, `fetch` answers 503).
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([
+          Promise.allSettled([...linked.values()].map((id) => hypervisor.drain(id, "lost"))),
+          new Promise((resolve) => timer = setTimeout(resolve, MOVE_MS)),
+        ]);
+        clearTimeout(timer);
+      }
+      await hypervisor.shutdown();
+      // Processors' last positions are saved if they can be (a fenced owner can't): the store
+      // closes either way, and a failure still reaches the caller.
+      try {
+        if (unsaved.size && !lostWith) await commit(async () => {});
+      } finally {
+        await store.close();
+      }
+    })();
+
+  lose = (error) => {
+    if (lostWith) return;
+    const message = `${error.message} It held epoch ${epoch}, and stopped serving: every ` +
+      "request gets 503 from now on.";
+    lostWith = { error, lost: { epoch, message } };
+    console.error(`copilotz: ${message}`);
+    losing.resolve(lostWith.lost);
+    void stop(0).catch(() => {});
+  };
+
+  // Idle, it makes sure now and then that it still holds the store: see `fenceCheck`.
+  const arm = () => {
+    if (fenceCheck === false || stopped) return;
+    unarm = clock.wake(clock.now() + fenceCheck, () => {
+      unarm = undefined;
+      void checkFence();
+    });
+  };
+  const checkFence = async () => {
+    if (stopped) return;
+    // A commit since checked the fence itself. A check that fails otherwise (the database away
+    // a moment) isn't a loss: the next one tries again.
+    if (!committedSince) {
+      await fenced(() => store.transaction(epoch, () => Promise.resolve())).catch(() => {});
+    }
+    committedSince = false;
+    arm();
+  };
+
   // Recover: resume every Processor from its durable cursor, then every timer.
   for (const [name, seq] of Object.entries(await store.positions())) saved.set(name, seq);
   const from = Math.min(
@@ -2342,10 +2527,19 @@ export async function createOwner(
     recovering = false;
   }
   await timers.recover();
+  arm();
 
   const api: Owner<string, string> = {
     maintenance: createMaintenance({
-      store,
+      // Its writes commit as the owner's do: fenced, and refused once the store is lost.
+      store: {
+        transaction: (owner, work, options) =>
+          fenced(() => store.transaction(owner, work, options)),
+        ...(store.inspect
+          ? { inspect: (sql, params, options) => store.inspect!(sql, params, options) }
+          : {}),
+        blob: (id) => store.blob(id),
+      },
       epoch,
       blobs: options.blobs,
       blobThreshold: options.blobThreshold,
@@ -2360,6 +2554,7 @@ export async function createOwner(
     }),
     workers: {
       async dispatch(kind, id, workload, body, options = {}) {
+        alive();
         const def = registry.workers[kind];
         if (!def || !def.workloads.includes(workload)) {
           throw invalid(`No ${kind} work "${workload}"`);
@@ -2386,6 +2581,7 @@ export async function createOwner(
       },
     },
     async call(action, input, options = {}) {
+      alive();
       const def = registry.actions[action];
       if (!def) throw unknown("action", action, Object.keys(registry.actions));
       const { actor } = options;
@@ -2408,6 +2604,7 @@ export async function createOwner(
       return begin(action, given, id, options.id !== undefined, undefined, actor) as never;
     },
     async render(name, item, options = {}) {
+      alive();
       return await run({
         kind: "render",
         view: name,
@@ -2417,9 +2614,11 @@ export async function createOwner(
       }) as never;
     },
     observe: (name, item, options) =>
-      // Rendered here for an actor with a scope (a key), the View is one it lists.
-      options?.actor && options.actor.kind !== "system" &&
-        !inScope(options.actor, "view", name)
+      lostWith
+        ? refusedView(lostWith.error)
+        // Rendered here for an actor with a scope (a key), the View is one it lists.
+        : options?.actor && options.actor.kind !== "system" &&
+            !inScope(options.actor, "view", name)
         ? refusedView(
           forbidden(
             `${options.actor.kind} ${options.actor.id} may not see "${name}": not in its scope.`,
@@ -2429,6 +2628,7 @@ export async function createOwner(
     emit,
     describe: () => described(registry),
     async query(name, params, options = {}) {
+      alive();
       const dot = name.lastIndexOf(".");
       const [collection, query] = [name.slice(0, dot), name.slice(dot + 1)];
       if (!registry.collections[collection]?.queries?.[query]) {
@@ -2449,6 +2649,7 @@ export async function createOwner(
       }) as never;
     },
     async bytes(collection, filter, field, options = {}) {
+      alive();
       const op: ReadOp = {
         op: "findOne",
         collection,
@@ -2511,44 +2712,10 @@ export async function createOwner(
       misses: cache?.stats().misses ?? 0,
     }),
     hypervisor,
-    fetch: (request, info) => http.fetch(request, info),
-    async close(options = {}) {
-      // What's running (deliveries, timer occurrences) gets a while to finish,
-      // workers still there to serve it; nothing new starts.
-      draining.abort();
-      timers.close();
-      const drain = options.drain ?? DRAIN_MS;
-      if (drain > 0 && pending) {
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        await Promise.race([
-          (async () => {
-            while (pending) await drained.promise;
-          })(),
-          new Promise((resolve) => timer = setTimeout(resolve, drain)),
-        ]);
-        clearTimeout(timer);
-      }
-      // Workers still connected go with it: their kinds hear so while it still runs.
-      for (const [kind, id] of connected.all()) tell(registry.workers[kind]?.gone, id);
-      connected.clear();
-      await Promise.all(telling);
-      closing.abort();
-      clearTimeout(flushing);
-      // A browser's session is a stream that never ends on its own: end them, so the
-      // shutdown's drain doesn't wait them out.
-      browsers.close();
-      rest.close();
-      resumed.close();
-      tickets.close();
-      await hypervisor.shutdown();
-      // Processors' last positions are saved if they can be (a fenced owner can't): the store
-      // closes either way, and a failure still reaches the caller.
-      try {
-        if (unsaved.size) await commit(async () => {});
-      } finally {
-        await store.close();
-      }
-    },
+    // Its own handler, as made: a listener knows it's this runtime's (see `lostOf`).
+    fetch: http.fetch,
+    lost: losing.promise,
+    close: (options = {}) => stop(options.drain ?? DRAIN_MS),
   };
   return api;
 }

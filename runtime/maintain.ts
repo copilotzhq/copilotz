@@ -90,7 +90,8 @@ const conflict = (id: string) =>
   });
 
 export function createMaintenance(env: {
-  store: Store;
+  /** What of the store it uses: its writes commit as the owner's do (fenced). */
+  store: Pick<Store, "transaction" | "inspect" | "blob">;
   epoch: number;
   blobs?: Blobs;
   blobThreshold?: number;

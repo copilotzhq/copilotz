@@ -50,6 +50,13 @@ export async function createRuntime(
      * `false` tells nothing.
      */
     warn?: ((message: string) => void) | false;
+    /**
+     * How often, in ms, an owner that hasn't committed lately makes sure it
+     * still holds its store (5 000 by default), so an idle one finds out
+     * another took it over (`runtime.lost`); `false` never checks, for a
+     * store no other process can open.
+     */
+    fenceCheck?: number | false;
   },
 ): Promise<Runtime> {
   const transport = {
@@ -72,6 +79,7 @@ export async function createRuntime(
     clock: options.clock,
     fetch: options.fetch,
     ...(options.warn !== undefined ? { warn: options.warn } : {}),
+    ...(options.fenceCheck !== undefined ? { fenceCheck: options.fenceCheck } : {}),
   });
   const executors = Array.from(
     { length: options.executors ?? 1 },
@@ -86,6 +94,10 @@ export async function createRuntime(
       }),
   );
   await Promise.all(executors.map((executor) => executor.ready));
+  let stopping: Promise<unknown> | undefined;
+  const stop = () => stopping ??= Promise.all(executors.map((executor) => executor.stop()));
+  // Lost, the owner stops by itself: so do these, at once (there's nothing left to run).
+  void owner.lost.then(stop);
   return {
     ...owner,
     async close(options) {
@@ -94,7 +106,7 @@ export async function createRuntime(
       try {
         await owner.close(options);
       } finally {
-        await Promise.all(executors.map((executor) => executor.stop()));
+        await stop();
       }
     },
   };

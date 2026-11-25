@@ -299,7 +299,7 @@ export function memoryStore(): Store {
     positions: () => Promise.resolve(Object.fromEntries(positions)),
     transaction(owner, work, options = {}) {
       const run = async () => {
-        if (owner !== epoch) throw fenced();
+        if (owner !== epoch) throw fenced(undefined, epoch);
         const layer: Layer = {
           docs: new Map(),
           edges: new Map(),
@@ -308,7 +308,7 @@ export function memoryStore(): Store {
           events: [],
         };
         const result = await work(transaction(layer));
-        if (owner !== epoch) throw fenced();
+        if (owner !== epoch) throw fenced(undefined, epoch);
         for (const [collection, docs] of layer.docs) {
           if (!collections.has(collection)) {
             collections.set(collection, new Map());

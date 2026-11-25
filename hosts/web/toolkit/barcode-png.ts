@@ -7,7 +7,5 @@ export async function barcodePng(
   options: BarcodeOptions & { width?: number; height?: number } = {},
 ): Promise<Uint8Array> {
   const drawn = bars(value, options.width, { quiet: true, ...options });
-  const row = new Uint8Array(drawn.width).fill(255);
-  for (const { x, w } of drawn.bars) row.fill(0, x, x + w);
-  return await stripePng(row, options.height ?? 50);
+  return await stripePng(drawn.width, options.height ?? 50, drawn.bars);
 }

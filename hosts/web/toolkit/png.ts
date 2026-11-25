@@ -37,8 +37,14 @@ function checkRaster(width: number, height: number, stride: number) {
 }
 
 /** Makes an opaque 8-bit grayscale PNG by repeating one scanline for a barcode. */
-export async function stripePng(row: Uint8Array, height: number): Promise<Uint8Array> {
-  checkRaster(row.length, height, row.length);
+export async function stripePng(
+  width: number,
+  height: number,
+  bars: { x: number; w: number }[],
+): Promise<Uint8Array> {
+  checkRaster(width, height, width);
+  const row = new Uint8Array(width).fill(255);
+  for (const { x, w } of bars) row.fill(0, x, x + w);
   const header = new Uint8Array(13);
   view(header).setUint32(0, row.length);
   view(header).setUint32(4, height);
@@ -57,6 +63,7 @@ export async function stripePng(row: Uint8Array, height: number): Promise<Uint8A
 export function readPng(bytes: Uint8Array) {
   if (!signature.every((b, i) => b === bytes[i])) throw new Error("Expected PNG or JPEG bytes.");
   let width = 0, height = 0, bits = 0, kind = 0, channels = 0;
+  let interlaced = false;
   let palette: Uint8Array | undefined, transparency: Uint8Array | undefined;
   const parts: Uint8Array[] = [];
   const data = view(bytes);
@@ -75,11 +82,12 @@ export function readPng(bytes: Uint8Array) {
       bits = part[8];
       kind = part[9];
       channels = [1, 0, 3, 1, 2, 0, 4][kind];
+      interlaced = part[12] === 1;
       if (
-        !channels || part[10] || part[11] || part[12] ||
+        !channels || part[10] || part[11] || part[12] > 1 ||
         !(bits === 8 || ((kind === 3 || kind === 0) && [1, 2, 4].includes(bits)))
       ) {
-        throw new Error("Unsupported PNG encoding. Use a non-interlaced, 8-bit PNG.");
+        throw new Error("Unsupported PNG encoding. Use an 8-bit PNG.");
       }
       checkRaster(width, height, Math.ceil(width * channels * bits / 8));
     } else if (!width) throw new Error("Missing PNG header.");
@@ -99,7 +107,17 @@ export function readPng(bytes: Uint8Array) {
         !(kind === 0 && transparency.length === 2 || kind === 2 && transparency.length === 6 ||
           kind === 3 && transparency.length <= palette!.length / 3)
       ) throw new Error("Invalid PNG transparency.");
-      return { width, height, bits, kind, channels, palette, transparency, data: join(parts) };
+      return {
+        width,
+        height,
+        bits,
+        kind,
+        channels,
+        interlaced,
+        palette,
+        transparency,
+        data: join(parts),
+      };
     }
     at = end + 4;
   }
@@ -112,28 +130,16 @@ function paeth(left: number, above: number, corner: number) {
   return a <= b && a <= c ? left : b <= c ? above : corner;
 }
 
-/** Inflates and reverses PNG's five row filters. Packed samples stay packed. */
-export async function pngPixels(png: ReturnType<typeof readPng>): Promise<Uint8Array> {
-  const { width, height, channels, bits, data } = png;
-  const stride = Math.ceil(width * channels * bits / 8), step = Math.ceil(channels * bits / 8);
-  const scans = new Uint8Array((stride + 1) * height);
-  const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate"));
-  let at = 0;
-  for await (const part of stream) {
-    if (at + part.length > scans.length) throw new Error("Extra PNG scanlines.");
-    scans.set(part, at);
-    at += part.length;
-  }
-  if (at !== scans.length) throw new Error("Incomplete PNG scanlines.");
-  const out = new Uint8Array(stride * height);
+/** Undo the row filters of a single pass, in place, retaining each row's leading filter byte. */
+function unfilter(scans: Uint8Array, height: number, stride: number, step: number) {
   for (let y = 0; y < height; y++) {
     const start = y * (stride + 1), filter = scans[start];
     if (filter > 4) throw new Error("Invalid PNG filter.");
     for (let x = 0; x < stride; x++) {
-      const i = y * stride + x;
-      const left = x >= step ? out[i - step] : 0;
-      const above = y ? out[i - stride] : 0;
-      const corner = x >= step && y ? out[i - stride - step] : 0;
+      const i = start + 1 + x;
+      const left = x >= step ? scans[i - step] : 0;
+      const above = y ? scans[i - stride - 1] : 0;
+      const corner = x >= step && y ? scans[i - stride - 1 - step] : 0;
       const predictor = filter === 0
         ? 0
         : filter === 1
@@ -143,7 +149,64 @@ export async function pngPixels(png: ReturnType<typeof readPng>): Promise<Uint8A
         : filter === 3
         ? Math.floor((left + above) / 2)
         : paeth(left, above, corner);
-      out[i] = scans[start + 1 + x] + predictor;
+      scans[i] += predictor;
+    }
+  }
+}
+
+// Adam7's starting column and row, then the steps to this pass's next column and row.
+const ADAM7 = [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [
+  0,
+  1,
+  1,
+  2,
+]];
+
+/** Inflates and reverses PNG's row filters and interlacing. Packed samples stay packed. */
+export async function pngPixels(png: ReturnType<typeof readPng>): Promise<Uint8Array> {
+  const { width, height, channels, bits, data } = png;
+  const pixelBits = channels * bits, step = Math.ceil(pixelBits / 8);
+  const stride = Math.ceil(width * pixelBits / 8);
+  const passes = (png.interlaced ? ADAM7 : [[0, 0, 1, 1]]).map(([x, y, dx, dy]) => {
+    const cols = Math.max(0, Math.ceil((width - x) / dx)),
+      rows = Math.max(0, Math.ceil((height - y) / dy));
+    const packed = Math.ceil(cols * pixelBits / 8);
+    return { x, y, dx, dy, cols, rows, packed, size: cols ? (packed + 1) * rows : 0 };
+  });
+  const scans = new Uint8Array(passes.reduce((n, p) => n + p.size, 0));
+  const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate"));
+  let at = 0;
+  for await (const part of stream) {
+    if (at + part.length > scans.length) throw new Error("Extra PNG scanlines.");
+    scans.set(part, at);
+    at += part.length;
+  }
+  if (at !== scans.length) throw new Error("Incomplete PNG scanlines.");
+  const out = new Uint8Array(stride * height);
+  let offset = 0;
+  for (const pass of passes) {
+    if (!pass.size) continue;
+    const filtered = scans.subarray(offset, offset + pass.size);
+    unfilter(filtered, pass.rows, pass.packed, step);
+    offset += pass.size;
+    for (let r = 0; r < pass.rows; r++) {
+      const start = r * (pass.packed + 1) + 1;
+      const line = filtered.subarray(start, start + pass.packed);
+      const dest = (pass.y + r * pass.dy) * stride;
+      if (pass.dx === 1) {
+        out.set(line, dest);
+        continue;
+      }
+      for (let c = 0; c < pass.cols; c++) {
+        const col = pass.x + c * pass.dx;
+        if (pixelBits >= 8) {
+          for (let b = 0; b < step; b++) out[dest + col * step + b] = line[c * step + b];
+        } else {
+          const sample = line[Math.floor(c * bits / 8)] >> (8 - bits - c * bits % 8) &
+            ((1 << bits) - 1);
+          out[dest + Math.floor(col * bits / 8)] |= sample << (8 - bits - col * bits % 8);
+        }
+      }
     }
   }
   return out;

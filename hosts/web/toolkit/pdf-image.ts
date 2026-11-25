@@ -73,11 +73,16 @@ export async function pdfImage(source: Uint8Array | string): Promise<PdfImage> {
     palette: kind === 3 ? png.palette : undefined,
     predictor: true,
   };
-  if (!hasAlpha && !transparency) return image;
+  if (!png.interlaced && !hasAlpha && !transparency) return image;
   if (width * height > 256 * 1024 * 1024) {
     throw new RangeError("Unsupported alpha mask dimensions.");
   }
   const pixels = await pngPixels(png);
+  if (png.interlaced && !hasAlpha) {
+    image.data = await deflate(pixels);
+    image.predictor = false;
+  }
+  if (!hasAlpha && !transparency) return image;
   const alpha = new Uint8Array(width * height);
   if (hasAlpha) {
     const samples = new Uint8Array(alpha.length * colors);

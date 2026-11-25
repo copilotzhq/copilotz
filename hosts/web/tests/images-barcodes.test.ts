@@ -157,3 +157,20 @@ test("document images preserve JPEG bytes, PNG predictors and transparency", asy
   }
   await assertRejects(() => pdfImage(bytes(images.rgba).slice(0, -5)));
 });
+
+test("Adam7 interlacing restores packed palette and RGBA pixels before embedding", async () => {
+  const palette = await pdfImage(
+    bytes(
+      "iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFAQMAAAHApoQwAAAABlBMVEUAAAD///+l2Z/dAAAAEUlEQVR4nGNgQAIHwHAFwwoAEnYDkdMg+x8AAAAASUVORK5CYII=",
+    ),
+  );
+  assertEquals([...await inflate(palette.data)], [80, 168, 80, 168, 80]);
+  const image = await pdfImage(
+    bytes(
+      "iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFCAYAAAH6aBZzAAAAd0lEQVR4nGNgYGRiZhAQFBJmCAgMCk5ITEpm4ODk4maIiIyKZtDQ1NI2MDQytrC0smZgYWVj5+Hl42fQ0dXTNzE1M2cICQ0Lj4mNi2cQERUTl5CUkpaRlZNXUFRSVlFVU2ewsbWzd3B0cnZxdXP38PTy9vH18wcAxOoTVxZnPGwAAAAASUVORK5CYII=",
+    ),
+  );
+  const samples = Array.from({ length: 100 }, (_, i) => i);
+  assertEquals([...await inflate(image.data)], samples.filter((i) => i % 4 !== 3));
+  assertEquals([...await inflate(image.alpha!)], samples.filter((i) => i % 4 === 3));
+});

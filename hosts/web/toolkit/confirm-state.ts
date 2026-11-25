@@ -5,8 +5,9 @@
  * `<Toasts />` shows one at a time (see confirm-dialog.tsx).
  */
 import type { ReactNode } from "react";
+import { say } from "./words.ts";
 import { wordsOf } from "./form-submit.ts";
-import { toastState } from "./toast-state.ts";
+import { subscribe, toast, toastState } from "./toast-state.ts";
 
 /** What a confirm dialog asks, and what confirming does. */
 export type ConfirmOptions = {
@@ -55,7 +56,12 @@ export async function runConfirm(
 }
 
 /** A question `confirm()` asked, waiting for its answer. */
-export type Asked = { id: number; options: ConfirmOptions; answer(yes: boolean): void };
+export type Asked = {
+  id: number;
+  options: ConfirmOptions;
+  state: Confirming;
+  answer(yes: boolean): void;
+};
 
 let asked: Asked[] = [];
 let nextId = 1;
@@ -71,6 +77,13 @@ export const subscribeAsked = (listener: () => void): () => void => {
   listeners.add(listener);
   return () => listeners.delete(listener);
 };
+
+// A question can move to another mounted host. When the last one leaves, discard its queue.
+subscribe(() => {
+  if (toastState().shownBy === undefined) {
+    for (const question of asked) question.answer(false);
+  }
+});
 
 /** The questions waiting, the first one shown (`useSyncExternalStore`'s snapshot). */
 export const askedNow = (): Asked[] => asked;
@@ -105,12 +118,34 @@ export function confirm(options: ConfirmOptions): Promise<boolean> {
     | null;
   return new Promise((resolve) => {
     const id = nextId++;
-    const answer = (yes: boolean) => {
-      if (!asked.some((a) => a.id === id)) return;
-      emit(asked.filter((a) => a.id !== id));
-      if (from?.isConnected) from.focus?.();
-      resolve(yes);
+    const waiting = () => asked.some((a) => a.id === id);
+    const remove = () => emit(asked.filter((a) => a.id !== id));
+    let running = false;
+    const answer = async (yes: boolean) => {
+      if (!waiting()) return;
+      if (!yes) {
+        if (running && toastState().shownBy !== undefined) return;
+        remove();
+        // A confirmed operation already running still owes its caller the outcome.
+        if (!running) resolve(false);
+      } else {
+        if (running || asked[0]?.id !== id) return;
+        running = true;
+        const finished = await runConfirm(options.onConfirm, (state) => {
+          if (waiting()) emit(asked.map((q) => q.id === id ? { ...q, state } : q));
+        }, say("notDone"));
+        running = false;
+        if (!waiting()) {
+          resolve(finished);
+          return;
+        }
+        if (!finished) return;
+        remove();
+        if (options.toast) toast(options.toast, "success");
+        resolve(true);
+      }
+      if (from?.isConnected && toastState().shownBy !== undefined) from.focus?.();
     };
-    emit([...asked, { id, options, answer }]);
+    emit([...asked, { id, options, state: { busy: false }, answer }]);
   });
 }

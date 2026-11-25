@@ -47,6 +47,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -82,10 +83,16 @@ const SHEET = sheet(
 );
 
 export function Form(
-  { onSubmit, errors, gap = "md", className, children, ...rest }:
+  { onSubmit, onSubmittingChange, errors, gap = "md", className, children, ...rest }:
     & {
       /** The form's own save, after its parts': given the values they handed up. */
-      onSubmit?(values: Record<string, unknown>, form: HTMLFormElement): unknown;
+      onSubmit?(
+        values: Record<string, unknown>,
+        form: HTMLFormElement,
+        signal: AbortSignal,
+      ): unknown;
+      /** Busy from the first part through the form's own save. */
+      onSubmittingChange?(busy: boolean, form: HTMLFormElement): void;
       /**
        * People's words for a field a save refuses, by its name (`detail.field`): said instead of
        * the refusal's own (a schema's are for developers).
@@ -101,14 +108,11 @@ export function Form(
     & FormAttributes,
 ): ReactNode {
   const parts = useRef(new Set<{ current: PartSubmit }>());
-  const busy = useRef(false);
+  const attempt = useRef<AbortController | null>(null);
+  useLayoutEffect(() => () => attempt.current?.abort(), []);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
   const [refused, setRefused] = useState(NOTHING);
-  const latest = useRef(onSubmit);
-  latest.current = onSubmit;
-  const words = useRef(errors);
-  words.current = errors;
   /** The fields shown, by name: how many of each. */
   const names = useRef(new Map<string, number>());
 
@@ -132,28 +136,36 @@ export function Form(
 
   const submitted = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (busy.current) return;
-    busy.current = true;
+    if (attempt.current) return;
+    const controller = new AbortController();
+    attempt.current = controller;
     setSubmitting(true);
     setError(undefined);
     setRefused(NOTHING);
     const form = event.currentTarget;
-    const handlers = [...parts.current].map((handler) => (element: HTMLFormElement) =>
-      handler.current(element)
-    );
+    const handlers = [...parts.current].map((handler) => handler.current);
+    if (onSubmittingChange) {
+      handlers.unshift(() => {
+        onSubmittingChange(true, form);
+      });
+    }
+    const { signal } = controller;
     const done = await submitAll(
       form,
       handlers,
-      (values, element) => latest.current?.(values, element),
+      (values) => onSubmit?.(values, form, signal),
+      signal,
     );
-    busy.current = false;
+    if (signal.aborted) return;
+    attempt.current = null;
     setSubmitting(false);
+    onSubmittingChange?.(false, form);
     // A failure says its words, or that the form wasn't saved; a part that stopped it said why.
     if (!done.ok && done.failed) {
       const at = done.field === undefined ? undefined : fieldFor(done.field, names.current.keys());
       const own = done.field === undefined
         ? undefined
-        : words.current?.[at ?? done.field] ?? words.current?.[done.field];
+        : errors?.[at ?? done.field] ?? errors?.[done.field];
       const said = own ?? done.error ?? say("notSaved");
       if (at) setRefused({ [at]: said });
       else setError(said);

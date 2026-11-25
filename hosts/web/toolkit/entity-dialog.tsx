@@ -33,13 +33,15 @@
  *     { name: "since", label: "Customer since", type: "date", format: "dd/MM/yyyy", max: today },
  *   ]}
  *   errors={{ email: "That email address isn't complete." }}
- *   onSubmit={(record) => customer ? customers.updateOne({ _id: customer._id }, record) : customers.insertOne(record)}
+ *   onSubmit={(record, _form, unset) => customer
+ *     ? customers.updateOne({ _id: customer._id }, { $set: record, $unset: unset })
+ *     : customers.insertOne(record)}
  *   toast="Customer saved."
  *   onClose={() => go("/customers")}
  * />
  * ```
  */
-import { type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { type ReactNode, useId, useRef, useState } from "react";
 import { Button } from "./button.tsx";
 import { Checkbox } from "./checkbox.tsx";
 import { DatePicker } from "./date-picker.tsx";
@@ -135,9 +137,11 @@ export type EntityDialogProps<T extends Record<string, unknown>> = {
   children?: ReactNode | ((form: EntityForm<T>) => ReactNode);
   /**
    * Saves it: given the record as the form leaves it (less its `_id`). Its failure shows by its
-   * field (`detail.field`) or at the form's top, and the dialog stays open; `false` keeps it open.
+   * field (`detail.field`) or at the form's top. The third argument names previously populated
+   * fields cleared to undefined (including an empty number), ready for `$unset` on an update.
+   * Returning `false` keeps the dialog open.
    */
-  onSubmit(values: Omit<T, "_id">, form: HTMLFormElement): unknown;
+  onSubmit(values: Omit<T, "_id">, form: HTMLFormElement, unset: Record<string, true>): unknown;
   /** It closes: Cancel, Escape, the backdrop, or a save done. */
   onClose(): void;
   /** What a toast says once it's saved (`"Customer saved."`). */
@@ -158,6 +162,14 @@ export type EntityDialogProps<T extends Record<string, unknown>> = {
 };
 
 export function EntityDialog<T extends Record<string, unknown> = Record<string, unknown>>(
+  props: EntityDialogProps<T>,
+): ReactNode {
+  // A new editing session owns its draft, its submission and its field errors.
+  const key = JSON.stringify([props.open ?? true, props.values?._id]);
+  return <RecordDialog key={key} {...props} />;
+}
+
+function RecordDialog<T extends Record<string, unknown>>(
   {
     open = true,
     title,
@@ -183,35 +195,26 @@ export function EntityDialog<T extends Record<string, unknown> = Record<string, 
   const [draft, setDraft] = useState<Partial<T>>(start);
   const [missing, setMissing] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  const record = (given as { _id?: unknown } | undefined)?._id;
-  const started = useRef(false);
-  // Opened again, or on another record, it starts over from its values.
-  useEffect(() => {
-    if (!started.current) {
-      started.current = true;
-      return;
-    }
-    if (!open) return;
-    setDraft(start());
-    setMissing([]);
-  }, [open, record]);
+  const controls = useRef<Record<string, unknown>>({});
+  const submitting = (busy: boolean, element: HTMLFormElement) => {
+    if (busy) controls.current = formValues(element);
+    setSaving(busy);
+  };
 
   const set = (change: Partial<T>) => {
     setDraft((now) => ({ ...now, ...change }));
     setMissing((now) => now.filter((name) => !(name in change)));
   };
-  const submit = async (handed: Record<string, unknown>, element: HTMLFormElement) => {
-    const ready = entityValues(fields, { ...draft, ...formValues(element), ...handed });
+  const submit = async (
+    handed: Record<string, unknown>,
+    element: HTMLFormElement,
+    signal: AbortSignal,
+  ) => {
+    const ready = entityValues(fields, { ...draft, ...controls.current, ...handed }, given);
     setMissing(ready.missing);
     if (ready.missing.length) return;
-    setSaving(true);
-    let answer: unknown;
-    try {
-      answer = await onSubmit(ready.values as Omit<T, "_id">, element);
-    } finally {
-      setSaving(false);
-    }
-    if (answer === false) return;
+    const answer = await onSubmit(ready.values as Omit<T, "_id">, element, ready.unset);
+    if (signal.aborted || answer === false) return;
     if (done) toast(done, "success");
     onClose();
   };
@@ -234,7 +237,7 @@ export function EntityDialog<T extends Record<string, unknown> = Record<string, 
         </>
       }
     >
-      <Form id={form} errors={errors} onSubmit={submit}>
+      <Form id={form} onSubmittingChange={submitting} errors={errors} onSubmit={submit}>
         {fields.map((field) => (
           <Field
             key={field.name}

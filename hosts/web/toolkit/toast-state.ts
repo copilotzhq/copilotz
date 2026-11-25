@@ -111,3 +111,12 @@ export function mountToasts(id: string, placed: boolean): () => void {
     emit({ shownBy: shower() });
   };
 }
+
+/** Changing placement can hand the toasts to another host while both remain mounted. */
+export function placeToasts(id: string, placed: boolean): void {
+  const host = hosts.find((h) => h.id === id);
+  if (host && host.placed !== placed) {
+    host.placed = placed;
+    emit({ shownBy: shower() });
+  }
+}

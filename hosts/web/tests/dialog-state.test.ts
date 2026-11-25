@@ -96,6 +96,7 @@ test("a form's named controls, as a record keeps them", () => {
     {
       name: "Ana",
       price: 12.5,
+      stock: undefined,
       vip: true,
       archived: false,
       size: "m",
@@ -127,6 +128,7 @@ test("a record ready to save: numbers as numbers, no _id, and the needed fields 
     {
       values: { name: "Ana", price: 12.5, since: "2026-11-16", vip: false, in: "space-1" },
       missing: [],
+      unset: {},
     },
   );
   assertEquals(
@@ -135,4 +137,60 @@ test("a record ready to save: numbers as numbers, no _id, and the needed fields 
   );
   // Text that isn't a number stays as it is, for the schema to refuse by its field.
   assertEquals(entityValues(fields, { name: "Ana", price: "twelve" }).values.price, "twelve");
+});
+
+test("questions survive a host handoff and cancel when the last host disappears", async () => {
+  const first = mountToasts("shell", false);
+  const last = mountToasts("screen", true);
+  const answers = Promise.all([confirm({ title: "Delete?" }), confirm({ title: "Archive?" })]);
+  first();
+  assertEquals(askedNow().length, 2);
+  last();
+  const next = mountToasts("next", false);
+  try {
+    assertEquals(askedNow().length, 0);
+    assertEquals(await answers, [false, false]);
+  } finally {
+    next();
+  }
+});
+
+test("a confirmed operation finishes once across a handoff and loss of the last host", async () => {
+  const unmount = mountToasts("page", false);
+  const pending = Promise.withResolvers<void>();
+  let calls = 0;
+  const result = confirm({
+    title: "Delete?",
+    onConfirm: () => {
+      calls++;
+      return pending.promise;
+    },
+  });
+  const stale = askedNow()[0];
+  stale.answer(true);
+  const next = mountToasts("next", true);
+  unmount();
+  assertEquals(askedNow()[0].state.busy, true);
+  askedNow()[0].answer(true);
+  next();
+  assertEquals(askedNow(), []);
+  stale.answer(true);
+  pending.resolve();
+  assertEquals(await result, true);
+  assertEquals(calls, 1);
+});
+
+test("empty numeric controls preserve absent and nullable defaults and unset a cleared zero", () => {
+  const fields = ["absent", "nullable", "zero"].map((name) => ({ name, type: "number" }));
+  assertEquals(
+    entityValues(fields, { absent: undefined, nullable: undefined, zero: "" }, {
+      nullable: null,
+      zero: 0,
+    }),
+    {
+      values: { nullable: null },
+      missing: [],
+      unset: { zero: true },
+    },
+  );
 });

@@ -22,7 +22,7 @@ const SKIPPED = new Set(["submit", "button", "reset", "image", "file", "fieldset
 
 /**
  * What a form's named controls hold, as a record keeps it: text as a string; a number field as a
- * number (left out while it's empty); a checkbox as `true` or `false`; the chosen radio's value;
+ * number (`undefined` when cleared); a checkbox as `true` or `false`; the chosen radio's value;
  * a multiple select, or several controls of one name, as a list. Buttons, files and disabled
  * controls are left out.
  */
@@ -46,8 +46,8 @@ export function formValues(form: { elements: ArrayLike<unknown> }): Record<strin
       if (listed && !c.checked) continue;
       value = listed ? c.value ?? "" : !!c.checked;
     } else if (type === "number" || type === "range") {
-      if (c.valueAsNumber === undefined || Number.isNaN(c.valueAsNumber)) continue;
-      value = c.valueAsNumber;
+      value = Number.isNaN(c.valueAsNumber) ? undefined : c.valueAsNumber;
+      if (listed && value === undefined) continue;
     } else if (type === "select-multiple") {
       value = Array.from(c.selectedOptions ?? [], (option) => option.value);
     } else value = c.value ?? "";
@@ -74,7 +74,8 @@ const empty = (value: unknown): boolean =>
 export function entityValues(
   fields: FieldShape[],
   values: Record<string, unknown>,
-): { values: Record<string, unknown>; missing: string[] } {
+  initial: Record<string, unknown> = {},
+): { values: Record<string, unknown>; missing: string[]; unset: Record<string, true> } {
   const ready = { ...values };
   delete ready._id;
   for (const field of fields) {
@@ -82,10 +83,19 @@ export function entityValues(
     if (field.type !== "number" || typeof value !== "string") continue;
     const number = Number(value);
     // Empty is none; text that isn't a number stays, for the schema to refuse by its field.
-    if (value.trim() === "") delete ready[field.name];
+    if (value.trim() === "") ready[field.name] = undefined;
     else if (!Number.isNaN(number)) ready[field.name] = number;
+  }
+  const unset: Record<string, true> = {};
+  for (const [name, value] of Object.entries(ready)) {
+    if (value !== undefined) continue;
+    delete ready[name];
+    if (Object.hasOwn(initial, name)) {
+      if (initial[name] === null) ready[name] = null;
+      else if (initial[name] !== undefined) unset[name] = true;
+    }
   }
   const missing = fields.filter((f) => f.required && f.type !== "checkbox" && empty(ready[f.name]))
     .map((f) => f.name);
-  return { values: ready, missing };
+  return { values: ready, missing, unset };
 }

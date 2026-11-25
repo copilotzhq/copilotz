@@ -7,6 +7,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "../../../testing/mod.ts";
+import { parseDay } from "../toolkit/calendar.tsx";
 import { DateRangePicker } from "../toolkit/date-picker.tsx";
 import { blur, click, ENDS, fromEmpty, key, press, retyped, type } from "./date-range-steps.ts";
 import { page } from "./page.ts";
@@ -108,7 +109,10 @@ for (const lang of ["en-US", "ar-EG"]) {
           await blur(ENDS, field);
           await press("Apply");
           const pasted = applied.splice(0);
-          assert.equal(pasted.length, 1, name(target));
+          // What the field shows reads back, but for a function format, and the Arabic short
+          // date `parseDay` doesn't read: there typing the shown text is refused, and moves nothing.
+          const readable = parseDay(target, kind.format as string) !== undefined;
+          assert.equal(pasted.length, readable ? 1 : 0, name(target));
           // A digit wrong where it can't be: a day, month or year of 99.
           const wrong = target.replace(/\p{Nd}+/u, "99");
           const ways: [string[], Range[]][] = [
@@ -133,3 +137,17 @@ for (const lang of ["en-US", "ar-EG"]) {
       }
     }));
 }
+
+test("with a first day picked, To is empty until the second is: in every language and format", () =>
+  inPage("ar-EG", async (draw) => {
+    for (const kind of KINDS) {
+      await draw({ ...kind, value: START });
+      await click(".copilotz-date-field");
+      await click('[data-day="2026-11-10"]');
+      // rc.64 still showed the old end here where it couldn't read that end's text back.
+      assert.equal(ends()[1], "", JSON.stringify(kind));
+      assert.ok(applyOff());
+      await click('[data-day="2026-11-12"]');
+      assert.notEqual(ends()[1], "");
+    }
+  }));

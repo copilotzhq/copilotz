@@ -96,8 +96,13 @@ test("rc.64 parity: the presets helper and the standard list", () => {
   }
 });
 
-/** The same steps on rc.64's picker and on this one: the same pages and calls, step by step. */
-async function same(props: Props, steps: Step[], lang = "en") {
+/**
+ * The same steps on rc.64's picker and on this one: the same pages and calls, step by step. The
+ * pages after the steps named in `apart` aren't compared: there rc.64 read From or To as it was
+ * typed, a key at a time (since rc.65 they're read when they're left, Enter or Apply), or kept
+ * showing an end no longer there.
+ */
+async function same(props: Props, steps: Step[], lang = "en", apart: string[] = []) {
   // One page at a time: a page sets the global window and document.
   const run = (m: typeof live) =>
     session((onChange) => <m.DateRangePicker {...props} onChange={onChange} />, steps, lang);
@@ -105,7 +110,7 @@ async function same(props: Props, steps: Step[], lang = "en") {
   const b = await run(frozen);
   assert.equal(a.length, b.length);
   for (const [i, [name, html, calls]] of a.entries()) {
-    assert.equal(html, b[i][1], `${lang}: the page after ${name}`);
+    if (!apart.includes(name)) assert.equal(html, b[i][1], `${lang}: the page after ${name}`);
     assert.deepEqual(calls, b[i][2], `${lang}: the calls after ${name}`);
   }
   // The steps did something: every session applies a range.
@@ -118,13 +123,15 @@ test("rc.64 parity: typing days, picking days, presets, Apply and Cancel", async
   const steps: Step[] = [
     ["open", () => click(".copilotz-date-field")],
     ["From after To", () => type(ENDS, 0, "25/11/2026")],
-    ["From typed", () => type(ENDS, 0, "05/11/2026")],
+    ["From left", () => blur(ENDS, 0)],
     ["From half typed", () => type(ENDS, 0, "05/1")],
     ["From wrong", () => type(ENDS, 0, "45/11/2026")],
+    ["From typed", () => type(ENDS, 0, "05/11/2026")],
     ["From left", () => blur(ENDS, 0)],
     ["To typed", () => type(ENDS, 1, "20/11/2026")],
-    ["To before From", () => type(ENDS, 1, "01/10/2026")],
+    ["To left", () => blur(ENDS, 1)],
     ["To out of bounds", () => type(ENDS, 1, "01/01/2030")],
+    ["To before From", () => type(ENDS, 1, "01/10/2026")],
     ["Enter in To", () => key(ENDS, 1, "Enter")],
     ["Apply", () => press("Apply")],
     ["reopen", () => click(".copilotz-date-field")],
@@ -139,19 +146,41 @@ test("rc.64 parity: typing days, picking days, presets, Apply and Cancel", async
     ["Custom range", () => press("Custom range")],
     ["next months", () => click(".copilotz-calendar-nav", 1)],
   ];
-  for (const lang of LANGS) await same({ ...base, max: "2026-12-31" }, steps, lang);
-  await same({ ...base, format: "yyMMdd" }, [
-    ["open", () => click(".copilotz-date-field")],
-    ["From compact", () => type(ENDS, 0, "261112")],
-    ["To compact", () => type(ENDS, 1, "261120")],
-    ["Apply", () => press("Apply")],
-  ]);
-  await same({ ...base, format: undefined }, [
-    ["open", () => click(".copilotz-date-field")],
-    ["From in the language's short date", () => type(ENDS, 0, "11/5/2026")],
-    ["From as kept", () => type(ENDS, 0, "2026-11-04")],
-    ["Apply", () => press("Apply")],
-  ]);
+  const typed = [
+    "From after To",
+    "From half typed",
+    "From wrong",
+    "From typed",
+    "To typed",
+    "To out of bounds",
+    "To before From",
+  ];
+  for (const lang of LANGS) await same({ ...base, max: "2026-12-31" }, steps, lang, typed);
+  await same(
+    { ...base, format: "yyMMdd" },
+    [
+      ["open", () => click(".copilotz-date-field")],
+      ["From compact", () => type(ENDS, 0, "261112")],
+      ["From left", () => blur(ENDS, 0)],
+      ["To compact", () => type(ENDS, 1, "261120")],
+      ["To left", () => blur(ENDS, 1)],
+      ["Apply", () => press("Apply")],
+    ],
+    "en",
+    ["From compact", "To compact"],
+  );
+  await same(
+    { ...base, format: undefined },
+    [
+      ["open", () => click(".copilotz-date-field")],
+      ["From in the language's short date", () => type(ENDS, 0, "11/5/2026")],
+      ["From as kept", () => type(ENDS, 0, "2026-11-04")],
+      ["From left", () => blur(ENDS, 0)],
+      ["Apply", () => press("Apply")],
+    ],
+    "en",
+    ["From in the language's short date", "From as kept"],
+  );
 });
 
 test("rc.64 parity: ranges with times, their spin fields, and one day", async () => {
@@ -173,5 +202,5 @@ test("rc.64 parity: ranges with times, their spin fields, and one day", async ()
   for (const lang of LANGS) {
     await same({ ...base, time: true, value: timed }, steps, lang);
   }
-  await same({ ...base, time: true, value: timed, format: undefined }, steps, "ar-EG");
+  await same({ ...base, time: true, value: timed, format: undefined }, steps, "ar-EG", ["one day"]);
 });

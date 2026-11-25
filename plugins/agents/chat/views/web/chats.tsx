@@ -2,26 +2,19 @@
  * A space's chats (kind `chats`: its Chats tab, item `{ _id }`, the space):
  * the latest hundred, by when they were last written in (today, yesterday,
  * this week…), each with what it's called, what was said last, when, and
- * how long it is, and a menu to move it to another space; and a search over
- * them. In a side panel (`hints.mode: "panel"`), the same, compact, with a
- * new chat there (on a page, its header has one). Each opens full screen.
+ * how long it is, and a menu to rename it, move it to another space or
+ * archive it; and a search over them. Archived ones are apart, at the end,
+ * under a folded "Archived" (see shelf.tsx), read only once it's unfolded or
+ * the tab is searched. In a side panel (`hints.mode: "panel"`), the same,
+ * compact, with a new chat there (on a page, its header has one). Each opens
+ * full screen.
  */
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useDeferredValue, useState } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
-import {
-  Button,
-  EmptyState,
-  Icon,
-  IconButton,
-  Input,
-  Menu,
-  openPalette,
-  Skeleton,
-  Time,
-} from "../../../../../hosts/web/mod.ts";
-import { byDay, lastOf, type Listed, matches, titleOf } from "./listed.ts";
-import { moveStep } from "./move.tsx";
-import { renameStep } from "./rename.tsx";
+import { Button, EmptyState, IconButton, Input, Skeleton } from "../../../../../hosts/web/mod.ts";
+import { ChatRow } from "./chat-row.tsx";
+import { byDay, type Listed, matches } from "./listed.ts";
+import { Shelf } from "./shelf.tsx";
 import { STYLE } from "./style.ts";
 import { say } from "./words.ts";
 
@@ -71,18 +64,33 @@ function Chats(
   },
 ): ReactNode {
   const [search, setSearch] = useState("");
+  const [open, setOpen] = useState(false);
+  // The archived ones are found by what's typed once typing pauses: each search reads them again.
+  const searched = useDeferredValue(search);
   const fresh = space ? `/?in=${encodeURIComponent(space)}` : "/";
+  const shelf = (
+    <Shelf
+      space={space}
+      compact={compact}
+      search={searched}
+      open={open}
+      fold={setOpen}
+    />
+  );
   if (!threads.length) {
     return (
-      <EmptyState
-        icon="chat"
-        tone="primary"
-        title={say("noChatsTitle")}
-        className="chats-empty"
-        action={<Button variant="primary" icon="compose" href={fresh}>{say("newChat")}</Button>}
-      >
-        {say("noChatsBody")}
-      </EmptyState>
+      <div className={`chats${compact ? " chats-compact" : ""}`}>
+        <EmptyState
+          icon="chat"
+          tone="primary"
+          title={say("noChatsTitle")}
+          className="chats-empty"
+          action={<Button variant="primary" icon="compose" href={fresh}>{say("newChat")}</Button>}
+        >
+          {say("noChatsBody")}
+        </EmptyState>
+        {shelf}
+      </div>
     );
   }
   const shown = threads.filter((t) => matches(t, search));
@@ -110,7 +118,7 @@ function Chats(
           <section key={g.label} className="chats-group" aria-label={g.label}>
             <h3>{g.label}</h3>
             <ul className="chats-list">
-              {g.items.map((t) => <Row key={t._id} thread={t} compact={compact} call={call} />)}
+              {g.items.map((t) => <ChatRow key={t._id} thread={t} compact={compact} call={call} />)}
             </ul>
           </section>
         ))
@@ -118,60 +126,7 @@ function Chats(
       {full && !search
         ? <p className="chats-none">{say("latestAreHere", { count: threads.length })}</p>
         : null}
+      {shelf}
     </div>
-  );
-}
-
-function Row(
-  { thread: t, compact, call }: { thread: Listed; compact: boolean; call: Call },
-): ReactNode {
-  const title = titleOf(t);
-  const last = lastOf(t);
-  return (
-    <li className="chats-item">
-      <a
-        className="chats-row"
-        href={`/thread/${encodeURIComponent(t._id)}${
-          t.in ? `?in=${encodeURIComponent(t.in)}` : ""
-        }`}
-      >
-        {compact ? null : (
-          <span className="chats-row-icon" aria-hidden="true">
-            <Icon name="chat" size={16} />
-          </span>
-        )}
-        <span className="chats-row-text">
-          <span className="chats-row-title">{title}</span>
-          {last ? <span className="chats-row-last">{last}</span> : null}
-        </span>
-        <span className="chats-row-meta">
-          <Time at={t.at} />
-          {compact ? null : (
-            <span className="chats-row-count">
-              {say("messageCount", { count: t.messages })}
-            </span>
-          )}
-        </span>
-      </a>
-      <span className="chats-row-menu">
-        <Menu
-          label={say("rowMore", { title })}
-          align="end"
-          size="sm"
-          items={[
-            {
-              label: say("rename"),
-              icon: "pencil",
-              onSelect: () => openPalette(renameStep({ thread: t._id, title, call })),
-            },
-            {
-              label: say("moveToSpace"),
-              icon: "move",
-              onSelect: () => openPalette(moveStep({ thread: t._id, title, from: t.in, call })),
-            },
-          ]}
-        />
-      </span>
-    </li>
   );
 }

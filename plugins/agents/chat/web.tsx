@@ -2,9 +2,12 @@
  * Chat's web front end, for the browser: home (a new chat), how a chat looks
  * with what agents are writing right now, a message and its files, where you
  * type, and at the top of the sidebar, starting one. With spaces' front end,
- * a space's chats: its Chats tab (`chats`, searchable) and, under it in the
- * sidebar, its latest (`chats.recent`), through spaces' `spaceTabs` and
+ * a space's chats: its Chats tab (`chats`, searchable; the archived ones
+ * apart at its end, folded, `chats.archived`) and, under it in the sidebar,
+ * its latest (`chats.recent`), through spaces' `spaceTabs` and
  * `spaceSidebar` resources (named here; chat imports nothing of spaces').
+ * A chat's header, a list's row and the palette rename, move, archive and
+ * restore it (`chat.archive`); archived, its page says so, with Restore.
  * In the command palette (the web shell's `palette`): chats to go to, a new
  * one, and moving the one open to another space, through spaces' picker
  * (`space.pick`, by name), as each chat's menu does; before it moves, who'll
@@ -74,6 +77,7 @@ import { liveView } from "./views/web/live.tsx";
 import { messageView } from "./views/web/message.tsx";
 import { movingView } from "./views/web/moving.tsx";
 import { notesView } from "./views/web/notes.tsx";
+import { archivedView } from "./views/web/archived.tsx";
 import { chatsView } from "./views/web/chats.tsx";
 import { newThreadRailView, newThreadView } from "./views/web/new-thread.tsx";
 import { chatPaletteView } from "./views/web/palette.tsx";
@@ -95,6 +99,7 @@ export const chatWeb: Plugin = definePlugin({
     "new-thread.rail": newThreadRailView,
     chats: chatsView,
     "chats.recent": recentView,
+    "chats.archived": archivedView,
     "chat.palette": chatPaletteView,
     "chat.notes": notesView,
     "chat.moving": movingView,

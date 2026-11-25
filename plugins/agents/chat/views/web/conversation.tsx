@@ -18,6 +18,10 @@
  * check what's typed), is asked as it does, and may hold it. A message of yours waiting for an agent
  * still at work on an earlier one says so (see queued.tsx).
  *
+ * Its header's menu archives it, or restores it (`chat.archive`); archived,
+ * the page says so calmly under the header, with Restore, as its staff
+ * notes' page does of theirs (archived with it). Writing in it brings it back.
+ *
  * A chat shared with someone outside its space (a contact, a member of the
  * chat alone: `thread:<id>`) has staff notes beside it, its team's alone
  * (see notes-lane.tsx and notes.tsx): the header's button opens them (a
@@ -43,6 +47,7 @@ import type {
 import { mentionable, shownAll } from "./agents.ts";
 import { beforeSend } from "./before-send.ts";
 import { Composer, type Mentioned } from "./composer.tsx";
+import { ArchivedNote } from "./archived-note.tsx";
 import { Header, type Someone } from "./header.tsx";
 import { Missing } from "./missing.tsx";
 import {
@@ -95,6 +100,11 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
   const notes = shared
     ? ctx.db.collection<Thread>("thread").findOne({ _id: notesId }).value
     : undefined;
+  // Notes are archived with their chat: it says whether they are.
+  const chat = thread.about
+    ? ctx.db.collection<Thread>("thread").findOne({ _id: thread.about }).value
+    : thread;
+  const archived = !!chat?.archived;
   const lane: Lane | undefined = shared
     ? {
       chat: t._id,
@@ -139,6 +149,7 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
         fresh={fresh}
         call={ctx.call}
         tools={lane ? <NotesToggle who={me} count={notes?.messages} /> : undefined}
+        archive={{ archived, ...(thread.latest ? { latest: thread.latest } : {}) }}
       />
       {thread.about
         ? (
@@ -148,6 +159,7 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
           />
         )
         : null}
+      {archived ? <ArchivedNote thread={t._id} notes={!!thread.about} call={ctx.call} /> : null}
       {lane ? <NotesSwitch who={me} count={notes?.messages} /> : null}
       <WithNotes who={me} lane={lane}>{main}</WithNotes>
     </section>

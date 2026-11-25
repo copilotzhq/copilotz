@@ -50,6 +50,13 @@ export const say = defineWords("chat", {
   chatMore: "This chat: more",
   rename: "Rename…",
   moveToSpace: "Move to another space…",
+  archive: "Archive",
+  restore: "Restore",
+  // An archived chat's page
+  archivedTitle: "This chat is archived",
+  notesArchivedTitle: "Archived, with the chat they're about",
+  archivedNote:
+    "It's listed apart, under Archived in its space's chats. A new message brings it back.",
   // Messages
   messages: "Messages",
   to: "to",
@@ -194,6 +201,8 @@ export const say = defineWords("chat", {
     other: "{count} messages",
   },
   rowMore: "{title}: more",
+  archived: "Archived",
+  archivedNone: "No archived chats here.",
   // Chats by when they were last written in
   earlier: "Earlier",
   today: "Today",
@@ -209,6 +218,9 @@ export const say = defineWords("chat", {
   thisChatGroup: "This chat",
   renameThisChat: "Rename this chat…",
   moveThisChat: "Move this chat to another space…",
+  archiveThisChat: "Archive this chat",
+  restoreThisChat: "Restore this chat",
+  archivedIn: "Archived, in {space}",
   chats: "Chats",
   create: "Create",
   inSpace: "In {space}",
@@ -216,6 +228,8 @@ export const say = defineWords("chat", {
   findSpace: "Find a space",
   keywordSpace: "space",
   keywordTitle: "change title",
+  keywordArchive: "put away",
+  keywordRestore: "unarchive",
   keywordStart: "start",
   keywordConversation: "conversation",
   renameTitle: "Rename “{title}”",

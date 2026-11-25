@@ -33,6 +33,13 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.answersWhereSeen` | {agents} will answer here, where {name} can read it. To look something up just for your team, ask in staff notes. |
 | `chat.answerThread` | Yes, for this conversation |
 | `chat.answerWentTo` | The answer went to {name} only. |
+| `chat.archive` | Archive |
+| `chat.archived` | Archived |
+| `chat.archivedIn` | Archived, in {space} |
+| `chat.archivedNone` | No archived chats here. |
+| `chat.archivedNote` | It's listed apart, under Archived in its space's chats. A new message brings it back. |
+| `chat.archivedTitle` | This chat is archived |
+| `chat.archiveThisChat` | Archive this chat |
 | `chat.areWorking` | one: {names} is working… / other: {names} are working… |
 | `chat.askBack` | Post {agent}'s answer here? |
 | `chat.askedInSideThread` | Asked in a side thread |
@@ -93,7 +100,9 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.keyEsc` | Esc |
 | `chat.keyShift` | Shift |
 | `chat.keysHint` | {enter} to send · {shift} + {enter} for a new line |
+| `chat.keywordArchive` | put away |
 | `chat.keywordConversation` | conversation |
+| `chat.keywordRestore` | unarchive |
 | `chat.keywordSpace` | space |
 | `chat.keywordStart` | start |
 | `chat.keywordTitle` | change title |
@@ -146,6 +155,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.noChatsYet` | No chats yet |
 | `chat.noSpeech` | No speech was heard. |
 | `chat.notesAbout` | Staff notes about the conversation with {name} |
+| `chat.notesArchivedTitle` | Archived, with the chat they're about |
 | `chat.notesAsPage` | Open staff notes as a page |
 | `chat.notesClose` | Close staff notes |
 | `chat.notesEmptyBody` | Ask an agent to look something up or draft a reply, or leave a note for whoever picks this up. Nothing here reaches {name}. |
@@ -185,6 +195,8 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.renameThisChat` | Rename this chat… |
 | `chat.renameTitle` | Rename “{title}” |
 | `chat.renameTo` | Rename to “{title}” |
+| `chat.restore` | Restore |
+| `chat.restoreThisChat` | Restore this chat |
 | `chat.result` | Result |
 | `chat.retry` | Retry |
 | `chat.retrying` | Retrying… |

@@ -22,6 +22,9 @@ import { Transcript } from "../chat/views/web/transcript.tsx";
 import { VoiceFailed } from "../chat/views/web/voice-failed.tsx";
 import { VoiceNote } from "../chat/views/web/voice-note.tsx";
 import { chatsView } from "../chat/views/web/chats.tsx";
+import { ArchivedNote } from "../chat/views/web/archived-note.tsx";
+import { archivedView } from "../chat/views/web/archived.tsx";
+import { Shelf } from "../chat/views/web/shelf.tsx";
 import { homeView } from "../chat/views/web/home.tsx";
 import { liveView } from "../chat/views/web/live.tsx";
 import { messageView } from "../chat/views/web/message.tsx";
@@ -180,6 +183,27 @@ function screens(): ReactNode[] {
       send={() => Promise.resolve()}
       working={["Maya"]}
     />,
+    <Header
+      title="Plan the week"
+      thread="t1"
+      people={[]}
+      fresh="/"
+      call={call}
+      archive={{ archived: false }}
+    />,
+    <Header
+      title="Plan the week"
+      thread="t1"
+      people={[]}
+      fresh="/"
+      call={call}
+      archive={{ archived: true }}
+    />,
+    <ArchivedNote thread="t1" call={call} />,
+    <ArchivedNote thread="t1:notes" notes call={call} />,
+    <Shelf space="s1" compact={false} search="" open fold={() => {}} />,
+    <>{archivedView({ _id: "s1" }, ctx([thread("a", { archived: at })]))}</>,
+    <>{archivedView({ _id: "s1" }, ctx([]))}</>,
     <>{chatsView({ _id: "s1" }, ctx([thread("a"), thread("b", { messages: 1 })]))}</>,
     <>{chatsView({ _id: "s1" }, ctx([]))}</>,
     <>{chatsView({ _id: "s1" }, ctx([thread("a")], { mode: "panel" }))}</>,

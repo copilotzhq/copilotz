@@ -76,11 +76,6 @@ function Asking(
   useEffect(() => {
     if (open) setState({ busy: false });
   }, [open]);
-  // After a failure, focus goes back to where it started: to try again, or to cancel.
-  useEffect(() => {
-    if (state.busy || !state.error) return;
-    document.getElementById(`${id}-${asked.danger ? "cancel" : "confirm"}`)?.focus();
-  }, [state]);
   const confirmIt = async () => {
     if (running.current) return;
     running.current = true;
@@ -130,6 +125,9 @@ export function ConfirmView(
     onCancel(): void;
   },
 ): ReactNode {
+  useEffect(() => {
+    if (!busy && error) document.getElementById(`${id}-${danger ? "cancel" : "confirm"}`)?.focus();
+  }, [id, busy, error, danger]);
   return (
     <Dialog
       open={open}
@@ -173,13 +171,17 @@ export function ConfirmView(
 /** The first question `confirm()` is waiting on, over the page: `<Toasts />` draws it. */
 export function ConfirmQuestions(): ReactNode {
   const waiting = useSyncExternalStore(subscribeAsked, askedNow, () => NONE_ASKED);
+  const id = useId();
   const first = waiting[0];
   if (!first) return null;
   return (
-    <Asking
+    <ConfirmView
       key={first.id}
+      id={id}
+      open
+      {...first.state}
       {...first.options}
-      onDone={() => first.answer(true)}
+      onConfirm={() => first.answer(true)}
       onCancel={() => first.answer(false)}
     />
   );

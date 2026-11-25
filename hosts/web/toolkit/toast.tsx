@@ -30,6 +30,7 @@ import {
   mountToasts,
   NO_TOASTS,
   pauseToast,
+  placeToasts,
   resumeToast,
   subscribe,
   toastState,
@@ -137,7 +138,8 @@ export function Toasts({ placement }: {
   const id = useId();
   const placed = placement !== undefined;
   const { toasts, shownBy } = useSyncExternalStore(subscribe, toastState, () => NO_TOASTS);
-  useEffect(() => mountToasts(id, placed), [id, placed]);
+  useEffect(() => mountToasts(id, placed), [id]);
+  useEffect(() => placeToasts(id, placed), [id, placed]);
   if (shownBy !== id) return null;
   return (
     <>

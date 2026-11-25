@@ -227,7 +227,10 @@ export function bars(
   const left = !options.quiet ? 0 : options.format === "ean13" ? 11 : retail ? 7 : 10;
   const right = !options.quiet ? 0 : retail ? 7 : 10;
   const modules = widths.reduce((a, b) => a + b, 0) + left + right;
-  const module = Math.max(1, Math.floor(width / modules));
+  if (!Number.isFinite(width) || width < modules) {
+    throw new RangeError(`Barcode width must be finite and at least ${modules} units.`);
+  }
+  const module = Math.floor(width / modules);
   const out: { x: number; w: number }[] = [];
   let x = left;
   widths.forEach((w, i) => {

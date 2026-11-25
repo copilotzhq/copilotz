@@ -102,6 +102,7 @@
     "@types/react-dom": "19.3.0",
     "copilotz": "file:.",
     "esbuild": "0.28.2",
+    "happy-dom": "21.0.4",
     "typescript": "6.0.3"
   }
 }

@@ -147,21 +147,22 @@ export function momentIn(at: Date, timeZone?: string): Moment {
     new Intl.DateTimeFormat("en-US", {
       timeZone,
       year: "numeric",
+      era: "short",
       month: "numeric",
       day: "numeric",
       hour: "numeric",
       minute: "numeric",
       second: "numeric",
       hourCycle: "h23",
-    }).formatToParts(at).map(({ type, value }) => [type, Number(value)]),
+    }).formatToParts(at).map(({ type, value }) => [type, value]),
   );
   return {
-    year: parts.year,
-    month: parts.month,
-    day: parts.day,
-    hour: parts.hour % 24,
-    minute: parts.minute,
-    second: parts.second,
+    year: parts.era === "BC" ? 1 - Number(parts.year) : Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour) % 24,
+    minute: Number(parts.minute),
+    second: Number(parts.second),
   };
 }
 
@@ -294,13 +295,21 @@ type Read = {
   second?: number;
 };
 
-/** A month (1–12) by its name in a language, any case, with or without its dot; 0 for none. */
-const monthNamed = (name: string, token: string, locale: string): number => {
-  const wanted = name.toLowerCase().replace(/\.$/, "");
-  return Array.from({ length: 12 }, (_, m) => m + 1).find((m) =>
-    formatPattern(dayOf(2000, m, 1), token, locale).toLowerCase().replace(/\.$/, "") === wanted
-  ) ?? 0;
-};
+/** Reads decimal digits as the locale writes them, keeping ASCII input valid too. */
+const numerals = new Map<string, string[]>();
+export function asciiDigits(text: string, locale: string): string {
+  if (!/(?![0-9])\p{Nd}/u.test(text)) return text;
+  let digits = numerals.get(locale);
+  if (!digits) {
+    const format = new Intl.NumberFormat(locale, { useGrouping: false });
+    digits = Array.from({ length: 10 }, (_, n) => format.format(n));
+    numerals.set(locale, digits);
+  }
+  return text.replace(/\p{Nd}/gu, (digit) => {
+    const value = digits.indexOf(digit);
+    return value < 0 ? digit : String(value);
+  });
+}
 
 /**
  * Text read by a pattern, letter by letter (see `formatPattern`), or `undefined` when it doesn't
@@ -310,6 +319,7 @@ const monthNamed = (name: string, token: string, locale: string): number => {
  */
 function readPattern(text: string, pattern: string, locale: string): Read | undefined {
   const order: string[] = [];
+  const months = new Map<string, string[]>();
   const tokens = [...pattern.matchAll(TOKENS)];
   const seconds = tokens.some(([token]) => token === "ss");
   let source = "";
@@ -339,7 +349,14 @@ function readPattern(text: string, pattern: string, locale: string): Read | unde
       source += "(\\d{4}|\\d{2})";
       order.push("yy");
     } else if (token === "MMMM" || token === "MMM") {
-      source += "(\\p{L}+\\.?)";
+      const names = Array.from(
+        { length: 12 },
+        (_, i) =>
+          asciiDigits(formatPattern(dayOf(2000, i + 1, 1), token, locale), locale)
+            .toLowerCase().replace(/\.$/, ""),
+      );
+      months.set(token, names);
+      source += `(${names.map(escaped).join("|")}\\.?)`;
       order.push(token);
     } else if (token === "MM" || token === "M") digits("M");
     else if (token === "dd" || token === "d") digits("d");
@@ -364,7 +381,7 @@ function readPattern(text: string, pattern: string, locale: string): Read | unde
     words = source.length;
   }
   literal(pattern.length);
-  const match = new RegExp(`^${source}$`, "iu").exec(text.trim());
+  const match = new RegExp(`^${source}$`, "iu").exec(asciiDigits(text.trim(), locale));
   if (!match) return undefined;
   const read: Read = {};
   for (const [i, kind] of order.entries()) {
@@ -373,8 +390,9 @@ function readPattern(text: string, pattern: string, locale: string): Read | unde
     if (kind === "y") read.year = +part;
     else if (kind === "yy") read.year = part.length === 4 ? +part : 2000 + +part;
     else if (kind === "M") read.month = +part;
-    else if (kind === "MMM" || kind === "MMMM") read.month = monthNamed(part, kind, locale);
-    else if (kind === "d") read.day = +part;
+    else if (kind === "MMM" || kind === "MMMM") {
+      read.month = months.get(kind)!.indexOf(part.toLowerCase().replace(/\.$/, "")) + 1;
+    } else if (kind === "d") read.day = +part;
     else if (kind === "H") read.hour = +part;
     else if (kind === "h") Object.assign(read, { hour: +part, twelve: true });
     else if (kind === "m") read.minute = +part;
@@ -615,12 +633,12 @@ export function dayTimePattern(locale = "en"): string {
   }
   const twelve = parts.some((part) => part.type === "dayPeriod");
   const pattern = parts.map(({ type, value }) => {
-    const long = value.length === 2;
+    const long = [...value].length === 2;
     switch (type) {
       case "year":
         return long ? "yy" : "yyyy";
       case "month":
-        return /^\d+$/.test(value) ? (long ? "MM" : "M") : "MMM";
+        return /^\p{Nd}+$/u.test(value) ? (long ? "MM" : "M") : "MMM";
       case "day":
         return long ? "dd" : "d";
       case "hour":
@@ -704,7 +722,8 @@ const wallOf = (m: Moment): number => {
  * The moment a day-time (or a day, at its start) is in a time zone (the app's, IANA), as a
  * `Date`: for what needs one, a timestamp to store or a time to count from
  * (`dateOfDayTime("2026-11-16 14:30", "America/Sao_Paulo").toISOString()` is
- * `"2026-11-16T17:30:00.000Z"`). Without a zone, the page's own. `undefined` for text that's
+ * `"2026-11-16T17:30:00.000Z"`). Without a zone, the page's own. A repeated time uses its
+ * earlier instant, and a skipped time moves forward by the gap. `undefined` for text that's
  * neither.
  */
 export function dateOfDayTime(value: string, timeZone?: string): Date | undefined {
@@ -713,16 +732,14 @@ export function dateOfDayTime(value: string, timeZone?: string): Date | undefine
   if (!day) return undefined;
   const { hour, minute, second = 0 } = timed ? partsOfDayTime(value) : { hour: 0, minute: 0 };
   const [year, month, date] = partsOf(day);
-  if (!timeZone) {
-    const at = new Date(0);
-    at.setFullYear(year, month - 1, date);
-    at.setHours(hour, minute, second, 0);
-    return at;
-  }
   const wall = wallOf({ year, month, day: date, hour, minute, second });
-  // The zone's offset at a moment is its wall clock there less the moment; twice, for a moment
-  // across a change of offset (summer time).
-  const offset = (at: number) => wallOf(momentIn(new Date(at), timeZone)) - at;
-  const first = wall - offset(wall);
-  return new Date(wall - offset(first));
+  const wallAt = (at: number) => wallOf(momentIn(new Date(at), timeZone));
+  // Sample both sides of any transition around this wall time, including a skipped day.
+  const dayMs = 86_400_000;
+  const before = wallAt(wall - dayMs) - (wall - dayMs);
+  const after = wallAt(wall + dayMs) - (wall + dayMs);
+  const earlier = wall - Math.max(before, after);
+  if (before === after || wallAt(earlier) === wall) return new Date(earlier);
+  // On an ordinary day the later candidate matches. In a gap it moves forward by the gap.
+  return new Date(wall - Math.min(before, after));
 }

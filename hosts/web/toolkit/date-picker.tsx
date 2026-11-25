@@ -42,7 +42,7 @@
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { lang } from "../words.ts";
 import { Button } from "./button.tsx";
-import { Calendar, type DayFormat, formatDay, parseDay } from "./calendar.tsx";
+import { Calendar, type DayFormat, formatDay, parseDay, shortPattern } from "./calendar.tsx";
 import { cx } from "./cx.ts";
 import {
   addMonth,
@@ -267,7 +267,8 @@ function DayField(
   const read = (typed: string): Typed | undefined => {
     const only = parseDay(typed, format);
     if (only || !timed) return only ? { day: only } : undefined;
-    const at = parseDayTime(typed, dayTime, lang());
+    const at = parseDayTime(typed, dayTime, lang()) ??
+      (dayTime === undefined ? parseDayTime(typed, `${shortPattern()} HH:mm`, lang()) : undefined);
     return at ? { day: at.slice(0, 10), clock: clockOf(at, START) } : undefined;
   };
   // A day chosen elsewhere (the calendar, a preset) is written; the one being typed stays as typed.

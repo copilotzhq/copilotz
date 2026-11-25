@@ -62,14 +62,17 @@ export async function submitAll(
   form: HTMLFormElement,
   parts: PartSubmit[],
   own?: (values: Record<string, unknown>, form: HTMLFormElement) => unknown,
+  signal?: AbortSignal,
 ): Promise<Submitted> {
   const values: Record<string, unknown> = {};
   try {
     for (const part of parts) {
+      if (signal?.aborted) return { ok: false };
       const answer = await part(form);
       if (answer === false) return { ok: false };
       if (answer && typeof answer === "object") Object.assign(values, answer);
     }
+    if (signal?.aborted) return { ok: false };
     await own?.(values, form);
     return { ok: true, values };
   } catch (error) {

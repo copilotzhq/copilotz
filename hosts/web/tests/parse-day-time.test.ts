@@ -4,6 +4,7 @@
  * them (`YYYY-MM-DD HH:mm`, `…:ss` with seconds); impossible days and times refused; written back
  * by the same pattern; a day-time pattern's day alone; and the moment a day-time is in a zone.
  */
+import process from "node:process";
 import { assertEquals } from "@std/assert";
 import { test } from "../../../testing/mod.ts";
 import {
@@ -130,4 +131,41 @@ test("the moment a day-time is in the app's time zone, as a Date", () => {
   assertEquals(at("2026-03-08 03:30", "America/New_York"), "2026-03-08T07:30:00.000Z");
   assertEquals(dateOfDayTime("2026-02-30 10:00", "UTC"), undefined);
   assertEquals(dateOfDayTime("soon"), undefined);
+});
+
+test("a skipped local time moves forward by the gap and a repeated time uses its earlier instant", () => {
+  const at = (value: string, zone: string) => dateOfDayTime(value, zone)?.toISOString();
+  assertEquals(at("2026-03-08 02:30", "America/New_York"), "2026-03-08T07:30:00.000Z");
+  assertEquals(at("2026-11-01 01:30", "America/New_York"), "2026-11-01T05:30:00.000Z");
+  assertEquals(at("2026-10-04 02:15", "Australia/Lord_Howe"), "2026-10-03T15:45:00.000Z");
+  assertEquals(at("2026-04-05 01:45", "Australia/Lord_Howe"), "2026-04-04T14:45:00.000Z");
+  assertEquals(at("2011-12-30 12:00", "Pacific/Apia"), "2011-12-30T22:00:00.000Z");
+  assertEquals(at("0000-01-01", "UTC"), "0000-01-01T00:00:00.000Z");
+  const original = process.env.TZ;
+  try {
+    process.env.TZ = "America/New_York";
+    for (const local of ["2026-03-08 02:30", "2026-11-01 01:30"]) {
+      assertEquals(dateOfDayTime(local)?.toISOString(), at(local, "America/New_York"));
+    }
+  } finally {
+    if (original === undefined) delete process.env.TZ;
+    else process.env.TZ = original;
+  }
+});
+
+test("Japanese numeric month names round trip through a custom pattern", () => {
+  const value = "2026-11-16 14:30";
+  const by = "d MMM yyyy HH:mm";
+  assertEquals(parseDayTime(formatPattern(value, by, "ja-JP"), by, "ja-JP"), value);
+});
+
+test("Arabic short date and time including locale digits round trips", () => {
+  for (const locale of ["ar-EG", "ar-EG-u-nu-arab"]) {
+    const text = new Intl.DateTimeFormat(locale, {
+      dateStyle: "short",
+      timeStyle: "medium",
+      timeZone: "UTC",
+    }).format(new Date("2026-11-16T14:30:05Z"));
+    assertEquals(parseDayTime(text, undefined, locale), "2026-11-16 14:30:05");
+  }
 });

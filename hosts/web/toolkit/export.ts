@@ -115,7 +115,7 @@ export function toCsv(
   };
   const rows = dataRows(sheet);
   const lines = (csv.header === false ? rows : [sheet.headers, ...rows]).map((r) =>
-    r.map(cell).join(delimiter)
+    r.length === 1 && text(r[0]) === "" ? '""' : r.map(cell).join(delimiter)
   );
   return lines.join(lineEnding) + (lines.length && csv.finalNewline ? lineEnding : "");
 }

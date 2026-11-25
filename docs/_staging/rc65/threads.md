@@ -19,7 +19,7 @@ Under rc.65's **New:**
   subthread, in that message's own commit: a customer writing on WhatsApp reopens their chat. Front
   ends pass `latest`, the newest message they drew (`null` for none), and archiving is refused
   (`conflict`) when anything in the conversation is newer: the chat, its notes, its subthreads at
-  every level.
+  every level, but what the archiver said themselves.
 
 Under rc.65's **Fixed:**
 

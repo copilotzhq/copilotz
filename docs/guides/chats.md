@@ -60,8 +60,8 @@ await runtime.call("chat.archive", { thread: order, archived: true }, { actor: a
 - **Nothing new is put away unseen.** A front end passes `latest`, the newest message it drew of the
   conversation, or `null` when it drew none. If anything in the conversation is newer (in the chat,
   its staff notes or any of its subthreads, at any level), archiving is refused (`conflict`) and
-  nothing changes. A message as old as that one counts as seen. An agent's private steps don't
-  count:
+  nothing changes. A message as old as that one counts as seen, and so does whatever the archiver
+  said themselves (a closing note in the staff notes, say). An agent's private steps don't count:
 
   ```ts
   // What the page drew: message.conversation's answer, oldest first.
@@ -75,10 +75,11 @@ Archiving an archived chat, or restoring one that isn't, changes nothing.
 
 On the web, a chat's header menu, a row's menu on the Chats tab and the command palette's "Archive
 this chat" archive it. Each passes what it drew: a page, its transcript (the chat's page, its notes'
-too while their lane is open); a row, the message it shows. Refused, a toast says something new
-arrived, with a way to the chat. In the terminal, `/archive` puts the open conversation away, or one
-`/threads` listed (`/archive 2`), checking what the screen or the list showed of it; one named by id
-is put away as it is.
+too while their lane is open); a row, the message it shows (a chat's row, its notes row's when
+that's newer and listed beside it). Refused, a toast says something new arrived, with a way to see
+it: the staff notes, on a chat's page that has them, else the chat. In the terminal, `/archive` puts
+the open conversation away, or one `/threads` listed (`/archive 2`), checking what the screen or the
+list showed of it; one named by id is put away as it is.
 
 ## Restoring a chat
 
@@ -144,3 +145,7 @@ Kept simple on purpose:
 - **Subthreads are known by their ids.** A thread is a subthread of the one it hangs from when its
   id is `<message>:sub`, as `send_message` makes them; one an app makes otherwise is a chat of its
   own, archived and listed as one.
+- A notes or subthread page passes its own newest message: the chat's newer ones refuse it there.
+- A message's time is stamped before its commit, so one committed late can slip past the check.
+- Notes made in the milliseconds before an archive aren't checked.
+- An omitted `latest` (scripts, `/archive <id>`) checks nothing.

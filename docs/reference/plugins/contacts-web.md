@@ -38,7 +38,7 @@ Nothing to set: it works as it comes.
 
 It builds on no other plugin.
 
-It ships with `copilotz@1.0.0-rc.62`.
+It ships with `copilotz@1.0.0-rc.63`.
 
 ## Listing
 

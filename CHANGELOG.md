@@ -1,4 +1,7 @@
-## Unreleased
+## 1.0.0-rc.63 — 2026-11-24
+
+Chats can be renamed, the models catalog knows GPT-6.2 Astra and Sol, and rc.62's `"moderate"`
+validation level is gone before anything depends on it.
 
 **New:**
 

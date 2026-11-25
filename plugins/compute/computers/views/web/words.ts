@@ -27,8 +27,9 @@ export const say = defineWords("computers", {
   plansAbout: "Your agents run on AI plans you already pay for, instead of the app's models. " +
     "Connect each one once, and it works in every conversation and space here.",
   connectPlans: "Connect your plans",
-  plansPrivate: "Your plan pays for the AI. A cloud computer you use for it is charged while " +
-    "it's awake. Sign-ins stay on your computers, or sealed on the server: nobody else sees them.",
+  plansPaid: "Your plan pays for the AI.",
+  plansCloud: "A cloud computer you use for it is charged while it's awake.",
+  plansPrivate: "Sign-ins stay on your computers, or sealed on the server: nobody else sees them.",
   checkFailed: "Couldn't check your computers: {why}",
   connect: "Connect",
   fix: "Fix",
@@ -299,4 +300,22 @@ export const say = defineWords("computers", {
   stepSavesFolder: "Saves a file from this chat in the space's folder",
   stepSent: "Sent {file}",
   stepSends: "Sends {path} to this chat",
+
+  // What a computer the app keeps costs (the `computer.cost` View)
+  costHour: {
+    one: "About {price} per hour of work, and it sleeps {count} minute after.",
+    other: "About {price} per hour of work, and it sleeps {count} minutes after.",
+  },
+  costCoversOnce: {
+    one: "Your {amount} covers about {count} hour of work, after this month's disk.",
+    other: "Your {amount} covers about {count} hours of work, after this month's disk.",
+  },
+  costCoversMonth: {
+    one: "Your {amount} a month covers about {count} hour of work, after the disk.",
+    other: "Your {amount} a month covers about {count} hours of work, after the disk.",
+  },
+  costMonth: "This month: {awake} awake · {price} · disk {disk}",
+  costMonthNoDisk: "This month: {awake} awake · {price}",
+  awakeHours: "{hours}h {minutes}m",
+  awakeMinutes: "{minutes}m",
 });

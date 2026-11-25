@@ -2,7 +2,9 @@
  * The computers plugin's contract, for plugins that build on it (an app's
  * own, such as hosted computers or published apps): the work a computer
  * serves and its shapes (shared/workloads.ts), the program's pool mode
- * (shared/pool.ts), and a space's environment as people read it (`envVar`).
+ * (shared/pool.ts), a space's environment as people read it (`envVar`), and
+ * what an app that keeps computers says of them (`computerWake`: how to wake
+ * them, what they cost, how long a wake takes).
  * Other plugins send it work by these names through `ctx.workers`, and call
  * the plugin's Actions by name.
  */
@@ -19,6 +21,8 @@ export {
 } from "./shared/workloads.ts";
 export { POOL, POOL_KIND, type PoolAssign, type PoolRelease } from "./shared/pool.ts";
 export type { EnvVar } from "./collections/env-var.ts";
+export type { ComputerWake, WakeEstimate } from "./shared/wake.ts";
+export type { ComputerCost, ComputerPrices } from "./shared/cost.ts";
 
 /**
  * What a View the computers' web front end draws under a space's

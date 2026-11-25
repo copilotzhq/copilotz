@@ -2695,6 +2695,7 @@
             "text",
             "calls",
             "retry",
+            "waking",
             "open",
             "in",
             "at"
@@ -2755,6 +2756,23 @@
                   "attempt",
                   "at",
                   "reason"
+                ]
+              },
+              "waking": {
+                "type": "object",
+                "properties": {
+                  "at": {
+                    "type": "string"
+                  },
+                  "seconds": {
+                    "type": "number"
+                  },
+                  "slower": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "at"
                 ]
               },
               "open": {
@@ -5133,6 +5151,19 @@
           "vectors": [],
           "indexes": [],
           "queries": [
+            {
+              "name": "cost",
+              "callers": {
+                "person": "yes",
+                "agent": "yes",
+                "contact": "no",
+                "anonymous": "no",
+                "key": "yes",
+                "routine": "yes",
+                "maintenance": "no"
+              },
+              "helper": "people"
+            },
             {
               "name": "mine",
               "callers": {

@@ -318,6 +318,7 @@ Generated: `deno run -A packages/team/tests/words.ts`.
 | `tiers.nowPlan` | New chats use {tier}, your plan's default. |
 | `tiers.onlyRunners` | Only {org}'s owners and admins change these. You can switch a chat's tier as you write. |
 | `tiers.onlyRunnersHere` | Only the org's owners and admins change these. You can switch a chat's tier as you write. |
+| `tiers.onPlans` | on your plans · model $0 |
 | `tiers.onTier` | {model} on {tier} |
 | `tiers.ownersChoose` | Your org's owners and admins choose this. |
 | `tiers.perMessage` | a message |

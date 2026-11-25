@@ -106,3 +106,63 @@ for (const [name, make] of Object.entries(stores)) {
     }
   });
 }
+
+/** Waits for its computer to wake (saying so), then thinks, then answers. */
+const waking: LlmAdapter = {
+  async *generate() {
+    yield { type: "waking", seconds: 5 };
+    await pause(150);
+    yield { type: "thinking" };
+    await pause(150);
+    yield { type: "text", text: "Awake now." };
+  },
+};
+
+test("a model whose computer is waking says so in the live document, until it's awake", async () => {
+  const runtime = await createRuntime({
+    store: memoryStore(),
+    plugins: [
+      models,
+      chat,
+      definePlugin({
+        name: "app",
+        resources: {
+          provider: { plan: { adapter: "waking" } },
+          agents: { lead: { instructions: "Hi.", model: "plan/lead", default: true } },
+        },
+        adapters: { llm: { waking } },
+        views: {
+          watch: (item: { thread: string }, ctx: ViewContext) =>
+            (ctx.db.collection<Live>("live").find({ thread: item.thread }).value ?? []).map((
+              l,
+            ) => ({
+              text: l.text,
+              waking: l.waking?.seconds ?? null,
+            })),
+        },
+      }),
+    ],
+  });
+  try {
+    const thread = crypto.randomUUID();
+    const watch = runtime.observe<{ text: string; waking: number | null }[]>("watch", { thread });
+    await watch.ready;
+    const seen: { text: string; waking: number | null }[][] = [];
+    watch.subscribe(() => {
+      const out = watch.get();
+      if (out.status === "ready") seen.push(out.value);
+    });
+    await runtime.call("chat.send", { thread, from: "ana", text: "Hello?" });
+    await runtime.idle();
+    await pause(20);
+    watch.close();
+    const shown = seen.flat();
+    assert(shown.some((l) => l.waking === 5 && !l.text), JSON.stringify(seen));
+    // Awake (it thinks): the notice goes before anything's written, and never shows beside words.
+    assert(shown.some((l) => l.waking === null && !l.text), JSON.stringify(seen));
+    assert(shown.every((l) => !(l.waking !== null && l.text)), JSON.stringify(seen));
+    assertEquals(seen.at(-1), []);
+  } finally {
+    await runtime.close();
+  }
+});

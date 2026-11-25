@@ -418,7 +418,7 @@ function Where(
               <LazyView
                 kind="computer.cost"
                 item={{}}
-                hints={{ mode: "price", kind: cloud.key }}
+                hints={{ mode: "price" }}
                 fallback={null}
               />
             </span>

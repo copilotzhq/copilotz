@@ -223,6 +223,20 @@ test("without tiers: every plan the app has, each on its own card, not connected
   assertStringIncludes(draw(plansView({}, ctxOf({}))), 'aria-busy="true"');
 });
 
+test("what pays: their plan for the AI; a cloud computer, where the app has them, while it's awake", () => {
+  assertStringIncludes(
+    text(draw(plansView({}, ctxOf(READS)))),
+    "Your plan pays for the AI. Sign-ins stay on your computers, or sealed on the server",
+  );
+  assertStringIncludes(
+    text(
+      draw(plansView({}, ctxOf({ ...READS, "cloudComputer.mine": [{ _id: "cloud" }] }, {}, CLOUD))),
+    ),
+    "Your plan pays for the AI. A cloud computer you use for it is charged while it's awake. " +
+      "Sign-ins stay on your computers",
+  );
+});
+
 test("with tiers: the plans they list, ways of a plan as one card, in the person's order; the order to change", () => {
   const plans = plansOf(LISTED, [CHATGPT]);
   // Cursor's way in isn't one this front end connects: left out.

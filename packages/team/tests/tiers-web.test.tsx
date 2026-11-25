@@ -19,6 +19,7 @@ import {
   faster,
   perReply,
   providerSaid,
+  tierPriceSaid,
 } from "../tiers/views/web/words.ts";
 import { test } from "copilotz/testing";
 
@@ -122,6 +123,13 @@ test("prices, efforts, who chose and who runs a model, in words", () => {
     "about 240 messages a month for each seat on Team",
   );
   assertEquals([faster(0.3, 0.023), faster(0.024, 0.023)], ["13×", undefined]);
+});
+
+test("a tier's price for the person: theirs with their plans, nothing on them alone", () => {
+  assertEquals(tierPriceSaid({ price: 0.02 }), "2¢", "nothing of theirs: the app's price");
+  assertEquals(tierPriceSaid({ price: 0.02, yours: 0.004 }), "0.4¢", "partly on their plans");
+  assertEquals(tierPriceSaid({ price: 0.02, yours: 0 }), "on your plans · model $0");
+  assertEquals(tierPriceSaid({ price: null }), undefined);
 });
 
 test("the org's tiers: the default, each kind's model and fallbacks, and changing them for who may", () => {

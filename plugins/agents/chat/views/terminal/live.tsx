@@ -1,7 +1,8 @@
 /**
  * What an agent is writing right now: its tool calls as they run, then its
  * answer so far. When the model's call broke and is tried again (`retry`),
- * what the broken attempt wrote stays, dim, under when it tries next.
+ * what the broken attempt wrote stays, dim, under when it tries next. While
+ * the model waits for its computer to wake (`waking`), it says so.
  */
 import { Box, Text } from "ink";
 import type { ReactNode } from "react";
@@ -30,6 +31,7 @@ export const liveView = (l: Live, ctx: ViewContext<ReactNode>) => {
         )
         : null}
       {l.retry ? <Retrying agent={l.agent} retry={l.retry} prefix={elsewhere} /> : null}
+      {l.waking ? <Text dimColor>{`${elsewhere}  ◌ ${l.agent}: waking the computer…`}</Text> : null}
     </Box>
   );
 };

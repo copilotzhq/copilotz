@@ -21,6 +21,7 @@ import { did, Steps } from "../chat/views/web/steps.tsx";
 import { Transcript } from "../chat/views/web/transcript.tsx";
 import { VoiceFailed } from "../chat/views/web/voice-failed.tsx";
 import { VoiceNote } from "../chat/views/web/voice-note.tsx";
+import { Waking } from "../chat/views/web/waking.tsx";
 import { chatsView } from "../chat/views/web/chats.tsx";
 import { ArchivedNote } from "../chat/views/web/archived-note.tsx";
 import { archivedView } from "../chat/views/web/archived.tsx";
@@ -123,6 +124,10 @@ function screens(): ReactNode[] {
     <Retrying
       retry={{ at: new Date(Date.now() - 5000).toISOString(), attempt: 1, reason: "429" }}
     />,
+    <Waking waking={{ at, seconds: 5 }} />,
+    <Waking waking={{ at, seconds: 40, slower: true }} />,
+    <Waking waking={{ at: new Date(Date.now() - 60_000).toISOString(), seconds: 5 }} />,
+    <Waking waking={{ at }} />,
     <Transcript last="m1" mine>
       <p>hi</p>
     </Transcript>,
@@ -259,6 +264,12 @@ function screens(): ReactNode[] {
         ctx(undefined, { thread: "t1" }),
       )}
     </>,
+    <>
+      {liveView(
+        { _id: "l", thread: "t1", agent: "maya", at, calls: [], text: "", waking: { at } } as never,
+        ctx(undefined, { thread: "t1" }),
+      )}
+    </>,
   ];
 }
 
@@ -349,6 +360,10 @@ test("with no words set, the English reads as it always did", () => {
       "to send",
       "Retrying…",
       "retry 2",
+      "Waking the computer… (about 5 seconds)",
+      "Waking the computer… (about 40 seconds: it takes longer at this hour)",
+      "Still waking the computer…",
+      "waking its computer",
       "Enter</kbd> to send · <kbd",
     ]
   ) assertStringIncludes(all, phrase);

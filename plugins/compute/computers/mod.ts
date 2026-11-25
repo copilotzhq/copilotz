@@ -93,7 +93,8 @@ export type { Desk } from "./collections/desk.ts";
 export type { EnvVar } from "./collections/env-var.ts";
 export type { Preview } from "./collections/preview.ts";
 export type { ComputersSettings } from "./shared/settings.ts";
-export type { ComputerWake } from "./shared/wake.ts";
+export type { ComputerWake, WakeEstimate } from "./shared/wake.ts";
+export type { ComputerCost, ComputerPrices } from "./shared/cost.ts";
 /** Offers a computer, or a free VM of a pool, the app's release when its program is older. */
 export { offerUpdate } from "./shared/update.ts";
 /** Asks and yeses computers kept before chat kept every ask, kept as chat keeps them now. */

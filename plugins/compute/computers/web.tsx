@@ -28,7 +28,9 @@
  * serves a port gets a preview (`computer.preview`), opened in a tab, its
  * link copied, for the space's members or anyone with the link; the
  * computer's previews list over its jobs. A space's Environment tab: its
- * variables and secrets, which its managers add, change and remove.
+ * variables and secrets, which its managers add, change and remove. What a
+ * computer the app keeps costs, in a line, for other front ends to place
+ * (`computer.cost`: an hour awake, how far credits go, this month so far).
  *
  * Other front ends add to it through three resources (see
  * views/web/kinds.ts): `computerKinds`, kinds of computer beyond people's
@@ -47,10 +49,10 @@ import { spaceComputersView } from "./views/web/space-tab.tsx";
 import { stepView } from "./views/web/step.tsx";
 import { routinePanelView } from "./views/web/routine-panel.tsx";
 import { plansView } from "./views/web/plans.tsx";
+import { computerCostView } from "./views/web/cost.tsx";
 import { plansPaletteView } from "./views/web/plans-palette.ts";
 import { yoursView } from "./views/web/yours.tsx";
 import { plansWelcomeView } from "./views/web/welcome.tsx";
-import { costView } from "./views/web/cost.tsx";
 
 /** The computer tools (resources/tools.ts), by name: the browser loads front-end code only. */
 const TOOLS = [
@@ -83,7 +85,7 @@ export const computersWeb: Plugin = definePlugin({
     "computer.plans.palette": plansPaletteView,
     "computer.plans.welcome": plansWelcomeView,
     "computer.yours": yoursView,
-    "computer.cost": costView,
+    "computer.cost": computerCostView,
     "env.space": envSpaceView,
   },
   resources: {

@@ -265,6 +265,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.startNewChat` | Start a new chat |
 | `chat.startsInPersonal` | Starts in Personal, just for you |
 | `chat.startsInSpace` | Starts in {space}, for its members |
+| `chat.stillWaking` | Still waking the computer… |
 | `chat.stop` | Stop |
 | `chat.stopped` | Stopped |
 | `chat.stopping` | Stopping… |
@@ -296,6 +297,10 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.voiceMessage` | Voice message |
 | `chat.waitingOnAnswer` | Waiting on your answer: your next message replies. |
 | `chat.waitingOnYou` | Waiting on you |
+| `chat.waking` | Waking the computer… |
+| `chat.wakingAbout` | one: Waking the computer… (about {count} second) / other: Waking the computer… (about {count} seconds) |
+| `chat.wakingSlower` | one: Waking the computer… (about {count} second: it takes longer at this hour) / other: Waking the computer… (about {count} seconds: it takes longer at this hour) |
+| `chat.wakingStatus` | waking its computer |
 | `chat.wantsTo` | {agent} wants to {doing} |
 | `chat.welcomeBack` | Back |
 | `chat.welcomeDone` | Get started |
@@ -328,6 +333,8 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.antigravityCli` | Antigravity |
 | `computers.antigravityTitle` | Google AI plan, through Antigravity |
 | `computers.askMeFirst` | Ask me first in {spaces} |
+| `computers.awakeHours` | {hours}h {minutes}m |
+| `computers.awakeMinutes` | {minutes}m |
 | `computers.back` | Back |
 | `computers.cancel` | Cancel |
 | `computers.cardAlso` | Also through {cli} on {computer}, as backup. |
@@ -355,6 +362,11 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.connect` | Connect |
 | `computers.connectPlans` | Connect your plans |
 | `computers.copyCode` | Copy the code |
+| `computers.costCoversMonth` | one: Your {amount} a month covers about {count} hour of work, after the disk. / other: Your {amount} a month covers about {count} hours of work, after the disk. |
+| `computers.costCoversOnce` | one: Your {amount} covers about {count} hour of work, after this month's disk. / other: Your {amount} covers about {count} hours of work, after this month's disk. |
+| `computers.costHour` | one: About {price} per hour of work, and it sleeps {count} minute after. / other: About {price} per hour of work, and it sleeps {count} minutes after. |
+| `computers.costMonth` | This month: {awake} awake · {price} · disk {disk} |
+| `computers.costMonthNoDisk` | This month: {awake} awake · {price} |
 | `computers.done` | Done |
 | `computers.dropTitle` | Drop to upload |
 | `computers.dropTo` | To {folder} on {computer} |
@@ -446,7 +458,9 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.paletteKeywords` | plan, subscription, sign in, computer, Claude, ChatGPT, Codex, Gemini, Google, Grok |
 | `computers.personal` | your Personal space |
 | `computers.plansAbout` | Your agents run on AI plans you already pay for, instead of the app's models. Connect each one once, and it works in every conversation and space here. |
-| `computers.plansPrivate` | Your plan pays for the AI. A cloud computer you use for it is charged while it's awake. Sign-ins stay on your computers, or sealed on the server: nobody else sees them. |
+| `computers.plansCloud` | A cloud computer you use for it is charged while it's awake. |
+| `computers.plansPaid` | Your plan pays for the AI. |
+| `computers.plansPrivate` | Sign-ins stay on your computers, or sealed on the server: nobody else sees them. |
 | `computers.plansTitle` | Your plans |
 | `computers.recommended` | Recommended |
 | `computers.replace` | Replace |

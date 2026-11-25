@@ -4,7 +4,9 @@
  * before its first token). Before the commit that writes what the step
  * became, it stops (`settle`), and that commit removes the document (`done`).
  * When the model's call breaks and is tried again (`retry`), it says when,
- * and keeps what it showed until the new attempt writes something. A turn
+ * and keeps what it showed until the new attempt writes something. While
+ * the model waits for its computer to wake (`waking`), it says so, until
+ * whatever the model sends next. A turn
  * that offers no tools only answers: its documents say so (`open`), and a
  * contact reads their words as they come (see collections/live.ts).
  */
@@ -23,6 +25,10 @@ export type LiveWriter = {
   text(delta: string): void;
   /** The model's call broke: it's tried again in `wait` ms. */
   retry(at: { attempt: number; wait: number; reason: string }): void;
+  /** The model waits for its computer to wake, about `seconds`. */
+  waking(about: { seconds?: number; slower?: true }): void;
+  /** The model sent something else: its computer is awake. */
+  awake(): void;
   /** A tool call starting, then what it returned. */
   call(call: LiveCall): void;
   result(id: string, output: string): void;
@@ -87,6 +93,19 @@ export function liveWriter(
     },
     retry({ attempt, wait, reason }) {
       doc.retry = { attempt, at: new Date(Date.now() + wait).toISOString(), reason };
+      soon();
+    },
+    waking({ seconds, slower }) {
+      doc.waking = {
+        at: now(),
+        ...(seconds !== undefined ? { seconds } : {}),
+        ...(slower ? { slower } : {}),
+      };
+      soon();
+    },
+    awake() {
+      if (!doc.waking) return;
+      delete doc.waking;
       soon();
     },
     call(call) {

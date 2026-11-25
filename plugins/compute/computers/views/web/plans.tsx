@@ -181,7 +181,11 @@ function Plans(
       {list?.order ? <Order plans={plans} action={list.order} call={call} /> : null}
       <p className="plans-foot">
         <Icon name="lock" size={14} />
-        <span>{say("plansPrivate")}</span>
+        <span>
+          {/* What pays: their plan; a computer the app keeps for it, while it's awake. */}
+          {[say("plansPaid"), ...(kinds.length ? [say("plansCloud")] : []), say("plansPrivate")]
+            .join(" ")}
+        </span>
       </p>
       {connecting
         ? (

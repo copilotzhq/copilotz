@@ -9,6 +9,8 @@ export const computers: Words = {
   "computers.antigravityCli": "Antigravity",
   "computers.antigravityTitle": "Plano do Google AI, pelo Antigravity",
   "computers.askMeFirst": "Perguntar a mim antes em {spaces}",
+  "computers.awakeHours": "{hours}h {minutes}min",
+  "computers.awakeMinutes": "{minutes}min",
   "computers.cancel": "Cancelar",
   "computers.checkAgain": "Verificar de novo",
   "computers.checkFailed": "Não deu para verificar seus computadores: {why}",
@@ -22,6 +24,20 @@ export const computers: Words = {
   "computers.codexCli": "Codex",
   "computers.codexTitle": "Plano do ChatGPT, pelo Codex",
   "computers.copyCode": "Copiar o código",
+  "computers.costCoversMonth": {
+    one: "Seus {amount} por mês cobrem cerca de {count} hora de trabalho, depois do disco.",
+    other: "Seus {amount} por mês cobrem cerca de {count} horas de trabalho, depois do disco.",
+  },
+  "computers.costCoversOnce": {
+    one: "Seus {amount} cobrem cerca de {count} hora de trabalho, depois do disco deste mês.",
+    other: "Seus {amount} cobrem cerca de {count} horas de trabalho, depois do disco deste mês.",
+  },
+  "computers.costHour": {
+    one: "Cerca de {price} por hora de trabalho, e ele dorme {count} minuto depois.",
+    other: "Cerca de {price} por hora de trabalho, e ele dorme {count} minutos depois.",
+  },
+  "computers.costMonth": "Este mês: {awake} acordado · {price} · disco {disk}",
+  "computers.costMonthNoDisk": "Este mês: {awake} acordado · {price}",
   "computers.done": "Pronto",
   "computers.dropTitle": "Solte para enviar",
   "computers.dropTo": "Para {folder} em {computer}",
@@ -73,9 +89,11 @@ export const computers: Words = {
   "computers.plansAbout":
     "Seus agentes rodam nos planos de IA que você já paga, em vez dos modelos do app. " +
     "Conecte cada um uma vez, e ele vale em todas as conversas e espaços daqui.",
+  "computers.plansCloud":
+    "Um computador na nuvem que você usa para ele é cobrado enquanto está acordado.",
+  "computers.plansPaid": "Seu plano paga pela IA.",
   "computers.plansPrivate":
-    "Seu plano paga a IA. Um computador na nuvem que você usa para ele é cobrado enquanto " +
-    "está acordado. Os logins ficam nos seus computadores, ou lacrados no servidor: ninguém mais os vê.",
+    "Os logins ficam nos seus computadores, ou lacrados no servidor: ninguém mais os vê.",
   "computers.plansTitle": "Seus planos",
   "computers.replace": "Substituir",
   "computers.replaceAll": {

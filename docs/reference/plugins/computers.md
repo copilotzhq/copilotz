@@ -36,6 +36,7 @@ Its named queries read for callers, as the rules let them:
 
 | Query           | Who outside runs it                            |
 | --------------- | ---------------------------------------------- |
+| `computer.cost` | people, agents for a person, keys and routines |
 | `computer.mine` | people, agents for a person, keys and routines |
 | `desk.here`     | people, agents for a person, keys and routines |
 | `desk.of`       | people, agents for a person, keys and routines |

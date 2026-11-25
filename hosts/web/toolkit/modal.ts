@@ -7,6 +7,9 @@
  * Escape, a press on the backdrop or `close()` all end in `onClose`. With
  * `keep` (something it started is under way), Escape and the backdrop wait:
  * its `cancel` event is refused and a press on the backdrop does nothing.
+ * With `isolated`, it answers only its own `close` and `cancel` events: React
+ * passes them up through its components, so without it a dialog shown inside
+ * another (a confirmation over a form) closing would close the outer one too.
  */
 import { type PointerEvent, type SyntheticEvent, useEffect, useRef } from "react";
 
@@ -17,10 +20,12 @@ const FIRST = ":is(input, textarea, select, button, a[href], [tabindex]):not(" +
 export function useModal(
   open: boolean,
   onClose: () => void,
-  { focus = "first", keep = false }: {
+  { focus = "first", keep = false, isolated = false }: {
     focus?: "first" | "dialog";
     /** It stays open: Escape and a press on the backdrop wait (it's busy). */
     keep?: boolean;
+    /** It answers only its own `close` and `cancel`, not a dialog's shown inside it. */
+    isolated?: boolean;
   } = {},
 ) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -38,10 +43,18 @@ export function useModal(
   return {
     ref,
     events: {
-      onClose: () => onClose(),
+      onClose: isolated
+        ? (event: SyntheticEvent<HTMLDialogElement>) => {
+          if (event.target === event.currentTarget) onClose();
+        }
+        : () => onClose(),
       // Escape, or the browser's own light dismiss: refused while it's kept open.
       ...(keep
-        ? { onCancel: (event: SyntheticEvent<HTMLDialogElement>) => event.preventDefault() }
+        ? {
+          onCancel: (event: SyntheticEvent<HTMLDialogElement>) => {
+            if (!isolated || event.target === event.currentTarget) event.preventDefault();
+          },
+        }
         : {}),
       // Only a press that starts and ends on the backdrop (the dialog itself, outside its box).
       onPointerDown: (event: PointerEvent<HTMLDialogElement>) => {

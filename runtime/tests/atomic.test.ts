@@ -406,8 +406,9 @@ each("calls made at once run one after the other, in the order made", async (
     "action.started",
     "action.completed",
   ]);
-  // Numbered as they were made: 1, then 2.
-  assertEquals(bumps.map((e) => (e.type === "action.started" ? e.id : e.cause!).split(".")[1]), [
+  // The same call twice, numbered as they were made: #1, then #2.
+  const number = (id: string) => /#(\d+)\.[^.]+$/.exec(id)?.[1];
+  assertEquals(bumps.map((e) => number(e.type === "action.started" ? e.id : e.cause!)), [
     "1",
     "1",
     "2",

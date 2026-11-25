@@ -22,6 +22,7 @@ import {
   unprivate,
 } from "./registry.ts";
 import { presenter } from "./views.ts";
+import { callId, deliveryCaller, sameCall } from "./call-ids.ts";
 import { refuseBlobKeys } from "./blobs.ts";
 import {
   querying as queryingOver,
@@ -73,8 +74,11 @@ type Reach = {
   signal: AbortSignal;
   /** This job may repeat earlier work: a retried call or delivery. */
   retry: boolean;
-  /** Numbers the nested calls made under each cause, in call order. */
-  next(cause: string): number;
+  /**
+   * Counts, from 1, what's made under a key, in the order it's made: a
+   * caller's calls of one Action with one input (`sameCall`), or its timers.
+   */
+  next(key: string): number;
 };
 
 /** For whom ops in a held transaction go: what their writes answer to, as whom, in whose code. */
@@ -282,7 +286,10 @@ export function createExecutor(
     };
   };
 
-  /** A synchronous refusal has no place in the call sequence, as in rc.63. */
+  /**
+   * Checks a call's `allow` as its caller's actor: at once when the rule answers at once, else
+   * a promise. The call's number is taken before, so a refusal of either kind keeps it.
+   */
   const admit = (
     { name, def, input }: Asked,
     actor: Actor | undefined,
@@ -299,8 +306,8 @@ export function createExecutor(
   /**
    * What code acting as `who` does in a held transaction: the opener's
    * scope, or an atomic Action's. Its calls run one at a time, in the order
-   * they're made; each is numbered as it's made, so calls made together
-   * number stably.
+   * they're made; each takes its number among the caller's identical calls
+   * as it's made, so calls made together number stably.
    */
   const scoped = (
     job: Reach,
@@ -347,9 +354,14 @@ export function createExecutor(
       call: <R>(action: string, input?: unknown): Promise<R> => {
         let asked: Asked;
         let admission: void | Promise<void>;
+        let n = 0;
         try {
           held.ensure();
           asked = atomicOf(action, input);
+          // Its number is taken before its permission check: refused, it keeps it.
+          if (asked.def.record !== false && numbering) {
+            n = job.next(sameCall(numbering, asked.name, asked.input));
+          }
           // Permission reads see the effects of earlier calls on this scope.
           const before = turn;
           admission = admit(
@@ -365,9 +377,8 @@ export function createExecutor(
         } catch (error) {
           return Promise.reject(error);
         }
-        const position = asked.def.record !== false && numbering ? job.next(numbering) : 0;
         const result = Promise.all([turn, admission]).then(() =>
-          atomic<R>(job, held, asked, who, numbering, position)
+          atomic<R>(job, held, asked, who, numbering, n)
         );
         turn = Promise.allSettled([turn, result]);
         return result;
@@ -408,7 +419,7 @@ export function createExecutor(
     { name, def, input }: Asked,
     who: Who,
     numbering: string | undefined,
-    position: number,
+    n: number,
     own?: { given?: Attempt },
   ): Promise<R> => {
     const { actor } = who;
@@ -427,14 +438,15 @@ export function createExecutor(
     if (def.record === false) {
       const its: Who = { ...who, action: name };
       return await held.join(async () => {
-        const result = await run(its, who.cause);
+        // Its calls are its caller's, under the caller's name (a Processor's, a branch's).
+        const result = await run(its, numbering);
         if (own) await held.commit();
         return result;
       });
     }
     const inputHash = await fingerprint(name, input);
     const id = own?.given?.id ??
-      (numbering ? `${numbering}.${position}.${inputHash}` : crypto.randomUUID());
+      (numbering ? callId(numbering, name, n, inputHash) : crypto.randomUUID());
     let attempt = own?.given?.attempt ?? 1;
     let after = own?.given?.after;
     if (!own?.given && who.cause && job.retry) {
@@ -600,8 +612,9 @@ export function createExecutor(
 
   /**
    * What plugin code reaches. `cause` is what its writes answer to; nested
-   * calls and timers are numbered under `numbering` (the cause, unless a
-   * branch numbers its own).
+   * calls and timers are named under `numbering`, its caller (see
+   * call-ids.ts): the cause, unless a branch or a Processor's delivery names
+   * its own.
    */
   const context = (
     job: Reach,
@@ -766,6 +779,12 @@ export function createExecutor(
     // whom it works for too); what has no `allow` is internal, code's to call. Going on where
     // they couldn't is a grant of the system's (`ctx.as`), on record as one.
     const asked = { name, def: action, input: normalized };
+    // Its number among the caller's identical calls, taken as it's made: before any wait (so
+    // calls made at once number in the order made) and before its permission check (so a
+    // refused one keeps it).
+    const n = !given && numbering && action.record !== false
+      ? job.next(sameCall(numbering, name, normalized))
+      : 0;
     const who: Who = { cause: parent, actor };
     const held = action.transaction ? holding(job, who) : undefined;
     const admission = admit(
@@ -781,8 +800,6 @@ export function createExecutor(
           as,
         ),
     );
-    // Reserve before waiting on a database-backed rule, even for concurrent calls.
-    const position = !given && numbering && action.record !== false ? job.next(numbering) : 0;
     if (held) {
       try {
         if (admission) await admission;
@@ -792,7 +809,7 @@ export function createExecutor(
           asked,
           who,
           numbering,
-          position,
+          n,
           { given },
         );
       } catch (error) {
@@ -804,18 +821,19 @@ export function createExecutor(
     const checkGrant = (actor: Actor, action: string) =>
       job.send({ ops: [{ op: "elevate" }], actor, action });
     if (action.record === false) {
-      const ctx = context(job, parent, undefined, given?.scheduled, parent, actor, name);
+      // Its calls are its caller's, under the caller's name (a Processor's, a branch's).
+      const ctx = context(job, parent, undefined, given?.scheduled, numbering, actor, name);
       return await runAction<R>(registry, name, ctx, normalized, checkGrant);
     }
 
-    // A nested call's id comes from its cause, its place among the calls made
-    // under it (taken before any await, so parallel calls number stably) and
-    // what it does: a retry finds it again, and changed code makes a new call.
-    // It hashes the whole input, private fields too, though the log never holds them.
+    // A nested call's id names its caller, what it calls, its number among the caller's
+    // identical calls and its input (see call-ids.ts): a retry finds it again wherever it's
+    // made, and changed code makes a new call. It hashes the whole input, private fields
+    // too, though the log never holds them.
     const inputHash = await fingerprint(name, normalized);
     const hidden = action.private ?? [];
     let { id, attempt, after } = given ?? {
-      id: numbering ? `${numbering}.${position}.${inputHash}` : crypto.randomUUID(),
+      id: numbering ? callId(numbering, name, n, inputHash) : crypto.randomUUID(),
       attempt: 1,
       after: undefined,
     };
@@ -969,14 +987,15 @@ export function createExecutor(
       case "process": {
         const processor = registry.processors[request.processor];
         if (!processor) throw invalid(`Unknown processor "${request.processor}"`);
-        // A Processor runs as the actor of the event it handles.
+        // A Processor runs as the actor of the event it handles. Its writes answer to the
+        // event; its calls and timers are named apart from other Processors'.
         return processor.run(
           context(
             job,
             request.event.id,
             request.event,
             undefined,
-            request.event.id,
+            deliveryCaller(request.event.id, request.processor),
             request.event.actor,
           ),
           request.event,

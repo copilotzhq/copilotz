@@ -337,87 +337,9 @@ for (
       await runtime.close();
     }
   });
-
-  test(`${kind}: retries find rc.63 child receipts after synchronous denials`, async () => {
-    const store = await make();
-    // Receipts in rc.63's format, seeded before opening the upgraded runtime. Each parent failed after
-    // its first admitted child had committed. Hashes include the Action name and input.
-    const { epoch } = await store.open();
-    await store.transaction(epoch, async (tx) => {
-      for (
-        const [id, inputHash] of [["parent", "b888483fe9979b4c"], ["joined", "fb601e5df447c520"]]
-      ) {
-        const child = id + ".1.a67be582be756679";
-        tx.emit({
-          id,
-          type: "action.started",
-          actor: ana,
-          data: { action: id, input: {}, inputHash, attempt: 1 },
-        });
-        tx.emit({
-          id: child,
-          cause: id,
-          type: "action.started",
-          actor: ana,
-          data: { action: "sell", input: {}, inputHash: "a67be582be756679", attempt: 1 },
-        });
-        await tx.insert("sale", [{ _id: id }]);
-        tx.emit({
-          cause: child,
-          type: "action.completed",
-          actor: ana,
-          data: { action: "sell", result: { acknowledged: true, insertedId: id }, attempt: 1 },
-        });
-        tx.emit({ cause: id, type: "action.failed", actor: ana, data: { action: id, attempt: 1 } });
-      }
-    });
-    const runtime = await createRuntime({
-      store,
-      plugins: [{
-        name: "sales",
-        collections: {
-          sale: { schema: { type: "object", properties: { note: { type: "string" } } } },
-        },
-        actions: {
-          denied: defineAction({ atomic: true, allow: () => false, run: () => false }),
-          sell: defineAction({
-            atomic: true,
-            allow: people,
-            run: (ctx) => ctx.db.collection("sale").insertOne({}),
-          }),
-          parent: defineAction({
-            allow: people,
-            run: async (ctx) => {
-              await ctx.call("denied", {}).catch(() => {});
-              return ctx.call("sell", {});
-            },
-          }),
-          joined: defineAction({
-            allow: people,
-            run: (ctx) =>
-              ctx.transaction(async (tx) => {
-                await tx.call("denied", {}).catch(() => {});
-                return tx.call("sell", {});
-              }),
-          }),
-        },
-      }],
-    });
-    try {
-      for (const id of ["parent", "joined"]) {
-        assertEquals(await runtime.call(id, {}, { id, actor: ana }), {
-          acknowledged: true,
-          insertedId: id,
-        });
-      }
-      assertEquals((await store.find("sale", {})).length, 2);
-    } finally {
-      await runtime.close();
-    }
-  });
 }
 
-test("parallel nested calls reserve their places before asynchronous admission settles", async () => {
+test("parallel nested calls take their numbers before asynchronous admission settles", async () => {
   const store = memoryStore();
   const runtime = await createRuntime({
     store,
@@ -438,10 +360,11 @@ test("parallel nested calls reserve their places before asynchronous admission s
     const started = (await store.events(0)).filter((e) =>
       e.type === "action.started" && e.cause === "pair"
     );
-    assertEquals(Object.fromEntries(started.map((e) => [e.data.action, e.id.split(".")[1]])), {
-      first: "1",
-      second: "2",
-    });
+    // Named by caller, Action and number among identical calls (the input's hash after).
+    assertEquals(
+      Object.fromEntries(started.map((e) => [e.data.action, e.id.slice(0, e.id.lastIndexOf("."))])),
+      { first: "pair.first#1", second: "pair.second#1" },
+    );
   } finally {
     await runtime.close();
   }

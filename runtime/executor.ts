@@ -95,8 +95,12 @@ type Asked = {
   name: string;
   def: ActionDef;
   input: unknown;
-  /** Its canonical `[name, input]` (`callText`): what its hash and its count are of. */
-  text: string;
+  /**
+   * Its canonical `[name, input]` (`callText`): what its hash and its count are of. Only a
+   * recorded call has one: an unrecorded one (a model's stream, with the whole conversation in
+   * its input) is never made canonical.
+   */
+  text?: string;
 };
 
 /** A transaction a job holds open on the owner (see `holding`). */
@@ -380,7 +384,7 @@ export function createExecutor(
               ),
           );
           // Numbered once admitted, or before waiting on an asynchronous rule (see `admit`).
-          if (asked.def.record !== false && numbering) {
+          if (asked.text !== undefined && numbering) {
             n = job.next(sameCall(numbering, asked.text));
           }
         } catch (error) {
@@ -411,7 +415,12 @@ export function createExecutor(
     const normalized = json(actionInput(def, input));
     inputs[name]?.(normalized);
     refuseBlobKeys(normalized);
-    return { name, def, input: normalized, text: callText(name, normalized) };
+    return {
+      name,
+      def,
+      input: normalized,
+      ...(def.record === false ? {} : { text: callText(name, normalized) }),
+    };
   };
 
   /**
@@ -453,7 +462,7 @@ export function createExecutor(
         return result;
       });
     }
-    const inputHash = await fingerprintOf(text);
+    const inputHash = await fingerprintOf(text ?? callText(name, input));
     const id = own?.given?.id ??
       (numbering ? callId(numbering, name, n, inputHash) : crypto.randomUUID());
     let attempt = own?.given?.attempt ?? 1;
@@ -787,7 +796,12 @@ export function createExecutor(
     // Code acting for someone calls what lets them, as they would from outside (an agent, for
     // whom it works for too); what has no `allow` is internal, code's to call. Going on where
     // they couldn't is a grant of the system's (`ctx.as`), on record as one.
-    const asked: Asked = { name, def: action, input: normalized, text: callText(name, normalized) };
+    const asked: Asked = {
+      name,
+      def: action,
+      input: normalized,
+      ...(action.record === false ? {} : { text: callText(name, normalized) }),
+    };
     const who: Who = { cause: parent, actor };
     const held = action.transaction ? holding(job, who) : undefined;
     const admission = admit(
@@ -806,7 +820,7 @@ export function createExecutor(
     // Its number among the caller's identical calls: taken once a synchronous rule lets it
     // through, or before waiting on an asynchronous one, so calls made at once number in the
     // order made. A synchronous refusal takes none (see `admit`).
-    const n = !given && numbering && action.record !== false
+    const n = !given && numbering && asked.text !== undefined
       ? job.next(sameCall(numbering, asked.text))
       : 0;
     if (held) {
@@ -839,7 +853,7 @@ export function createExecutor(
     // identical calls and its input (see call-ids.ts): a retry finds it again wherever it's
     // made, and changed code makes a new call. It hashes the whole input, private fields
     // too, though the log never holds them.
-    const inputHash = await fingerprintOf(asked.text);
+    const inputHash = await fingerprintOf(asked.text ?? callText(name, normalized));
     const hidden = action.private ?? [];
     let { id, attempt, after } = given ?? {
       id: numbering ? callId(numbering, name, n, inputHash) : crypto.randomUUID(),

@@ -551,6 +551,56 @@ for (const [kind, make] of Object.entries(stores)) {
     }
   });
 
+  test(`${kind}: calls that differ only by who makes them carry who in their input`, async () => {
+    const store = await make.fresh();
+    // Refused at once on the first attempt, allowed on the retry.
+    const refused = new Set(["bo"]);
+    let fail = true;
+    const signers: Actor[] = ["bo", "cy"].map((id) => ({ kind: "person", id, in: "shop" }));
+    const runtime = await createRuntime({
+      store,
+      plugins: [{
+        name: "shop",
+        collections: {
+          note: { schema: { type: "object", properties: { by: { type: "string" } } } },
+        },
+        actions: {
+          note: defineAction({
+            input: {
+              type: "object",
+              properties: { order: { type: "string" }, by: { type: "string" } },
+            } as const,
+            allow: (actor) => !refused.has(actor.id),
+            run: (ctx, input) => ctx.db.collection("note").insertOne(input),
+          }),
+          sign: defineAction({
+            allow: people,
+            run: async (ctx) => {
+              // Who signs is in the input: each person's note is a call of its own.
+              for (const signer of signers) {
+                await ctx.as(signer).call("note", { order: "o1", by: signer.id }).catch(() => null);
+              }
+              if (fail) throw new Error("boom");
+            },
+          }),
+        },
+      }],
+    });
+    try {
+      await runtime.call("sign", {}, { id: "s1", actor: ana }).catch(() => {});
+      refused.clear();
+      fail = false;
+      await runtime.call("sign", {}, { id: "s1", actor: ana });
+      const notes = await store.find("note", {});
+      assertEquals(
+        Object.fromEntries(signers.map(({ id }) => [id, notes.filter((n) => n.by === id).length])),
+        { bo: 1, cy: 1 },
+      );
+    } finally {
+      await runtime.close();
+    }
+  });
+
   test(`${kind}: the reference's example finds its calls on a retry, its discount refused first`, async () => {
     const checkout = await referenceExample();
     const store = await make.fresh();
@@ -596,4 +646,52 @@ test("a call's input hash is rc.64's, worked out once for its id and its count",
   assertEquals(await fingerprint("sell", {}), "a67be582be756679");
   assertEquals(await fingerprintOf(callText("sell", {})), "a67be582be756679");
   assertEquals(await fingerprint("sell", undefined), await fingerprintOf(callText("sell", null)));
+});
+
+test("an unrecorded call never makes its input canonical; a recorded one does", async () => {
+  const conversation = { type: "object", properties: { messages: { type: "array" } } } as const;
+  const runtime = await createRuntime({
+    store: memoryStore(),
+    plugins: [{
+      name: "talk",
+      actions: {
+        // A model's stream: the whole conversation in its input, never on record.
+        "talk.stream": defineAction({ input: conversation, record: false, run: () => "streamed" }),
+        "talk.step": defineAction({
+          input: conversation,
+          atomic: true,
+          record: false,
+          run: () => "stepped",
+        }),
+        "talk.save": defineAction({ input: conversation, run: () => "saved" }),
+        "talk.turn": defineAction({
+          run: async (ctx) => {
+            const messages = Array.from({ length: 50 }, (_, i) => ({ text: `message ${i}` }));
+            return [
+              await ctx.call("talk.stream", { messages }),
+              await ctx.transaction((tx) => tx.call("talk.step", { messages })),
+              await ctx.call("talk.save", { messages }),
+            ];
+          },
+        }),
+      },
+    }],
+  });
+  // `canonical` is what stringifies with a replacer; a call's text is its `[action, input]`.
+  const stringify = JSON.stringify;
+  const made: string[] = [];
+  JSON.stringify = function (value: unknown, replacer?: unknown, space?: string | number) {
+    if (typeof replacer === "function" && Array.isArray(value) && typeof value[0] === "string") {
+      made.push(value[0]);
+    }
+    return stringify.call(JSON, value, replacer as never, space);
+  } as typeof JSON.stringify;
+  try {
+    assertEquals(await runtime.call("talk.turn", {}), ["streamed", "stepped", "saved"]);
+  } finally {
+    JSON.stringify = stringify;
+    await runtime.close();
+  }
+  assertEquals(made.filter((name) => name === "talk.stream" || name === "talk.step"), []);
+  assertEquals(made.filter((name) => name === "talk.save"), ["talk.save"]);
 });

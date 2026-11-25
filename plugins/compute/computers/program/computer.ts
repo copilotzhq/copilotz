@@ -232,6 +232,7 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
     [WORK.archive]: createArchive(spaces),
     [WORK.agentsStatus]: agents.status,
     [WORK.agentsLogin]: agents.login,
+    [WORK.agentsLogout]: agents.logout,
     [WORK.agentsCancel]: agents.cancel,
     // Its events, as JSON lines.
     [WORK.agentsPrompt]: agents.prompt,

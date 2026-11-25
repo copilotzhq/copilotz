@@ -377,7 +377,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.rowInstalled` | Installed, not signed in |
 | `computers.rowMissing` | {cli} isn't installed |
 | `computers.rowOld` | Didn't say: its computer program may need an update |
-| `computers.rowSharedSomewhere` | Shared with others' agents |
+| `computers.rowSharedSomewhere` | Your plan runs on your own computer. This shared one runs your agents' tools. |
 | `computers.rowSignedIn` | Signed in |
 | `computers.rowSignedInAs` | Signed in as {account} |
 | `computers.rowUnchecked` | Not checked yet |
@@ -389,6 +389,8 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.sharedTitle` | {computer} is shared with others' agents |
 | `computers.sharedWhy` | In {spaces}, each person's agents work on {computer} as you. Signed in there, your plan would be theirs to use too, so it can't run on it. |
 | `computers.sharedWhySomewhere` | Others' agents work on {computer} as you, where it's shared. Signed in there, your plan would be theirs to use too, so it can't run on it. |
+| `computers.shareOwnWarning` | Agents in {space} run on {computer} as you: they can read everything you can on it, including your own sign-ins (Claude Code, Codex, SSH keys). Share it only with people you trust. |
+| `computers.shareSignedIn` | {computer} is signed in to your {plan}. Sign out of it first: a computer shared with others can't keep plan sign-ins. |
 | `computers.signedIn` | Signed in |
 | `computers.signIn` | Sign in |
 | `computers.signInAgain` | Sign in again |
@@ -396,6 +398,8 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.signInOther` | Sign in on another computer |
 | `computers.signInThrough` | Through {cli}, on a computer of yours. |
 | `computers.signInTitle` | Sign in to your {plan} |
+| `computers.signOut` | Sign out |
+| `computers.signOutFailed` | Couldn't sign out of {computer}: {why} |
 | `computers.skip` | Skip |
 | `computers.start` | Start signing in |
 | `computers.stepCode` | Paste the code it gives you |

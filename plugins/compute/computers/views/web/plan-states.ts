@@ -9,7 +9,8 @@
  */
 import type { Computer } from "../../collections/computer.ts";
 import type { Desk } from "../../collections/desk.ts";
-import { type EngineName, type EngineSeen, INSTALL } from "../../shared/engines.ts";
+import type { EngineName, EngineSeen } from "../../shared/engines.ts";
+import { INSTALL } from "../../shared/install.ts";
 import { say } from "./words.ts";
 
 /** A plan: its engine (the CLI), its provider, and the command that installs the CLI. */
@@ -156,6 +157,12 @@ export function straightTo(machines: Machine[], engine: EngineName): Machine | u
   const [one] = ready;
   return standingOf(one, engine).state === "unchecked" ? undefined : one;
 }
+
+/** The first plan `computer` is signed in to, as it last said: it isn't shared with others' agents while it is. */
+export const signedPlan = (computer: Computer): Plan | undefined =>
+  plans().find((p) =>
+    (computer.engines as Partial<Record<EngineName, EngineSeen>> | undefined)?.[p.engine]?.signedIn
+  );
 
 /** The computers a plan is signed in on (shared ones can't count). */
 export const signedOn = (machines: Machine[], engine: EngineName): Machine[] =>

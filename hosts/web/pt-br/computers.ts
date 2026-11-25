@@ -145,13 +145,18 @@ export const computers: Words = {
   "computers.rowInstalled": "Instalado, sem login",
   "computers.rowMissing": "O {cli} não está instalado",
   "computers.rowOld": "Não respondeu: o programa do computador talvez precise de atualização",
-  "computers.rowSharedSomewhere": "Compartilhado com agentes de outros",
+  "computers.rowSharedSomewhere":
+    "Seu plano roda no seu próprio computador. Este, compartilhado, roda as ferramentas dos seus agentes.",
   "computers.rowSignedIn": "Conectado",
   "computers.rowSignedInAs": "Conectado como {account}",
   "computers.rowUnchecked": "Ainda não verificado",
   "computers.runsWhileOn":
     "Seus agentes o usam enquanto {computer} estiver ligado; até lá, usam os modelos do app.",
   "computers.send": "Enviar",
+  "computers.shareOwnWarning":
+    "Os agentes de {space} rodam em {computer} como você: eles podem ler tudo o que você pode lá, inclusive seus próprios logins (Claude Code, Codex, chaves SSH). Compartilhe só com pessoas de confiança.",
+  "computers.shareSignedIn":
+    "{computer} está conectado ao seu {plan}. Saia dele primeiro: um computador compartilhado com outros não pode manter logins de planos.",
   "computers.sharedFix":
     "Para usá-lo no seu plano, faça os agentes deles perguntarem a você antes lá: assim nada roda " +
     "nele sem o seu sim. Ou tire-o de {spaces}, pelo menu dele lá.",
@@ -172,6 +177,8 @@ export const computers: Words = {
   "computers.signInOther": "Entrar em outro computador",
   "computers.signInThrough": "Pelo {cli}, num computador seu.",
   "computers.signInTitle": "Entrar no seu {plan}",
+  "computers.signOut": "Sair",
+  "computers.signOutFailed": "Não deu para sair em {computer}: {why}",
   "computers.signedIn": "Conectado",
   "computers.skip": "Pular",
   "computers.start": "Começar o login",

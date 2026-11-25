@@ -6,8 +6,10 @@
  * the same answer. The next turn goes on in the same session with only
  * what's new. Someone with no plan signed in goes straight to the next model.
  * Signing in asked to install sends the plan's official installer, and only then.
+ * A cloud computer signed in to a plan isn't shared with others' agents until it's signed out
+ * there; a person's own computer may be. Signed in on one that's shared, the plan doesn't run there.
  */
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { join } from "node:path";
 import process from "node:process";
 import { type Actor, createRuntime, definePlugin } from "../../../runtime/mod.ts";
@@ -64,8 +66,11 @@ async function setup(
   fn: (s: {
     rt: Awaited<ReturnType<typeof createRuntime>>;
     asked: PromptInput[];
-    /** What sign-ins the computer was asked for. */
+    /** What sign-ins and sign-outs the computer was asked for. */
     logins: Record<string, unknown>[];
+    logouts: Record<string, unknown>[];
+    /** What the computer says of its Claude Code from now on: signed in or not. */
+    report(signedIn: boolean): void;
     history: (thread: string, actor: Actor) => Promise<Message[]>;
     send: (said: string, actor: Actor, thread?: string) => Promise<string>;
   }) => Promise<void>,
@@ -95,6 +100,8 @@ async function setup(
   });
   const asked: PromptInput[] = [];
   const logins: Record<string, unknown>[] = [];
+  const logouts: Record<string, unknown>[] = [];
+  let signedIn = true;
   const answer = cli(asked);
   try {
     const { space } = await rt.call<{ space: string }>("space.personal", {}, { actor: ana });
@@ -103,8 +110,15 @@ async function setup(
       workloads: {
         [WORK.agentsStatus]: () =>
           encoder.encode(JSON.stringify([
-            { engine: "claude", installed: true, signedIn: true, account: "ana@example.com" },
+            signedIn
+              ? { engine: "claude", installed: true, signedIn, account: "ana@example.com" }
+              : { engine: "claude", installed: true, signedIn },
           ])),
+        [WORK.agentsLogout]: async ({ input }) => {
+          logouts.push(JSON.parse(await new Response(input).text()));
+          signedIn = false;
+          return encoder.encode(JSON.stringify({ ok: true }));
+        },
         [WORK.agentsLogin]: async ({ input }) => {
           logins.push(JSON.parse(await new Response(input).text()));
           return encoder.encode(JSON.stringify({ state: "done", output: "", signedIn: true }));
@@ -138,6 +152,8 @@ async function setup(
       rt,
       asked,
       logins,
+      logouts,
+      report: (said) => signedIn = said,
       history: (thread, actor) => rt.query<Message[]>("message.history", { thread }, { actor }),
       send: async (said, actor, thread) => {
         const where = actor === ana
@@ -217,6 +233,77 @@ test("signing in asked to install sends the plan's official installer, and only 
       { engine: "codex", install: "npm i -g @openai/codex" },
       { engine: "codex" },
     ]);
+  });
+});
+
+/** Her computer, its plans as it says, a shared space, and sharing it there. */
+async function sharing(s: Parameters<Parameters<typeof setup>[0]>[0]) {
+  const engines = () =>
+    s.rt.call<{ computer: string; engines: Record<string, { signedIn: boolean }> }[]>(
+      "computer.engines",
+      {},
+      { actor: ana },
+    );
+  const [mine] = await engines();
+  const { space: launch } = await s.rt.call<{ space: string }>("space.create", {
+    name: "Launch",
+  }, { actor: ana });
+  const share = (more: Record<string, unknown> = {}) =>
+    s.rt.call("computer.share", { computer: mine.computer, in: launch, ...more }, { actor: ana });
+  /** Her plan runs elsewhere (the next model), and doesn't sign in there either. */
+  const notHere = async () => {
+    const before = s.asked.length;
+    const thread = await s.send("hello there", ana);
+    assertStringIncludes((await s.history(thread, ana)).at(-1)!.text ?? "", "hello there");
+    assertEquals(s.asked.length, before);
+    await assertRejects(
+      () =>
+        s.rt.call("computer.engine.login", { computer: mine.computer, engine: "claude" }, {
+          actor: ana,
+        }),
+      Error,
+      "Others' agents work on this computer as you",
+    );
+  };
+  return { engines, computer: mine.computer, share, notHere };
+}
+
+test("a cloud computer signed in to a plan isn't shared with others' agents until it's signed out there", async () => {
+  await setup(async (s) => {
+    const { engines, computer, share, notHere } = await sharing(s);
+    await s.rt.call("computer.mark", { computer, status: { kind: "cloud", state: "awake" } });
+
+    // Signed in to her Claude plan: refused, saying how to go on.
+    const refused = await assertRejects(() => share());
+    assertEquals((refused as { code?: string }).code, "plan_signed_in");
+    assertEquals(
+      (refused as Error).message,
+      "testbox is signed in to your Claude plan. Sign out of it first: a computer shared with " +
+        "others can't keep plan sign-ins.",
+    );
+    // Kept to her own answers there, it isn't others' agents' to use: it goes, but not further.
+    await share({ answers: "owner" });
+    await assertRejects(() => share({ answers: "asker" }), Error, "Sign out of it first");
+
+    // Signed out there: the computer signs its CLI out, and what it says is kept.
+    await s.rt.call("computer.engine.logout", { computer, engine: "claude" }, { actor: ana });
+    assertEquals(s.logouts, [{ engine: "claude" }]);
+    assertEquals((await engines())[0].engines.claude?.signedIn, false);
+    await share({ answers: "asker" });
+
+    // Signed in again on it from its terminal: her plan still doesn't run there.
+    s.report(true);
+    assertEquals((await engines())[0].engines.claude?.signedIn, true);
+    await notHere();
+  });
+});
+
+test("a person's own computer signed in to a plan may be shared, and then doesn't run it", async () => {
+  await setup(async (s) => {
+    const { engines, share, notHere } = await sharing(s);
+    await share();
+    assertEquals((await engines())[0].engines.claude?.signedIn, true);
+    await notHere();
   });
 });
 

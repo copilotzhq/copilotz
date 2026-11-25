@@ -5,6 +5,8 @@
  * agents ask the owner first there (`computer.share`, `answers: "owner"`,
  * as each computer's menu on a space's Computer tab does) makes it theirs
  * alone to answer for; taking it out of those spaces does too, from there.
+ * And the other way: a computer signed in to a plan isn't shared with
+ * others' agents until its person signs out of it, from their plans.
  */
 import { type ReactNode, useState } from "react";
 import { Button, Dialog, Icon, message, Notice } from "../../../../../hosts/web/mod.ts";
@@ -12,6 +14,20 @@ import { listed, type Machine } from "./plan-states.ts";
 import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
+
+/** Why a computer signed in to a plan can't be shared with others' agents, and where to sign out of it. */
+export function SignedInNotice({ computer, plan }: { computer: string; plan: string }): ReactNode {
+  return (
+    <Notice
+      tone="warning"
+      icon="lock"
+      role="alert"
+      action={<Button size="sm" href="/accounts">{say("plansTitle")}</Button>}
+    >
+      {say("shareSignedIn", { computer, plan })}
+    </Notice>
+  );
+}
 
 /** A space's Computer tab, where each computer's menu changes who answers there. */
 const computerTab = (space: string) => `/space/${encodeURIComponent(space)}?tab=computer`;

@@ -15,12 +15,19 @@
  * `debug models` prints a catalog whose model brings its own tools, unless
  * `FAKE_NO_CATALOG` is set. Signed in is a file in its home
  * (`fake-auth.json`, the account: `{ "type": "chatgpt" }` or a key's), as
- * `login status` says too; the MCP servers its config has are
+ * `login status` says too, and `logout` deletes; the MCP servers its config has are
  * `fake-config.json`'s. Threads are kept in its home, so a later process
  * resumes them.
  */
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
 import { createInterface } from "node:readline";
@@ -29,7 +36,8 @@ import { createInterface } from "node:readline";
 type Json = any;
 
 const args = process.argv.slice(2);
-const home = process.env.CODEX_HOME ?? "";
+// Its home: the one it's given, else the person's own, as Codex's is.
+const home = process.env.CODEX_HOME ?? join(process.env.HOME ?? "", ".codex");
 const log = (entry: unknown) => {
   if (process.env.FAKE_LOG) appendFileSync(process.env.FAKE_LOG, JSON.stringify(entry) + "\n");
 };
@@ -53,6 +61,11 @@ if (args[0] === "debug" && args[1] === "models") {
 }
 if (args[0] === "--version") {
   console.log("codex-cli 0.999.0");
+  process.exit(0);
+}
+if (args[0] === "logout") {
+  rmSync(join(home, "fake-auth.json"), { force: true });
+  console.log("Successfully logged out");
   process.exit(0);
 }
 if (args[0] === "login" && args[1] === "status") {

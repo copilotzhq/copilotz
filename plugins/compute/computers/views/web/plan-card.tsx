@@ -4,7 +4,8 @@
  * CLI's version), installed but not signed in, its CLI missing (installed
  * and signed in on a tap, through the sign-in; on Windows, its official
  * install to run by hand), not checked yet, or shared with others' agents
- * (why it can't be used, on a tap). Offline, a computer says when it last said
+ * (why it can't be used, on a tap). Signed in, its menu signs in again or out
+ * (`computer.engine.logout`). Offline, a computer says when it last said
  * so; a cloud computer says its state its kind's way. The one thing to do
  * comes first: Sign in, until it is.
  */
@@ -38,7 +39,7 @@ import {
 import { say } from "./words.ts";
 
 export function PlanCard(
-  { plan, machines, check, checking, signIn }: {
+  { plan, machines, check, checking, signIn, signOut }: {
     plan: Plan;
     machines: Machine[];
     /** Asks the computers again. */
@@ -46,6 +47,8 @@ export function PlanCard(
     checking: boolean;
     /** Opens the sign-in: on this computer, or the one it picks. */
     signIn(computer?: string): void;
+    /** Signs the plan out on this computer. */
+    signOut?(computer: string): void;
   },
 ): ReactNode {
   const on = signedOn(machines, plan.engine);
@@ -97,6 +100,7 @@ export function PlanCard(
             check={check}
             checking={checking}
             signIn={() => signIn(m.computer._id)}
+            {...(signOut ? { signOut: () => signOut(m.computer._id) } : {})}
             offer={m !== straight}
           />
         ))}
@@ -143,12 +147,13 @@ function said(
 }
 
 function Row(
-  { plan, machine: m, check, checking, signIn, offer }: {
+  { plan, machine: m, check, checking, signIn, signOut, offer }: {
     plan: Plan;
     machine: Machine;
     check(): Promise<void>;
     checking: boolean;
     signIn(): void;
+    signOut?(): void;
     /** Whether it offers its own Sign in (not when the card's goes straight to it). */
     offer: boolean;
   },
@@ -179,11 +184,18 @@ function Row(
     )
     : standing.state === "installed" && can && offer
     ? <Button size="sm" onClick={signIn}>{say("signIn")}</Button>
-    : standing.state === "signedIn" && can
+    : standing.state === "signedIn" && (can || signOut)
     ? (
       <Menu
         label={say("moreOn", { computer: m.name })}
-        items={[{ label: say("signInAgain"), icon: "refresh", onSelect: signIn }]}
+        items={[
+          ...(can
+            ? [{ label: say("signInAgain"), icon: "refresh" as const, onSelect: signIn }]
+            : []),
+          ...(signOut
+            ? [{ label: say("signOut"), icon: "signout" as const, onSelect: signOut }]
+            : []),
+        ]}
       />
     )
     : null;

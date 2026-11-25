@@ -4,7 +4,7 @@
  * step and waits, held, for the next one to answer it; sessions go on in
  * the same process, are loaded again when they're gone, and are fixed to
  * what they were made with. Signing in installs a missing CLI first, with
- * the installer it's given. With fake CLIs: Claude Code's stream-json
+ * the installer it's given; signing out is each CLI's own, in its home. With fake CLIs: Claude Code's stream-json
  * (program-agents-claude.ts), and a native ACP agent (program-agents-acp.ts),
  * and fake installers (never the network).
  */
@@ -14,6 +14,7 @@ import { join } from "node:path";
 import process from "node:process";
 import { tempDir, test } from "../../../testing/mod.ts";
 import { createMcp } from "../computers/program/agents/mcp.ts";
+import { alive } from "../computers/program/workloads/processes.ts";
 import type { AgentsOptions } from "../computers/program/workloads/agents.ts";
 import {
   type EngineStatus,
@@ -506,6 +507,79 @@ posix(
     } finally {
       process.env.PATH = PATH;
     }
+  },
+);
+
+posix(
+  "signing out closes its sessions first, then signs its CLI out; with no CLI there, its home goes",
+  engines(async ({ work, root, step, signIn }) => {
+    const home = (engine: string) => join(root, ".copilotz", "engines", engine);
+    const status = async () =>
+      (await work<EngineStatus[]>(WORK.agentsStatus, { engines: ["claude"] }))[0];
+    signIn("claude");
+    const pid = Number(said(await step(ask("pid"))));
+    assertEquals((await status()).signedIn, true);
+    assertEquals(await work(WORK.agentsLogout, { engine: "claude" }), { ok: true });
+    assert(!alive(pid), "its session's process ended");
+    assert(!existsSync(join(home("claude"), "fake-auth.json")), "its sign-in is gone");
+    assert(existsSync(home("claude")), "by its own sign-out: its home stays");
+    assertEquals(await status(), {
+      engine: "claude",
+      installed: true,
+      version: "2.1.999",
+      signedIn: false,
+    });
+    // No Codex here to sign out: its home, where its sign-in is, goes.
+    mkdirSync(home("codex"), { recursive: true });
+    writeFileSync(join(home("codex"), "fake-auth.json"), '{"type":"chatgpt"}');
+    assertEquals(await work(WORK.agentsLogout, { engine: "codex" }), { ok: true });
+    assert(!existsSync(home("codex")), "its home is gone");
+    const unknown = await work<{ error: { code: string } }>(WORK.agentsLogout, { engine: "x" });
+    assertEquals(unknown.error.code, "invalid");
+  }),
+);
+
+posix(
+  "each CLI signs out in its own home, never the person's own; Antigravity's can't be from here",
+  async () => {
+    const dir = tempDir();
+    const person = join(tempDir(), "home");
+    const log = join(dir, "fake.log");
+    // The person's own sign-ins, in their own config: never Copilotz's to touch.
+    for (const own of [".claude", ".codex"]) {
+      mkdirSync(join(person, own), { recursive: true });
+      writeFileSync(join(person, own, "fake-auth.json"), '{"type":"chatgpt","email":"ana@x"}');
+    }
+    const commands = {
+      claude: fakeCli(dir, "claude", "./program-agents-claude.ts", log),
+      codex: fakeCli(dir, "codex", "./program-codex-fake.ts", log),
+      antigravity: fakeCli(dir, "agy", "./program-agents-acp.ts", log),
+    };
+    await setup(async ({ work, root }) => {
+      const home = (engine: string) => join(root, ".copilotz", "engines", engine);
+      for (const engine of ["claude", "codex"]) {
+        mkdirSync(home(engine), { recursive: true });
+        writeFileSync(join(home(engine), "fake-auth.json"), '{"type":"chatgpt","email":"ana@x"}');
+      }
+      const signed = async () =>
+        (await work<EngineStatus[]>(WORK.agentsStatus, { engines: ["claude", "codex"] }))
+          .map((s) => s.signedIn);
+      assertEquals(await signed(), [true, true]);
+      for (const engine of ["claude", "codex"]) {
+        assertEquals(await work(WORK.agentsLogout, { engine }), { ok: true });
+        assert(existsSync(home(engine)), `${engine} signed out by its own CLI`);
+      }
+      assertEquals(await signed(), [false, false]);
+      for (const own of [".claude", ".codex"]) {
+        assert(existsSync(join(person, own, "fake-auth.json")), `the person's own ${own} stays`);
+      }
+      // Antigravity has no sign-out of its own: it says so, and what to do.
+      const agy = await work<{ error: { code: string; message: string } }>(WORK.agentsLogout, {
+        engine: "antigravity",
+      });
+      assertEquals(agy.error.code, "unsupported");
+      assertMatch(agy.error.message, /keyring.*Sign out in agy on the computer itself/s);
+    }, { home: person, agents: { commands } });
   },
 );
 

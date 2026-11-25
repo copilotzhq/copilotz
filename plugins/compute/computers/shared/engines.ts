@@ -11,27 +11,17 @@
  * that others' agents don't work on as them (shared into a space where its
  * agents answer to whoever they work for, the engine's sign-in would be
  * theirs to reach). One sign-in on a computer serves every conversation and
- * space of theirs in the org.
+ * space of theirs in the org. So a cloud computer signed in to a plan isn't
+ * shared that way until its person signs out of it there (`shareable`); a
+ * person's own machine may be, as theirs to decide, and then runs no plan.
  */
-import type { Context } from "../../../../runtime/mod.ts";
+import { type Context, failure } from "../../../../runtime/mod.ts";
 import type { Computer } from "../collections/computer.ts";
 import type { Desk } from "../collections/desk.ts";
 
 /** The engines a computer program runs, by its own name for each. */
 export const ENGINES = ["claude", "codex", "antigravity"] as const;
 export type EngineName = (typeof ENGINES)[number];
-
-/**
- * Each engine's official installer, as its maker gives it (macOS and
- * Linux): what Sign in runs on a computer whose CLI is missing
- * (`computer.engine.login` with `install`), and what the web shows to run
- * by hand.
- */
-export const INSTALL: Record<EngineName, string> = {
-  claude: "curl -fsSL https://claude.ai/install.sh | bash",
-  codex: "npm i -g @openai/codex",
-  antigravity: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
-};
 
 /** What a computer last said of an engine (`computer.engines` keeps it on the computer). */
 export type EngineSeen = {
@@ -96,6 +86,41 @@ export async function engineComputer(
     "engine_shared",
     "Your computers are shared into spaces where others' agents work on them as you: " +
       "your plan's sign-in would be theirs to reach. Make one only yours (or have yourself answer for it there).",
+  );
+}
+
+/** Each plan's name, as its provider says it. */
+const PLAN: Record<EngineName, string> = {
+  claude: "Claude plan",
+  codex: "ChatGPT plan",
+  antigravity: "Google AI plan",
+};
+
+/**
+ * Refuses a cloud computer (one the app keeps: `status`) a desk in `space`
+ * that shares it with others' agents (`answers: "asker"`, in a space other
+ * than a Personal one) while it's signed in to a plan, as it last said (it
+ * isn't woken to ask): their agents would read the sign-in kept there. Its
+ * person signs out of it first. A person's own machine is theirs to share:
+ * the page says what it means, and their plans don't run on it then.
+ */
+export async function shareable(
+  ctx: Context,
+  computer: Pick<Computer, "name" | "engines" | "status">,
+  space: string,
+  answers: Desk["answers"],
+): Promise<void> {
+  if (answers !== "asker" || !computer.status) return;
+  const seen = computer.engines as Partial<Record<EngineName, EngineSeen>> | undefined;
+  const signed = ENGINES.find((engine) => seen?.[engine]?.signedIn);
+  if (!signed) return;
+  const found = await ctx.as().db.collection<{ kind?: string }>("space").findOne({ _id: space });
+  if (found?.kind === "personal") return;
+  throw failure(
+    "plan_signed_in",
+    `${computer.name ?? "This computer"} is signed in to your ${PLAN[signed]}. Sign out of it ` +
+      "first: a computer shared with others can't keep plan sign-ins.",
+    { public: true, status: 409 },
   );
 }
 

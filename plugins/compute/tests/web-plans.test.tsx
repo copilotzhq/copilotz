@@ -4,8 +4,9 @@
  * computers in each state (signed in as whom, installed, its CLI missing, offline, not checked,
  * shared with others' agents); the sign-in dialog's choice of computer and what that one still
  * needs; a missing CLI installed by Sign in (macOS and Linux; Windows keeps the instructions),
- * and an installer that fails; how a sign-in is asked again until it's done; what a CLI says, as
- * it's shown; the palette's commands; and words: nothing English left once the app gives its own.
+ * and an installer that fails; signing out, and why a computer signed in to a plan isn't shared
+ * with others' agents; how a sign-in is asked again until it's done; what a CLI says, as it's
+ * shown; the palette's commands; and words: nothing English left once the app gives its own.
  */
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { act, type ReactNode } from "react";
@@ -20,6 +21,9 @@ import type { Desk } from "../computers/collections/desk.ts";
 import { plansView } from "../computers/views/web/plans.tsx";
 import { plansPaletteView } from "../computers/views/web/plans-palette.ts";
 import { SignInDialog } from "../computers/views/web/plan-sign-in.tsx";
+import { SignedInNotice } from "../computers/views/web/plan-shared.tsx";
+import { ShareWarning } from "../computers/views/web/desks.tsx";
+import { computers as computersPtBR } from "../../../hosts/web/pt-br/computers.ts";
 import {
   asksForCode,
   installable,
@@ -32,6 +36,7 @@ import {
   safeLink,
   sharedIn,
   shownCode,
+  signedPlan,
   signingIn,
   standingOf,
   straightTo,
@@ -233,7 +238,10 @@ test("the sign-in dialog: which computer, and what the one chosen still needs", 
   assertStringIncludes(missing, "your own use of Antigravity on that computer stays as it is");
   // The shared one is there, and can't be chosen.
   const markup = dialog("claude");
-  assertStringIncludes(text(markup), "Shared with others' agents");
+  assertStringIncludes(
+    text(markup),
+    "Your plan runs on your own computer. This shared one runs your agents' tools.",
+  );
   assertEquals((markup.match(/disabled=""/g) ?? []).length >= 1, true);
   assertStringIncludes(text(markup), "Signed in as ana@example.com");
 });
@@ -351,6 +359,64 @@ test("asked to install, a sign-in's first call says so, and only the first", asy
     { computer: "box", engine: "antigravity", install: true },
     { computer: "box", engine: "antigravity" },
   ]);
+});
+
+test("signed in, a computer signs out from its menu; a cloud one isn't shared with others' agents until it does, and sharing one's own says what it means: in English and Portuguese", () => {
+  assertEquals(signedPlan(mac)?.engine, "claude");
+  assertEquals(signedPlan(studio), undefined);
+  // The card: the Mac's Claude line signs out from its menu.
+  assertStringIncludes(text(draw(plansView({}, ctxOf(READS)))), "Sign in again Sign out");
+  const notice = () => draw(<SignedInNotice computer="MacBook Pro" plan={signedPlan(mac)!.plan} />);
+  assertStringIncludes(
+    text(notice()),
+    "MacBook Pro is signed in to your Claude plan. Sign out of it first: a computer shared with " +
+      "others can't keep plan sign-ins. Plans on your computers",
+  );
+  assertStringIncludes(notice(), 'href="/accounts"');
+  const acme = SPACES[1] as Parameters<typeof ShareWarning>[0]["space"];
+  const own = () => text(draw(<ShareWarning space={acme} name="MacBook Pro" />));
+  assertStringIncludes(
+    own(),
+    "Agents in Acme run on MacBook Pro as you: they can read everything you can on it, including " +
+      "your own sign-ins (Claude Code, Codex, SSH keys). Share it only with people you trust.",
+  );
+  // A cloud computer's says what it said.
+  assertStringIncludes(
+    text(draw(<ShareWarning space={acme} name="Cloud box" kept />)),
+    "It all runs as you: share it with people you trust.",
+  );
+  const restore = setWords(computersPtBR);
+  try {
+    assertStringIncludes(
+      text(notice()),
+      "MacBook Pro está conectado ao seu plano do Claude. Saia dele primeiro: um computador " +
+        "compartilhado com outros não pode manter logins de planos.",
+    );
+    const all = [machine(mac), machine(studio, [{ _id: "acme", name: "Acme" }])];
+    const shown = text(draw(
+      <SignInDialog
+        plan={planOf("claude")!}
+        machines={all}
+        open
+        onClose={() => {}}
+        check={() => Promise.resolve()}
+        call={() => Promise.resolve({} as never)}
+      />,
+    ));
+    assertStringIncludes(
+      shown,
+      "Seu plano roda no seu próprio computador. Este, compartilhado, roda as ferramentas dos seus agentes.",
+    );
+    assertStringIncludes(text(draw(plansView({}, ctxOf(READS)))), "Entrar de novo Sair");
+    assertStringIncludes(
+      own(),
+      "Os agentes de Acme rodam em MacBook Pro como você: eles podem ler tudo o que você pode lá, " +
+        "inclusive seus próprios logins (Claude Code, Codex, chaves SSH). Compartilhe só com " +
+        "pessoas de confiança.",
+    );
+  } finally {
+    restore();
+  }
 });
 
 test("a sign-in is asked again until it's done, one call at a time; a code goes with the next", async () => {

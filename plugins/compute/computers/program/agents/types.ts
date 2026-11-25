@@ -113,6 +113,12 @@ export type Engine = {
   rules?: boolean;
   /** Its CLI's arguments for signing in. */
   login: string[];
+  /**
+   * Its CLI's arguments for signing out, run in its home: its sign-in is
+   * kept there, so when they fail its home goes instead. Without them, it
+   * can't be signed out from here (its sign-in may be the system keyring's).
+   */
+  logout?: string[];
   /** Whether it's signed in, and as whom: a native agent without this is asked for a session. */
   signedIn?(run: Run): Promise<{ signedIn: boolean; account?: string }>;
 };

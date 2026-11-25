@@ -17,7 +17,11 @@
  * empty: but for a native agent's rules (`AGENTS.md`, its instructions),
  * which it has no prompt of its own to replace with.
  *
- * Signing in is the CLI's own, polled like the terminal (`login`). Given
+ * Signing in is the CLI's own, polled like the terminal (`login`), and so is
+ * signing out (`logout`), run in its home: Claude Code's and Codex's
+ * sign-ins are there, so their home goes when it fails. Antigravity has no
+ * sign-out of its own here: its sign-in may be the keyring's. The person's
+ * own sign-in (`~/.claude`, `~/.codex`) is never touched. Given
  * its official installer (`install`) while the CLI is missing, it runs that
  * first, in the computer's home, then the sign-in: not on Windows, where the
  * person installs it.
@@ -28,11 +32,11 @@
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, constants, mkdir } from "node:fs/promises";
+import { access, constants, mkdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import process from "node:process";
-import type { EngineStatus, LoginInput, LoginState } from "../../shared/workloads.ts";
+import type { EngineStatus, LoginInput, LoginState, LogoutInput } from "../../shared/workloads.ts";
 import { fail } from "../workloads/answer.ts";
 import { childEnv, homeEnv, OWN, signalGroup, WINDOWS } from "../workloads/processes.ts";
 import { claude } from "./claude.ts";
@@ -91,6 +95,7 @@ export const ENGINES: Record<string, Engine> = {
     homeEnv: (home) => ({ CLAUDE_CONFIG_DIR: home }),
     adapter: claude,
     login: ["auth", "login", "--claudeai"],
+    logout: ["auth", "logout"],
     async signedIn(run) {
       const { stdout } = await run(["auth", "status", "--json"]);
       try {
@@ -116,6 +121,7 @@ export const ENGINES: Record<string, Engine> = {
     homeEnv: (home) => ({ CODEX_HOME: home }),
     adapter: codex,
     login: ["login"],
+    logout: ["logout"],
     async signedIn(run) {
       const { code, stdout, stderr } = await run(["login", "status"]);
       const said = `${stdout}\n${stderr}`;
@@ -202,6 +208,12 @@ export type Engines = {
   folder(found: Found, instructions: string): Promise<string>;
   status(names?: string[]): Promise<EngineStatus[]>;
   login(input: LoginInput): Promise<LoginState>;
+  /**
+   * Signs it out, in its home only: a sign-in under way stops, then its
+   * CLI's own sign-out runs (its home goes when that fails). One without a
+   * sign-out of its own fails (`unsupported`), saying what to do.
+   */
+  logout(input: LogoutInput): Promise<void>;
   /** Stops every sign-in under way. */
   stop(): Promise<void>;
 };
@@ -479,6 +491,27 @@ export function createEngines(options: EnginesOptions): Engines {
         signedIn: signed?.signedIn ?? false,
         ...(login?.url ? { url: login.url } : {}),
       };
+    },
+    async logout(input) {
+      const engine = engineOf(input?.engine);
+      if (!engine.logout) {
+        fail(
+          `${engine.binary} can't be signed out from here: its sign-in may be in the system's ` +
+            `keyring, beside your own use of it. Sign out in ${engine.binary} on the computer itself.`,
+          "unsupported",
+        );
+      }
+      const login = logins.get(engine.name);
+      logins.delete(engine.name);
+      if (login) await stopLogin(login);
+      const found = await find(engine.name).catch(() => undefined);
+      const ran = found ? await run(found, engine.logout) : undefined;
+      if (ran?.code !== 0) {
+        await rm(join(options.root, ".copilotz", "engines", engine.name), {
+          recursive: true,
+          force: true,
+        });
+      }
     },
     async stop() {
       await Promise.all([...logins.values()].map(stopLogin));

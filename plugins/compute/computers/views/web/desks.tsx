@@ -11,7 +11,10 @@
  * while there's none yet); else connecting a computer to this space; or
  * putting one of yours here. Sharing one into a shared space says plainly
  * what it means first: members' agents run commands as you, on your
- * machine; and lets you keep the yes to yourself.
+ * machine (your own: they can read your own sign-ins there too); and lets
+ * you keep the yes to yourself. A cloud computer signed in to a plan is
+ * shared that way only once it's signed out (with a link to the plans),
+ * unless you keep the yes to yourself.
  */
 import { type ReactNode, useState } from "react";
 import {
@@ -38,6 +41,9 @@ import { ComputerMark } from "./mark.tsx";
 import { moveStep } from "./move.ts";
 import { folderPath, nameOf } from "./names.ts";
 import { nameOf as personName } from "../../../../access/spaces/contract.ts";
+import { SignedInNotice } from "./plan-shared.tsx";
+import { signedPlan } from "./plan-states.ts";
+import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -50,9 +56,10 @@ export function ShareWarning(
 ): ReactNode {
   return (
     <Notice tone="warning" icon="alert" title={`${called(space)}'s members will work on ${name}`}>
-      They, and the agents working for them, run commands, start jobs and change files there, in a
-      folder of its own. It all runs as you{kept ? "" : ", on your machine"}: share it with people
-      you trust.
+      {kept
+        ? "They, and the agents working for them, run commands, start jobs and change files " +
+          "there, in a folder of its own. It all runs as you: share it with people you trust."
+        : say("shareOwnWarning", { space: called(space), computer: name })}
     </Notice>
   );
 }
@@ -79,7 +86,7 @@ export function Desks(
   const [adding, setAdding] = useState<AddStep>();
   const [sharing, setSharing] = useState<Computer>();
   const [removing, setRemoving] = useState<Desk>();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<unknown>();
   const shared = space.kind !== "personal";
   const manage = space.can.includes("manage");
   const others = mine.filter((c) => !desks.some((d) => d.computer === c._id));
@@ -89,7 +96,7 @@ export function Desks(
     try {
       await call(action, input);
     } catch (e) {
-      setError(message(e));
+      setError(e);
     }
   };
   const share = (computer: Computer) =>
@@ -121,7 +128,20 @@ export function Desks(
   ];
   return (
     <div className={`desks${compact ? " desks-compact" : ""}`}>
-      {error ? <Notice tone="destructive" role="alert">{error}</Notice> : null}
+      {error
+        ? (
+          <Notice
+            tone="destructive"
+            role="alert"
+            // Signed in to a plan: where to sign out of it.
+            action={(error as { code?: string }).code === "plan_signed_in"
+              ? <Button size="sm" href="/accounts">{say("plansTitle")}</Button>
+              : undefined}
+          >
+            {message(error)}
+          </Notice>
+        )
+        : null}
       {desks.length
         ? (
           <ul className="desks-list" aria-label={`${called(space)}'s computers`}>
@@ -424,6 +444,8 @@ function ShareDialog(
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const name = computer ? nameOf(computer) : "";
+  // A cloud computer signed in to a plan is shared with others' agents only once it's signed out.
+  const signed = computer?.status && !ask ? signedPlan(computer) : undefined;
   const close = () => {
     setAsk(false);
     setError(undefined);
@@ -441,6 +463,7 @@ function ShareDialog(
             variant="primary"
             icon="share"
             loading={busy}
+            disabled={!!signed}
             onClick={async () => {
               if (!computer) return;
               setBusy(true);
@@ -474,6 +497,7 @@ function ShareDialog(
           Otherwise each person answers what their own agents ask. You can change this later, or
           take {name} out of {space.name}, from its menu here.
         </p>
+        {signed ? <SignedInNotice computer={name} plan={signed.plan} /> : null}
         {error ? <Notice tone="destructive" role="alert">{error}</Notice> : null}
       </div>
     </Dialog>

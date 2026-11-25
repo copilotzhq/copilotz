@@ -13,10 +13,18 @@
  * - `big <KiB>`: says that much at once; `wait`: until it's interrupted;
  *   `crash`: exits.
  *
- * Signed in is a file in its config dir (`fake-auth.json`): `auth login`
- * writes it when it's given the code `good-code`.
+ * Signed in is a file in its config dir (`fake-auth.json`, its own unless
+ * `CLAUDE_CONFIG_DIR` says): `auth login` writes it when it's given the code
+ * `good-code`, and `auth logout` deletes it.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import process from "node:process";
 import { createInterface } from "node:readline";
@@ -25,7 +33,8 @@ import { createInterface } from "node:readline";
 type Json = any;
 
 const args = process.argv.slice(2);
-const home = process.env.CLAUDE_CONFIG_DIR ?? "";
+// Its config dir: the one it's given, else the person's own, as Claude Code's is.
+const home = process.env.CLAUDE_CONFIG_DIR ?? join(process.env.HOME ?? "", ".claude");
 const auth = join(home, "fake-auth.json");
 const flag = (name: string) => {
   const at = args.indexOf(name);
@@ -72,6 +81,9 @@ if (args[0] === "--version") {
       ? { loggedIn: true, authMethod: "claude.ai", email: signed.email }
       : { loggedIn: false, authMethod: "none" },
   ));
+} else if (args[0] === "auth" && args[1] === "logout") {
+  rmSync(auth, { force: true });
+  console.log("Successfully logged out.");
 } else if (args[0] === "auth" && args[1] === "login") {
   process.stdout.write(
     "Opening browser to sign in…\nIf the browser didn't open, visit: https://claude.example/oauth?code=true&state=x\nPaste code here if prompted > ",

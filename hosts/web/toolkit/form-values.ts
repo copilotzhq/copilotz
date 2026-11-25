@@ -21,57 +21,49 @@ type Element = {
 /** Controls that hold nothing a record keeps. */
 const SKIPPED = new Set(["submit", "button", "reset", "image", "file", "fieldset", "output"]);
 
-/** Capture which controls participate before the dialog disables them for saving. */
-export function namedControls(form: { elements: ArrayLike<unknown> }): Element[] {
+/** Named controls that can contribute to a record, including ones disabled during a save. */
+function recordControls(form: { elements: ArrayLike<unknown> }): Element[] {
   return (Array.from(form.elements) as Element[]).filter((c) =>
-    !!c.name && !c.disabled && !SKIPPED.has((c.type ?? "").toLowerCase())
+    !!c.name && !SKIPPED.has((c.type ?? "").toLowerCase())
   );
 }
 
 const controlKey = (c: Element) =>
-  c.name
-    ? JSON.stringify([
-      c.name,
-      c.type,
-      c.id,
-      !c.id && (c.type === "radio" || c.type === "checkbox") ? c.value : null,
-    ])
-    : undefined;
+  JSON.stringify([
+    c.name,
+    c.type,
+    c.id,
+    !c.id && (c.type === "radio" || c.type === "checkbox") ? c.value : null,
+  ]);
 
-/** Match a remount only when its identity was unique in both versions of the form. */
-export function trackControls<T extends Element>(
-  initial: T[],
-  key: (c: T) => string | undefined = controlKey,
-) {
-  const unique = (controls: T[]) => {
-    const byKey = new Map<string, T | undefined>();
-    for (const c of controls) {
-      const k = key(c);
-      if (k !== undefined) byKey.set(k, byKey.has(k) ? undefined : c);
-    }
-    return byKey;
-  };
-  const names = new Map(initial.map((c) => [c, c.name]));
-  const before = unique(initial);
-  return (current: T[]) => {
-    const live = new Set(current);
-    const after = unique(current);
-    const replacements = new Map<T, T>();
-    for (const [k, c] of before) {
-      const match = after.get(k);
-      if (c && match && !names.has(match)) replacements.set(c, match);
-    }
-    return (c: T) => live.has(c) && names.get(c) === c.name ? c : replacements.get(c);
-  };
-}
-
-/** Remember eligibility at submit, then read only controls still represented in the live form. */
+/** Keep submit-time eligibility, but read the controls in live form order after the parts finish. */
 export function captureNamedControls(form: HTMLFormElement): () => Element[] {
-  const participating = namedControls(form);
-  const track = trackControls(Array.from(form.elements) as Element[]);
+  const initial = new Map(
+    recordControls(form).map((c) => [
+      c,
+      { name: c.name, key: controlKey(c), enabled: !c.disabled },
+    ]),
+  );
   return () => {
-    const resolve = track(Array.from(form.elements) as Element[]);
-    return participating.map(resolve).filter((c) => c !== undefined);
+    const current = recordControls(form);
+    const mounted = new Set(current);
+    const removed = [...initial].filter(([c, old]) => !mounted.has(c) || old.name !== c.name)
+      .map(([, old]) => old);
+    const added = current.filter((c) => initial.get(c)?.name !== c.name);
+    const keys = new Set(added.map(controlKey));
+    const byKey = Map.groupBy(removed, (old) => old.key);
+    // A remount can change an id. Read unmatched controls of the same name as a group.
+    const byName = Map.groupBy(removed.filter((old) => !keys.has(old.key)), (old) => old.name);
+    return current.filter((c) => {
+      const old = initial.get(c);
+      if (old && old.name === c.name) return old.enabled;
+      const group = byKey.get(controlKey(c)) ?? byName.get(c.name);
+      if (!group?.some((entry) => entry.enabled)) return false;
+      if (group.some((entry) => !entry.enabled)) {
+        throw new Error(`Cannot tell which "${c.name}" controls were enabled when saving began.`);
+      }
+      return true;
+    });
   };
 }
 
@@ -83,7 +75,7 @@ export function captureNamedControls(form: HTMLFormElement): () => Element[] {
  */
 export function formValues(
   form: { elements: ArrayLike<unknown> },
-  controls = namedControls(form),
+  controls = recordControls(form).filter((c) => !c.disabled),
 ): Record<string, unknown> {
   const count = new Map<string, number>();
   for (const c of controls) count.set(c.name!, (count.get(c.name!) ?? 0) + 1);

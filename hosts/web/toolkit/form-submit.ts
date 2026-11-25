@@ -9,12 +9,10 @@
  * agreed. A failure about one field (`detail.field`, as a schema's refusal
  * and an Action's `failure` with a `detail` say it) says which.
  */
-import { stageForm } from "./form-stage.ts";
-
 /** What a part's handler gives back: values for the form's own, `false` to stop, or nothing. */
 export type PartAnswer = Record<string, unknown> | false | void | undefined;
 
-/** A part's handler, given this attempt's working copy of the form and its cancellation signal. */
+/** A part's handler, given the live form and this attempt's cancellation signal. */
 export type PartSubmit = (
   form: HTMLFormElement,
   signal: AbortSignal,
@@ -73,14 +71,10 @@ export async function submitAll(
   try {
     start?.();
     if (signal.aborted) return { ok: false };
-    if (parts.length) {
-      const stage = stageForm(form);
-      for (const part of parts) {
-        const answer = await part(stage.form, signal);
-        if (signal.aborted || answer === false) return { ok: false };
-        if (answer && typeof answer === "object") Object.assign(values, answer);
-      }
-      stage.commit();
+    for (const part of parts) {
+      const answer = await part(form, signal);
+      if (signal.aborted || answer === false) return { ok: false };
+      if (answer && typeof answer === "object") Object.assign(values, answer);
     }
     await own?.(values, form);
     return { ok: true, values };

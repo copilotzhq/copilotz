@@ -60,8 +60,10 @@ guides ship with the runtime.
   field's `name` reaches a control drawn as a function.
 - Date-only patterns read exactly two digits for `yy`, including in `yyMMdd`. Day-time patterns also
   accept four digits for a separate `yy` field. Quoted punctuation and spaces match as written.
-  Locale-generated separators allow flexible spacing and an optional comma. Numeric month names such
-  as Japanese `MMM` need a separator from adjacent digits.
+  Locale-generated separators allow flexible spacing and an optional comma. As in rc.63, `MMM` and
+  `MMMM` accept month names made of letters with an optional trailing dot. Names containing digits
+  are rejected even with separators. Numeric fields accept locale digits when the date has a single
+  valid reading.
 - JSON records keep sparse cells as `""` and explicit `null` as `null`. Table-shaped JSON with raw
   values preserves each cell's type.
 - A `Form` keeps the part handlers and submit callback it started with, so a dialog switched to
@@ -69,26 +71,28 @@ guides ship with the runtime.
   from its first part to the save (Cancel and Escape wait), starts fresh for each record, and passes
   cleared fields to `onSubmit(record, form, unset)` for an `$unset`.
 - `EntityDialog` reads the final values of named controls that were enabled when submission began,
-  including controls disabled or remounted while saving. Removed controls are skipped.
+  including controls disabled while saving. Remounted same-name fields are read in live form order.
+  If a remount makes it impossible to tell which fields participated, the form shows an error.
+  Removed controls are skipped.
 - A `Form` that unmounts or is hidden by React `Activity` during a save calls
   `onSubmittingChange(false, form)` once. Showing it again allows a new submission. Each attempt's
-  parts receive its `AbortSignal` and a working copy of the form. Their edits to control values
-  reach the live form after every part agrees, so a late edit cannot overwrite a retry.
+  parts receive the live form and its `AbortSignal`. After each `await`, a part should check
+  `signal.aborted` before touching the form.
 - An unanswered `confirm()` resolves `false` when the last `<Toasts />` leaves, instead of showing
   later with an old callback.
 - A timed `DateRangePicker` reads back the date and 24-hour time it shows. `parseDayTime` reads a
-  locale's month names and digits; `dateOfDayTime` resolves a skipped time forward and a repeated
-  one to its earlier instant, in the browser's zone and a named one alike.
+  locale's decimal digits in numeric fields. `dateOfDayTime` resolves a skipped time forward and a
+  repeated one to its earlier instant, in the browser's zone and a named one alike.
 - Date patterns read short months such as `nov.` in French and Portuguese. Digits in quoted text
   stay as written when the parser reads the surrounding date and time.
 - `tableSheet` accepts inline `DataTable` columns with `align` and `render` and infers the row type.
 - PDF column widths and alignments follow the visible columns. A minimal-quoted CSV keeps a row with
   one empty field (`""`). `copilotz/web/export`'s types need no React.
 - A barcode with no `width` grows to fit its whole modules and quiet margins on screen and in PNG.
-  In `documentPdf`, an omitted width uses the space from `x` to the page edge. Insufficient width
-  raises a `RangeError` with the minimum required. An off-page barcode origin also raises a
-  `RangeError`. `Drawn` keeps its rc.63 variants and numeric barcode `width`. The wider
-  `documentPdf` input also accepts images and barcodes with an omitted width.
+  In `documentPdf`, an omitted width uses the space from `x` to the page edge. An undersized
+  explicit width raises a `RangeError` with the minimum required. Printed bars must fit on the page.
+  Their quiet margins may extend past the edge. `Drawn` keeps its rc.63 variants and numeric barcode
+  `width`. The wider `documentPdf` input also accepts images and barcodes with an omitted width.
 
 **Fixed, here since rc.63 or before:**
 

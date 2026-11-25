@@ -30,38 +30,28 @@ test("every part, in order, then the form's own with what they handed up", async
   assertEquals(done, { ok: true, values: { packages: [{ name: "Gold" }], points: 10 } });
 });
 
-test("parts share staged control values and publish them only when every part agrees", async () => {
-  const doc = form.ownerDocument;
-  const live = doc.body.appendChild(doc.createElement("form"));
-  live.id = "settings";
-  live.innerHTML = '<select name="size"><option>S</option><option>L</option></select>';
-  const size = live.querySelector("select")!;
-  size.value = "L";
-  const enabled = doc.body.appendChild(doc.createElement("input"));
-  enabled.type = "checkbox";
-  enabled.name = "enabled";
-  enabled.setAttribute("form", live.id);
-  const prepare = (copy: HTMLFormElement) => {
-    const select = copy.querySelector("select")!;
-    assertEquals(select.value, "L");
-    select.value = "S";
-    (copy.elements.namedItem("enabled") as HTMLInputElement).checked = true;
-  };
-  try {
-    assertEquals(await submitAll(live, [prepare, () => false]), { ok: false });
-    assertEquals([size.value, enabled.checked], ["L", false]);
-    const done = await submitAll(live, [prepare, (copy) => {
-      assertEquals(copy.querySelector("select")!.value, "S");
-      assertEquals([size.value, enabled.checked], ["L", false]);
-    }], (_values, saved) => {
-      assertEquals(saved === live, true);
-      assertEquals([size.value, enabled.checked], ["S", true]);
-    });
-    assertEquals(done.ok, true);
-  } finally {
-    enabled.remove();
-    live.remove();
-  }
+test("later parts see edits made during a wait and a cleared single-select stays empty", async () => {
+  const live = form.ownerDocument.createElement("form");
+  live.innerHTML = '<input value="first"><select><option>S</option><option>L</option></select>';
+  const wait = Promise.withResolvers<void>();
+  const save = submitAll(live, [
+    async (form, signal) => {
+      await wait.promise;
+      if (signal.aborted) return;
+      form.querySelector("select")!.selectedIndex = -1;
+    },
+    (form) => ({
+      text: form.querySelector("input")!.value,
+      size: form.querySelector("select")!.value,
+    }),
+  ], (values, form) => {
+    assertEquals(form === live, true);
+    assertEquals(form.querySelector("select")!.selectedIndex, -1);
+    assertEquals(values, { text: "new", size: "" });
+  });
+  live.querySelector("input")!.value = "new";
+  wait.resolve();
+  assertEquals(await save, { ok: true, values: { text: "new", size: "" } });
 });
 
 test("a part that says no stops the save: false says nothing, a throw fails, with its words", async () => {

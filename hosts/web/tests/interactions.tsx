@@ -76,8 +76,9 @@ test("an entity reads the final values of controls enabled when Save was pressed
     const upload = Promise.withResolvers<void>();
     const saved: unknown[] = [];
     function Part({ saving }: { saving: boolean }) {
-      useFormSubmit(async (form) => {
+      useFormSubmit(async (form, signal) => {
         await upload.promise;
+        if (signal.aborted) return;
         form.querySelector<HTMLInputElement>('[name="name"]')!.value = "normalized";
       });
       return (
@@ -103,9 +104,10 @@ test("an entity reads a remounted control and skips controls removed during save
     const work = Promise.withResolvers<void>();
     const saved: unknown[] = [];
     function Part({ saving }: { saving: boolean }) {
-      useFormSubmit(async () => {
+      useFormSubmit(async (form, signal) => {
         await work.promise;
-        document.querySelector<HTMLInputElement>("#edited")!.value = "normalized";
+        if (signal.aborted) return;
+        form.querySelector<HTMLInputElement>("#edited")!.value = "normalized";
       });
       return (
         <div key={String(saving)}>
@@ -127,6 +129,40 @@ test("an entity reads a remounted control and skips controls removed during save
     assert.deepEqual(saved, [{ name: "normalized" }]);
   }));
 
+for (const mixed of [false, true]) {
+  test(
+    "remounted same-name fields " + (mixed ? "report ambiguous eligibility" : "save in live order"),
+    () =>
+      page(async (render) => {
+        const work = Promise.withResolvers<void>();
+        const saved: unknown[] = [];
+        await render(
+          <EntityDialog title="Tags" onSubmit={(record) => saved.push(record)} onClose={() => {}}>
+            {({ saving }) => (
+              <div key={String(saving)}>
+                <input
+                  name="tag"
+                  defaultValue={saving ? "updated" : "original"}
+                  disabled={saving}
+                />
+                <input name="tag" defaultValue="another" disabled={mixed || saving} />
+                <Upload wait={work.promise} />
+              </div>
+            )}
+          </EntityDialog>,
+        );
+        const first = document.querySelector('[name="tag"]')!;
+        await submit();
+        assert.equal(first.isConnected, false);
+        await act(async () => work.resolve());
+        if (mixed) {
+          assert.deepEqual(saved, []);
+          assert.match(document.querySelector('[role="alert"]')!.textContent!, /tag/);
+        } else assert.deepEqual(saved, [{ tag: ["updated", "another"], file: "A.pdf" }]);
+      }),
+  );
+}
+
 test("a reconnected Activity form retries while its aborted part is still pending", () =>
   page(async (render) => {
     const first = Promise.withResolvers<void>();
@@ -139,6 +175,7 @@ test("a reconnected Activity form retries while its aborted part is still pendin
         signals.push(signal);
         const file = form.querySelector<HTMLInputElement>('[name="file"]')!;
         await wait;
+        if (signal.aborted) return;
         if (wait === first.promise) file.value = "stale.pdf";
         return { file: file.value };
       });
@@ -329,6 +366,34 @@ test("applying a compact From date keeps the range end", () =>
     await act(() => apply!.click());
     assert.deepEqual(applied, [{ start: "2026-11-12", end: "2026-11-30" }]);
   }));
+
+for (const [locale, input] of [["zh-CN", "2026/211月"], ["ko-KR", "2026/211월"]]) {
+  test(
+    "a range keeps its dates after an invalid compact month in " + locale,
+    () =>
+      page(async (render) => {
+        document.documentElement.lang = locale;
+        const original = { start: "2026-11-01", end: "2026-11-30" };
+        const applied: unknown[] = [];
+        await render(
+          <DateRangePicker
+            format="yyyy/dMMM"
+            value={original}
+            onChange={(range) => applied.push(range)}
+          />,
+        );
+        const from = document.querySelector<HTMLInputElement>(".copilotz-date-end input")!;
+        await typeInto(from, input);
+        assert.equal(from.getAttribute("aria-invalid"), "true");
+        document.querySelector<HTMLElement>("[popover]")!.hidePopover = () => {};
+        const apply = Array.from(document.querySelectorAll("button")).find((button) =>
+          button.textContent === "Apply"
+        );
+        await act(() => apply!.click());
+        assert.deepEqual(applied, [original]);
+      }),
+  );
+}
 
 test("a range accepts its displayed English time to the second in From", () =>
   page(async (render) => {

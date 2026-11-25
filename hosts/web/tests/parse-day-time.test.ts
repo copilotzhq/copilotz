@@ -167,10 +167,15 @@ test("a skipped local time moves forward by the gap and a repeated time uses its
   }
 });
 
-test("Japanese numeric month names round trip through a custom pattern", () => {
-  const value = "2026-11-16 14:30";
-  const by = "d MMM yyyy HH:mm";
-  assertEquals(parseDayTime(formatPattern(value, by, "ja-JP"), by, "ja-JP"), value);
+test("day-time patterns reject digit-containing month names too", () => {
+  for (const locale of ["ja-JP", "ko-KR", "zh-CN"]) {
+    for (const by of ["d MMM yyyy HH:mm", "dMMMM yyyy HH:mm"]) {
+      const text = formatPattern("2026-11-16 14:30", by, locale);
+      // The long Chinese name is 十一月, all letters.
+      const expected = locale === "zh-CN" && by.includes("MMMM") ? "2026-11-16 14:30" : undefined;
+      assertEquals(parseDayTime(text, by, locale), expected);
+    }
+  }
 });
 
 test("Arabic short date and time including locale digits round trips", () => {

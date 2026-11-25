@@ -216,12 +216,12 @@ test("a long Code 128 fits its PNG and PDF when width is omitted", async () => {
 
 test("an omitted barcode width uses the room from x to the receipt edge", () => {
   const label = { barcode: "A".repeat(25), quiet: true, x: 8, y: 0, height: 10 };
-  assertThrows(() => documentPdf([[label]], { size: "receipt" }), RangeError, "330");
-  // A 330-point symbol fits exactly at x=8 on a 338-point page, quiet margins included.
-  assertThrows(() => documentPdf([[label]], { size: [337, 20] }), RangeError, "330");
+  assertThrows(() => documentPdf([[label]], { size: "receipt" }), RangeError, "on the page");
+  // At x=8 the ink ends at 328, and the right quiet margin extends to 338.
+  assertThrows(() => documentPdf([[label]], { size: [327, 20] }), RangeError, "on the page");
   assertEquals(
-    documentPdf([[label]], { size: [338, 20] }),
-    documentPdf([[{ ...label, width: 330 }]], { size: [338, 20] }),
+    documentPdf([[label]], { size: [328, 20] }),
+    documentPdf([[{ ...label, width: 330 }]], { size: [328, 20] }),
   );
   const small = { ...label, barcode: "POS 12" };
   assertEquals(
@@ -230,9 +230,26 @@ test("an omitted barcode width uses the room from x to the receipt edge", () => 
   );
 });
 
-test("a receipt refuses off-page barcode origins before sizing", () => {
-  for (const x of [-25, 227, 228]) {
-    const label = { barcode: "POS 12", x, y: 0, height: 20, quiet: true };
-    assertThrows(() => documentPdf([[label]], { size: "receipt" }), RangeError, "Barcode x");
+test("PDF barcode bounds use the first and last bars, including bars flush with the page", () => {
+  const label = { barcode: "POS 12", quiet: true, width: 121, height: 20, y: 0 };
+  // rc.63 geometry: ten blank points, then 101 points of ink and gaps.
+  for (const x of [-10, -3, 116]) {
+    const pdf = String.fromCharCode(...documentPdf([[{ ...label, x }]], { size: "receipt" }));
+    assertStringIncludes(pdf, `${x + 10} 12 2 20 re f`);
+    assertStringIncludes(pdf, `${x + 109} 12 2 20 re f`);
+  }
+  for (const x of [-11, 117, 227, 228]) {
+    assertThrows(
+      () => documentPdf([[{ ...label, x }]], { size: "receipt" }),
+      RangeError,
+      "on the page",
+    );
+  }
+  for (const y of [-1, 1]) {
+    assertThrows(
+      () => documentPdf([[{ ...label, x: 0, y }]], { size: [227, 20] }),
+      RangeError,
+      "on the page",
+    );
   }
 });

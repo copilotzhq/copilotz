@@ -197,8 +197,8 @@ export function Form(
 
 /**
  * Joins the `Form` around it: `handler` runs on its submit (see the top of
- * this file). It receives the attempt's working form and AbortSignal. Edit controls through
- * that form to stage their values until the parts finish. Says whether there is a form
+ * this file). It receives the live form and this attempt's AbortSignal. After each await,
+ * check signal.aborted before touching the form. Says whether there is a form
  * (`inForm`), and whether it's saving.
  */
 export function useFormSubmit(

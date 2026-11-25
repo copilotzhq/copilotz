@@ -19,6 +19,7 @@ import { type Context, failure } from "../../../../runtime/mod.ts";
 import type { Computer } from "../collections/computer.ts";
 import type { Desk } from "../collections/desk.ts";
 import { servingOrder } from "./serving.ts";
+import { type EngineStatus, type Failed, WORK } from "./workloads.ts";
 
 /** The engines a computer program runs, by its own name for each. */
 export const ENGINES = ["claude", "codex", "antigravity"] as const;
@@ -123,4 +124,56 @@ export async function signedOut(ctx: Context, computer: string, engine: EngineNa
   await ctx.as().db.collection<Computer>("computer").updateOne({ _id: computer }, {
     $set: { [`engines.${engine}.signedIn`]: false },
   });
+}
+
+/**
+ * Asks `computer` what its plans' CLIs are now (`computer.agents.status`:
+ * `engines`, or every one), and keeps what it said on it, field by field (a
+ * plan's `limited` stays): what it said, by engine, or undefined when it
+ * didn't answer (it's offline, or its program is older than the work).
+ * Asked after a wake, it's what's true there now, not what was before it
+ * slept.
+ */
+export async function engineStatus(
+  ctx: Context,
+  computer: string,
+  engines?: EngineName[],
+): Promise<Partial<Record<EngineName, EngineSeen>> | undefined> {
+  const said = await ctx.workers.call<EngineStatus[] | Failed>(
+    "computer",
+    computer,
+    WORK.agentsStatus,
+    engines ? { engines } : {},
+  ).catch(() => undefined);
+  if (!Array.isArray(said)) return undefined;
+  const at = new Date().toISOString();
+  const seen: Partial<Record<EngineName, EngineSeen>> = {};
+  const set: Record<string, unknown> = {};
+  const unset: Record<string, ""> = {};
+  for (const status of said) {
+    if (!(ENGINES as readonly string[]).includes(status.engine)) continue;
+    const name = status.engine as EngineName;
+    seen[name] = {
+      installed: status.installed,
+      signedIn: status.signedIn,
+      ...(status.version ? { version: status.version } : {}),
+      ...(status.account ? { account: status.account } : {}),
+      at,
+    };
+    const field = `engines.${name}`;
+    Object.assign(set, {
+      [`${field}.installed`]: status.installed,
+      [`${field}.signedIn`]: status.signedIn,
+      [`${field}.at`]: at,
+    });
+    for (const key of ["version", "account"] as const) {
+      if (status[key]) set[`${field}.${key}`] = status[key];
+      else unset[`${field}.${key}`] = "";
+    }
+  }
+  await ctx.as().db.collection<Computer>("computer").updateOne({ _id: computer }, {
+    $set: set,
+    ...(Object.keys(unset).length ? { $unset: unset } : {}),
+  });
+  return seen;
 }

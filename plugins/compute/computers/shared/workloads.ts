@@ -362,6 +362,11 @@ export type LoginState = {
   signedIn: boolean;
   /** The sign-in link, once it's shown one. */
   url?: string;
+  /**
+   * Done, whether its CLI is there now, as the app asked it after
+   * (`computer.engine.login` adds it): not, when its installer failed.
+   */
+  installed?: boolean;
 };
 
 /** A tool an engine's model may call, as MCP has it. */

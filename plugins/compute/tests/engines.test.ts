@@ -219,13 +219,21 @@ test("someone with no plan signed in goes straight to the next model, and no com
   });
 });
 
-test("signing in asked to install sends the plan's official installer, and only then", async () => {
+test("signing in asked to install sends the plan's official installer, and only then; done, it says whether the CLI is there", async () => {
   await setup(async (s) => {
     const [mine] = await s.rt.call<{ computer: string }[]>("computer.engines", {}, { actor: ana });
     const login = (more: Record<string, unknown> = {}) =>
       s.rt.call("computer.engine.login", { computer: mine.computer, engine: "codex", ...more }, {
         actor: ana,
       });
+    // Done, it says whether the CLI is there now, as the computer says after (of Claude Code).
+    assertEquals(
+      await s.rt.call("computer.engine.login", { computer: mine.computer, engine: "claude" }, {
+        actor: ana,
+      }),
+      { state: "done", output: "", signedIn: true, installed: true },
+    );
+    s.logins.length = 0;
     await login();
     await login({ install: true });
     await login({ install: false });

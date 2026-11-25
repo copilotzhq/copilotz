@@ -1,6 +1,6 @@
 ---
 title: "The web toolkit"
-description: "The pieces web front ends are made of, laid out and themed without CSS: layout, forms, table exports and totals, dates, bars, toasts, shortcuts, printing, PDF logos, Code 39, Code 128 and EAN barcodes, a route's own page and a sign-in (`Screen`), and every token a theme sets."
+description: "The pieces web front ends are made of, laid out and themed without CSS: layout, forms, dialogs that ask before an action or hold a record's form, tables with their exports and totals, dates (ranges to the second, typed day-times read back), bars, toasts, shortcuts, printing, PDFs with logos, Code 39, Code 128 and EAN barcodes, a route's own page and a sign-in (`Screen`), and every token a theme sets."
 section: Guides
 order: 8
 ---
@@ -8,11 +8,11 @@ order: 8
 # The web toolkit
 
 `copilotz/web` exports the pieces every web front end is made of: buttons and fields, tables, date
-pickers, dialogs, bars, toasts, and the layout pieces that place them. A screen composes them and
-writes no CSS. Its look is the app's theme: the theme's tokens set the colours, fonts and radii, and
-each piece's own tokens set its sizes and surfaces. `className` stays on most pieces as an escape
-hatch for what no token reaches. A printed document (a receipt, an invoice) is the one place for an
-app's own CSS: its print layout.
+pickers, dialogs (one that asks, one that holds a record's form), bars, toasts, and the layout
+pieces that place them. A screen composes them and writes no CSS. Its look is the app's theme: the
+theme's tokens set the colours, fonts and radii, and each piece's own tokens set its sizes and
+surfaces. `className` stays on most pieces as an escape hatch for what no token reaches. A printed
+document (a receipt, an invoice) is the one place for an app's own CSS: its print layout.
 
 ```tsx
 import { Button, DataTable, Field, Input, Page, Stack, Toolbar } from "copilotz/web";
@@ -148,7 +148,9 @@ its `footer` at the window's foot. Taller than the window, it grows, and the foo
   fill the row, `"25%"` and `"50%"` leave its last quarter empty, and a length (`"320px"`) is the
   most the control takes. The tokens `field-row-label-width` and `field-row-control-width` set them
   for every field. Before rc.54, `controlWidth` was a share of the control's own column: an older
-  `"50%"` beside a 30% label is now about `"35%"`.
+  `"50%"` beside a 30% label is now about `"35%"`. `name` is the record's field it's for: a `Form`'s
+  save refused about that field shows here (below), and a control drawn as a function gets the
+  `name` too.
 - **`Input`**: `sm`, `md`, `lg`; an `icon` inside the box; `end` for buttons that act on it;
   **`addon`** and **`addonEnd`**, segments outside the box and joined to it: words or an icon get a
   tinted face, and a button or a `Switch` there is the segment itself.
@@ -246,10 +248,13 @@ its `footer` at the window's foot. Taller than the window, it grows, and the foo
 `useFormSubmit(handler)`, another plugin's View shown inside it too (a shown View is in the form's
 React tree). On submit, each part's handler runs in the order they joined: values it returns are
 handed to the form's `onSubmit(values, form)`; nothing means it saved its own part; `false` stops
-the save (the part says why); a throw stops it, and the form says the failure's words at its top.
-`useFormState()` tells buttons it's `submitting`; outside a `Form`, `useFormSubmit` says
-`inForm: false`, so a part can show its own Submit. Handing values up and saving them in one Action
-keeps the save one transaction.
+the save (the part says why); a throw stops it, and the form says the failure's words at its top. A
+failure about one field (`detail.field`: the schema's refusal of a save, or an Action's `failure`
+with a `detail`) shows under the `Field` of that `name` instead, or of the field it's part of
+(`lines.0.quantity` under `lines`). A schema's words are for developers: `errors` gives people's, by
+field (`<Form errors={{ price: "Give the price as a number." }}>`). `useFormState()` tells buttons
+it's `submitting`; outside a `Form`, `useFormSubmit` says `inForm: false`, so a part can show its
+own Submit. Handing values up and saving them in one Action keeps the save one transaction.
 
 ```tsx
 <Form
@@ -266,7 +271,149 @@ const { inForm } = useFormSubmit(() => (valid(rows) ? { hours: rows } : false));
 
 **Dialogs:** `Dialog` is the browser's modal `<dialog>`. `placement="top"` opens it near the top
 instead of centred, and `focus="dialog"` gives the focus to the dialog itself rather than its first
-field (Tab then goes to it). `size` is `sm`, `md`, `lg` or `auto`.
+field (Tab then goes to it); a control marked `data-autofocus` takes it instead of the first. `size`
+is `sm`, `md`, `lg` or `auto`. `busy` keeps it open while something it started runs (Escape, the
+backdrop and its close button wait), and `role="alertdialog"` marks one that asks before going on.
+Two dialogs come made: one that asks, and one that holds a record's form.
+
+## Confirming an action
+
+`ConfirmDialog` asks before something is done: a question (`title`), what follows from it
+(`message`, and `children` for more, a list of what's affected), Cancel, and a button that confirms.
+`danger` makes that button destructive, for a delete; its words are "Delete" then, and "Confirm"
+otherwise, unless `confirmLabel` says (`cancelLabel` for Cancel's).
+
+- **`onConfirm` may be async.** While it runs, its button is busy and the dialog stays open: Escape,
+  the backdrop and Cancel wait. If it fails, its words show in the dialog, as an alert, and the
+  dialog stays open to try again or to cancel. Once it's done, the dialog closes (`onClose`), with a
+  `toast` if given (`toast="Customer deleted."`).
+- **Keys and focus.** Focus goes to the confirm button, so Enter confirms; with `danger` it goes to
+  Cancel, so Enter never deletes. Escape cancels. It's an `alertdialog`, named by its title and
+  described by its message, and closed, focus goes back to what opened it.
+- **A component, or a call.** As a component it's controlled: open while `open`, `true` by default,
+  so a dialog View at an address returns it as it is. `confirm(options)` asks the same from anywhere
+  (a row's button, a table's `actions`, a handler) with no state of the caller's, and resolves
+  `true` once confirmed (and `onConfirm` done), `false` when cancelled. It shows where `<Toasts />`
+  is (the Copilotz shell has one, and an app's own frame draws it once), one question at a time.
+- **Its words** are the toolkit's: `toolkit.confirm`, `toolkit.delete`, `toolkit.cancel`, and
+  `toolkit.notDone` for a failure with none of its own.
+
+```tsx
+// A component that keeps whether it's asking.
+function VoidButton({ invoice, voidIt }: { invoice: Invoice; voidIt(): Promise<unknown> }) {
+  const [asking, setAsking] = useState(false);
+  return (
+    <>
+      <Button variant="destructive" onClick={() => setAsking(true)}>Void</Button>
+      <ConfirmDialog
+        open={asking}
+        title={`Void invoice ${invoice.number}?`}
+        message="Its total leaves the day's takings. This can't be undone."
+        confirmLabel="Void invoice"
+        danger
+        toast="Invoice voided."
+        onConfirm={voidIt}
+        onClose={() => setAsking(false)}
+      />
+    </>
+  );
+}
+
+// From a table's actions, with no state: confirm() asks, and says how it ended.
+<DataTable
+  columns={columns}
+  rows={orders}
+  rowKey={(o) => o._id}
+  actions={(ticked, clear) => (
+    <Button
+      size="sm"
+      icon="trash"
+      disabled={!ticked.length}
+      onClick={async () => {
+        const done = await confirm({
+          title: `Delete ${ticked.length} orders?`,
+          message: "Their lines go with them.",
+          danger: true,
+          toast: "Orders deleted.",
+          onConfirm: () => ctx.call("order.delete", { orders: ticked }),
+        });
+        if (done) clear();
+      }}
+    >
+      Delete
+    </Button>
+  )}
+/>;
+```
+
+## A record in a dialog
+
+`EntityDialog` adds or changes one record: a `Dialog` (near the top, `placement="top"`) holding a
+`Form`, with Cancel and Save in its footer. It starts from the record's `values` (a new one's
+defaults). Its fields are data (`fields`), children, or both, the fields first; `layout="row"` puts
+their labels beside them.
+
+| `type`                                                  | Its control                                                               | Its value                                      |
+| ------------------------------------------------------- | ------------------------------------------------------------------------- | ---------------------------------------------- |
+| `text` (the default), `email`, `tel`, `url`, `password` | `Input`                                                                   | a string                                       |
+| `number`                                                | a number field (`min`, `max`, `step`)                                     | a number; none while it's empty                |
+| `textarea`                                              | `Textarea`                                                                | a string                                       |
+| `select`                                                | `Picker` of `options` (`search` for a long list)                          | the chosen option's `value`                    |
+| `checkbox`                                              | `Checkbox`                                                                | `true` or `false`                              |
+| `date`                                                  | `DatePicker` (`format`, `today`, `min`, `max`)                            | `YYYY-MM-DD`                                   |
+| `datetime`                                              | `DateTimePicker` (`format`, `seconds`, `timeZone`, `today`, `min`, `max`) | `YYYY-MM-DD HH:mm`, or `HH:mm:ss` with seconds |
+
+Every field has its `name` (the record's field), `label`, and may have `required`, `hint`,
+`placeholder` and `disabled`; `render({ value, set, control })` draws any other control.
+
+- **Children** are `Field`s with a `name` (a control drawn as a function gets it, and what a named
+  control holds is saved: text as a string, a number field as a number, a checkbox as `true` or
+  `false`), a View shown in it (`ctx.show`), or a function of the record as the form has it,
+  `({ values, set, saving })`, for controls that hold their value themselves.
+- **The save.** On Save, or Enter in a field, a required field left empty is said under it
+  (`toolkit.fillIn`) and nothing is sent. Then `onSubmit` gets the record as the form leaves it,
+  less its `_id` (a save names the record in its filter): a plain save
+  (`ctx.db.collection(name).insertOne(record)`, `updateOne({ _id }, record)`) or an Action
+  (`ctx.call`). While it runs, Save is busy and the dialog stays open. Once it's done, `toast` says
+  so if given, and the dialog closes (`onClose`); `false` from `onSubmit` keeps it open.
+- **Refusals by field.** A failure about one field (a schema's refusal names it in `detail.field`;
+  an Action's `failure` can, with a `detail`) shows under that field, in the words `errors` gives
+  for it, or its own; any other shows at the form's top.
+- **Its record's type** is `Record<string, unknown>` unless given: `<EntityDialog<Product> …>` types
+  `values`, what `onSubmit` gets, and the function child's `values`.
+
+```tsx
+<EntityDialog<Product>
+  title="New product"
+  values={{ unit: "each", active: true, codes: [] }}
+  fields={[
+    { name: "name", label: "Name", required: true },
+    { name: "price", label: "Price", type: "number", min: 0, step: 0.01, required: true },
+    { name: "unit", label: "Unit", type: "select", options: UNITS },
+    { name: "active", label: "For sale", type: "checkbox" },
+  ]}
+  errors={{ price: "Give the price, such as 4.50." }}
+  onSubmit={(product) => ctx.db.collection<Product>("product").insertOne(product)}
+  toast="Product saved."
+  onClose={() => go(item.back)}
+>
+  {({ values, set }) => (
+    <Field label="Barcodes" name="codes">
+      {(control) => (
+        <TagsInput
+          id={control.id}
+          label="Barcodes"
+          values={values.codes ?? []}
+          onChange={(codes) => set({ codes })}
+        />
+      )}
+    </Field>
+  )}
+</EntityDialog>;
+```
+
+[A business app's screens](a-business-apps-screens.md#a-form-in-a-dialog) builds a customer's and a
+visit's dialogs with it, and a delete with `confirm()`.
 
 ## Tables and their files
 
@@ -513,7 +660,8 @@ page language's.
 - **`DateRangePicker` with `time`**: each end has hours and minutes too, and the ends are
   `YYYY-MM-DD HH:mm`; a preset is its whole days, `00:00` to `23:59`. On one day, the end is never
   before the start. A stored time with seconds sorts after its minute (`"… 23:59:30" > "… 23:59"`),
-  so compare one with an end to the minute: `at.slice(0, 16) <= range.end`.
+  so compare one with an end to the minute: `at.slice(0, 16) <= range.end`, or take the range to the
+  second ([below](#date-ranges-with-seconds)).
 - **`rangePresets(today, { keys, fiscalYearStart, min, max })`** builds presets by key, in the order
   given: `today`, `yesterday`, `todayLastYear`, `last7Days`, `last30Days`, `thisMonth`,
   `sameMonthToDateLastYear`, `sameMonthLastYear`, `lastMonth`, `thisYear`, `lastYear`,
@@ -539,8 +687,10 @@ page language's.
 - **Helpers:** `isDay` and `isDayTime`; `partsOfDayTime` (`{ day, hour, minute, second? }`);
   `addDays` and `addMonths`; `clampDayTime(value, min, max)`; `nowIn(timeZone, step, at, seconds)`,
   now (or the `Date` `at`) as the app's day-time; `formatDay` and `parseDay`, a day written in a
-  picker's `format` and read back; `formatDayTime`; `formatPattern` and `parsePattern`, which take a
-  time's letters too (`HH`, `hh`, `mm`, `ss`, `a`).
+  picker's `format` and read back; `formatDayTime`; `formatPattern`, which writes a time's letters
+  too (`HH`, `hh`, `mm`, `ss`, `a`), and `parsePattern`, which reads a day; `parseDayTime` and
+  `dateOfDayTime`, a typed day-time read back and the moment it names
+  ([below](#reading-typed-dates-and-times)).
 
 ```tsx
 <DateRangePicker
@@ -563,6 +713,63 @@ page language's.
   timeZone={zone}
   name="received_at"
 />;
+```
+
+### Date ranges with seconds
+
+`DateRangePicker` with `seconds` takes each end to the second (`time` comes with it): each end's
+time has a seconds field, typed or stepped as the others, and the value's ends are always
+`YYYY-MM-DD HH:mm:ss` (an end kept to the minute is at its `:00`). A preset runs from `00:00:00` to
+`23:59:59`, so a stored time compares with the ends as text, to the second:
+`at >= range.start && at <= range.end`.
+
+- **Typed ends.** From and To show the day in the field's format, and read a day, or a whole day and
+  time typed or pasted in that format (`16/11/2026 14:30:05`, seconds or none): the day moves the
+  range, and the time goes to that end's fields.
+- **A day-time pattern.** With a time, `format` may be the app's day-time pattern
+  (`dd/MM/yyyy HH:mm:ss`, `MM/dd/yyyy hh:mm:ss a`): it writes each end whole, in the field and the
+  foot, and From and To show its day alone. A day pattern (`dd/MM/yyyy`) writes the time after it,
+  `HH:mm:ss`.
+
+```tsx
+const [range, setRange] = useState<DateRange>({
+  start: `${today} 00:00:00`,
+  end: `${today} 23:59:59`,
+});
+<DateRangePicker
+  label="Report"
+  value={range}
+  onChange={setRange}
+  today={today}
+  format="dd/MM/yyyy HH:mm:ss"
+  seconds
+/>;
+```
+
+### Reading typed dates and times
+
+`parseDayTime(text, pattern, locale)` reads a day and a time typed in the app's pattern, the inverse
+of `formatPattern`: day and month in the pattern's order, hours on a 24-hour clock (`HH`) or a
+12-hour one with AM and PM (`hh`, `a`, in the language's words or English's), and seconds typed or
+left out. Its value is the toolkit's day-time, `YYYY-MM-DD HH:mm`, with `:ss` when the pattern
+writes seconds or they were typed. What isn't a real day and time (February 30th, 25:00, 13 PM,
+words) is `undefined`, so a field can mark it. Spaces between the parts may differ, and a comma may
+be left out. With no pattern, it reads the language's own short date and time, and a day-time as the
+toolkit keeps one (`2026-11-16 14:30`, or with a `T`). `locale` names the months and AM and PM: the
+page's is `lang()`.
+
+`dateOfDayTime(value, timeZone)` is the moment a day-time (or a day, at its start) names in the
+app's time zone, as a `Date`, for what needs one: a timestamp, an ISO string (`.toISOString()`), a
+time to count from. Without a zone, the page's own.
+
+```ts
+parseDayTime("16/11/2026 14:30:05", "dd/MM/yyyy HH:mm:ss"); // "2026-11-16 14:30:05"
+parseDayTime("16/11/2026 14:30", "dd/MM/yyyy HH:mm:ss"); // "2026-11-16 14:30:00"
+parseDayTime("11/16/2026 2:30 PM", "M/d/yyyy h:mm a"); // "2026-11-16 14:30"
+parseDayTime("29/02/2026 10:00", "dd/MM/yyyy HH:mm"); // undefined: 2026 has no February 29th
+parseDayTime("16/11/2026 14:30", undefined, "pt-BR"); // "2026-11-16 14:30"
+formatPattern("2026-11-16 14:30:05", "dd/MM/yyyy HH:mm:ss"); // "16/11/2026 14:30:05", back again
+dateOfDayTime("2026-11-16 14:30", "America/Sao_Paulo")?.toISOString(); // "2026-11-16T17:30:00.000Z"
 ```
 
 ## Bars, tiles and toasts
@@ -591,7 +798,8 @@ few seconds' word over the page and gives back a function that dismisses it. Ton
 (the default), `success`, `info`, `warning` and `destructive`; `duration` is 5,000 ms unless given
 (`0`: until dismissed); it waits while hovered or focused. The shell shows them; an app without it
 renders `<Toasts placement="bottom-end" />` once, and one given a `placement` takes over from the
-shell's, so a toast never shows twice.
+shell's, so a toast never shows twice. The `<Toasts />` that shows toasts also shows the dialogs
+`confirm()` asks.
 
 ## Icons
 

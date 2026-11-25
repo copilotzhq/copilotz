@@ -11,7 +11,8 @@
  * dismissed), and waits while the pointer is on it or the keyboard is in
  * it. Its × dismisses it, and `toast()` gives back what dismisses it early.
  * Where two `<Toasts />` are mounted (the shell's and an app's), one shows
- * them: the one that chose its `placement`.
+ * them: the one that chose its `placement`. That one also shows the dialogs
+ * `confirm()` asks, one at a time.
  *
  * ```tsx
  * toast("Customer saved", "success");
@@ -20,6 +21,7 @@
  * ```
  */
 import { type ReactNode, useEffect, useId, useSyncExternalStore } from "react";
+import { ConfirmQuestions } from "./confirm-dialog.tsx";
 import { cx } from "./cx.ts";
 import { Icon, type IconName } from "./icon.tsx";
 import { sheet } from "./sheet.tsx";
@@ -127,7 +129,7 @@ ${
 `,
 );
 
-/** Where toasts show, once per page. */
+/** Where toasts show, once per page, and the dialogs `confirm()` asks. */
 export function Toasts({ placement }: {
   /** Which edge and where on it (the end of the bottom one by default). */
   placement?: ToastPlacement;
@@ -138,45 +140,48 @@ export function Toasts({ placement }: {
   useEffect(() => mountToasts(id, placed), [id, placed]);
   if (shownBy !== id) return null;
   return (
-    <div
-      className="copilotz-toasts"
-      data-placement={placement ?? "bottom-end"}
-      role="status"
-      aria-live="polite"
-      aria-label={say("notifications")}
-    >
-      {SHEET}
-      {toasts.map((t) => {
-        const icon = ICONS[t.tone];
-        return (
-          <div
-            key={t.id}
-            className={cx("copilotz-toast", `copilotz-toast-${t.tone}`)}
-            role={t.tone === "destructive" ? "alert" : undefined}
-            onMouseEnter={() => pauseToast(t.id)}
-            onMouseLeave={(event) => {
-              if (!event.currentTarget.contains(document.activeElement)) resumeToast(t.id);
-            }}
-            onFocus={() => pauseToast(t.id)}
-            onBlur={(event) => {
-              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                resumeToast(t.id);
-              }
-            }}
-          >
-            {icon ? <Icon name={icon} size={18} /> : null}
-            <div className="copilotz-toast-message">{t.message}</div>
-            <button
-              type="button"
-              className="copilotz-toast-close"
-              aria-label={say("close")}
-              onClick={() => dismissToast(t.id)}
+    <>
+      <div
+        className="copilotz-toasts"
+        data-placement={placement ?? "bottom-end"}
+        role="status"
+        aria-live="polite"
+        aria-label={say("notifications")}
+      >
+        {SHEET}
+        {toasts.map((t) => {
+          const icon = ICONS[t.tone];
+          return (
+            <div
+              key={t.id}
+              className={cx("copilotz-toast", `copilotz-toast-${t.tone}`)}
+              role={t.tone === "destructive" ? "alert" : undefined}
+              onMouseEnter={() => pauseToast(t.id)}
+              onMouseLeave={(event) => {
+                if (!event.currentTarget.contains(document.activeElement)) resumeToast(t.id);
+              }}
+              onFocus={() => pauseToast(t.id)}
+              onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                  resumeToast(t.id);
+                }
+              }}
             >
-              <Icon name="close" size={16} />
-            </button>
-          </div>
-        );
-      })}
-    </div>
+              {icon ? <Icon name={icon} size={18} /> : null}
+              <div className="copilotz-toast-message">{t.message}</div>
+              <button
+                type="button"
+                className="copilotz-toast-close"
+                aria-label={say("close")}
+                onClick={() => dismissToast(t.id)}
+              >
+                <Icon name="close" size={16} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <ConfirmQuestions />
+    </>
   );
 }

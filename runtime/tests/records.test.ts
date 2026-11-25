@@ -139,3 +139,42 @@ each("records are appended, never changed; a bad one fails where it's made", asy
   assertStringIncludes((bad as Error).message, 'record in "used"');
   await runtime.close();
 });
+
+each(
+  "an Action's buffered record uses its own grant and a refused flush fails the call",
+  async (make) => {
+    const store = await make();
+    const runtime = await createRuntime({
+      store,
+      plugins: [{
+        name: "metering",
+        collections: { used: ledger.collections!.used },
+        guard: (_actor, { collection, access }) =>
+          collection === "used" && access === "write" ? { quantity: -1 } : undefined,
+        actions: {
+          granted: defineAction({
+            allow: () => true,
+            as: "meter",
+            run: (ctx) => ctx.record("used", { meter: "test", quantity: 1 }),
+          }),
+          ordinary: defineAction({
+            allow: () => true,
+            run: (ctx) => ctx.record("used", { meter: "test", quantity: 2 }),
+          }),
+        },
+      }],
+    });
+    const actor = { kind: "person", id: "ana" };
+    try {
+      await runtime.call("granted", {}, { actor });
+      await assertRejects(() => runtime.call("ordinary", {}, { actor, id: "refused" }));
+      assertEquals((await store.find("used", {})).map((r) => r.quantity), [1]);
+      assertEquals(
+        (await store.events(0)).filter((e) => e.cause === "refused").map((e) => e.type),
+        ["action.failed"],
+      );
+    } finally {
+      await runtime.close();
+    }
+  },
+);

@@ -652,44 +652,23 @@ export async function createOwner(
    * cursor writes, so a store can make it a single statement.
    */
   const commit = async <R>(
-    work: (tx: Transaction, seen: Seen) => Promise<R>,
-    cursors = true,
-    later?: Later,
+    work: (tx: Transaction, seen: Seen, staged?: Transaction) => Promise<R>,
+    { cursors = true, withMemory = false } = {},
   ): Promise<R> => {
     const saving: [string, number][] = cursors ? [...unsaved] : [];
     const seen: Seen = [];
     const started = performance.now();
-    const { result, events } = await store.transaction(epoch, (tx) => work(tx, seen), {
-      ...(saving.length ? { positions: Object.fromEntries(saving) } : {}),
-    });
+    const durable = (staged?: Transaction) =>
+      store.transaction(epoch, (tx) => work(tx, seen, staged), {
+        ...(saving.length ? { positions: Object.fromEntries(saving) } : {}),
+      });
+    // The private memory store publishes its staged changes only when the durable commit returns.
+    // It has a single owner and writer, so applying that validated layer cannot be fenced.
+    const { result, events } = withMemory && memory
+      ? (await memory.transaction(memoryEpoch, durable)).result
+      : await durable();
     measure.commits.record(performance.now() - started, { path: "transaction" });
-    if (later?.ops.length) later.results = await remember(later.ops, seen);
     committed(saving, events, seen);
-    return result;
-  };
-
-  /** Writes to in-memory collections that wait for the store's commit, then their results. */
-  type Later = { ops: StoreOp[]; results?: unknown[] };
-
-  /** Performs ops on in-memory collections: each one's result; what they changed goes in `seen`. */
-  const remember = async (ops: StoreOp[], seen: Seen): Promise<unknown[]> => {
-    const { result } = await memory!.transaction(memoryEpoch, async (tx) => {
-      const hooks: Hooks = {
-        validate,
-        checkUpdate: (collection, update) => void checkUpdate(collection, update),
-        checkResult: (collection, changes) => checkResult(tx, collection, changes),
-        offload: (value) => Promise.resolve(value),
-        changed: (collection, changes) => void seen.push([collection, changes]),
-        vectors: vectorFields,
-      };
-      const values: unknown[] = [];
-      for (const op of ops) {
-        values.push(
-          isRead(op) ? await projecting(op, (op) => read(tx, op)) : await perform(tx, op, hooks),
-        );
-      }
-      return values;
-    });
     return result;
   };
 
@@ -744,24 +723,20 @@ export async function createOwner(
   /** Commits ops together: each write's result, in order (emits answer nothing). */
   const writeEach = async (ops: StoreOp[], by: By = {}): Promise<unknown[]> => {
     if (!memory || !ops.some(inMemory)) return await writeStore(ops, by);
-    // In-memory collections change once the store has committed the rest.
-    const later: Later = { ops: ops.filter(inMemory) };
-    const rest = ops.filter((op) => !inMemory(op));
-    let stored: unknown[] = [];
-    if (rest.length) stored = await writeStore(rest, by, later);
-    else {
+    const work = (tx: Transaction, seen: Seen, staged?: Transaction) =>
+      performEach(tx, ops, by, seen, staged);
+    if (ops.every(inMemory)) {
       const seen: Seen = [];
-      later.results = await remember(later.ops, seen);
+      const { result } = await memory.transaction(memoryEpoch, (tx) => work(tx, seen, tx));
       committed([], [], seen);
+      return result;
     }
-    let [s, m] = [0, 0];
-    return ops.filter((op) => op.op !== "emit").map((op) =>
-      inMemory(op) ? later.results![m++] : stored[s++]
-    );
+    const result = await commit(work, { withMemory: true });
+    return result.filter((_, i) => ops[i].op !== "emit");
   };
 
-  /** Commits ops to the store, then `later`'s to memory: each write's result, in order. */
-  const writeStore = async (ops: StoreOp[], by: By, later?: Later): Promise<unknown[]> => {
+  /** Commits durable ops to the store, returning each write's result in order. */
+  const writeStore = async (ops: StoreOp[], by: By): Promise<unknown[]> => {
     const { cause, actor } = by;
     const writes = ops.filter((o): o is WriteOp => !isRead(o) && o.op !== "emit");
     // Writes to collections with vector fields also write the store's vectors, and
@@ -826,15 +801,13 @@ export async function createOwner(
         const seen: Seen = writes.flatMap((op, i) =>
           "collection" in op ? [[op.collection, changes[i] ?? []] as [string, Change[]]] : []
         );
-        if (later?.ops.length) later.results = await remember(later.ops, seen);
         committed(saving, events, seen);
         return results;
       }
     }
     const results = await commit(
       (tx, seen) => performEach(tx, ops, by, seen),
-      ops.some((op) => op.op !== "emit"),
-      later,
+      { cursors: ops.some((op) => op.op !== "emit") },
     );
     return results.filter((_, i) => ops[i].op !== "emit");
   };
@@ -946,12 +919,31 @@ export async function createOwner(
       { ...(options.actor ? { actor: options.actor } : {}), foreign: true },
     );
   };
+  async function checkElevation(
+    actor?: Actor,
+    action?: string,
+    rules = ruleReads,
+    track?: (op: Op | Dep) => void,
+  ) {
+    if (actor?.kind !== "system" || !actor.via || !action || !registry.labels?.elevate) return;
+    const allow = registry.actions[action]?.allow;
+    if (
+      !await registry.labels.elevate(
+        actor.via as Actor,
+        allow && ((who, input) => allow(who, input, callerReads(who, track))),
+        rules,
+      )
+    ) {
+      throw forbidden(`"${action}" goes beyond what everyone in this conversation may see`);
+    }
+  }
   const callerReads = (actor?: Actor, track?: (read: Op | Dep) => void, view?: string) => {
     // An actor's Views see what they reach, and what the rules read to
     // know it (memberships) is what they read too, kept or not: they follow its changes.
     const rules = actor && track ? ruling(track) : ruleReads;
     // Reads as `who`, within their reach; `hide`: without private fields.
-    const runFor = (who: Actor | undefined, hide: boolean) => async (op: Op) => {
+    const runFor = (who: Actor | undefined, hide: boolean, action?: string) => async (op: Op) => {
+      await checkElevation(who, action, rules, track);
       known(op);
       track?.(op);
       const [read] = (await guard([op as ReadOp], who, rules)).ops;
@@ -960,16 +952,22 @@ export async function createOwner(
     };
     // An unrecorded Action the View calls may act as someone else, as from an Action: the
     // system (or a grant) reads private fields there, as Actions do.
-    const runAs = (who: Actor | undefined) => runFor(who, !!who && who.kind !== "system");
+    const runAs = (who: Actor | undefined, action?: string) =>
+      runFor(who, !!who && who.kind !== "system", action);
     return reading(
       registry,
       runFor(actor, !!actor),
-      (collection, doc) => {
+      (collection, doc, origin) => {
         // What a read used (an embedding's tokens): recorded on its own.
         const _id = typeof doc._id === "string" ? doc._id : crypto.randomUUID();
         const op: StoreOp = { op: "insert", collection, docs: [{ ...doc, _id }] };
         known(op);
-        void writeEach([op], { foreign: true }).catch(() => {});
+        const who = origin?.actor ?? actor;
+        void (async () => {
+          await checkElevation(who, origin?.action, rules, track);
+          const { ops, keep } = await guard([op], who, rules);
+          await writeEach(ops, { actor: who, keep, foreign: true });
+        })().catch(() => {});
         return _id;
       },
       metrics,
@@ -1044,23 +1042,23 @@ export async function createOwner(
     ops: StoreOp[],
     by: By,
     seen?: Seen,
-    later?: Later,
-  ) => (await performEach(tx, ops, by, seen, later)).at(-1);
+    staged?: Transaction,
+  ) => (await performEach(tx, ops, by, seen, staged)).at(-1);
 
-  /** Performs ops in `tx`; writes to in-memory collections wait in `later`, answering nothing. */
+  /** Performs each op against the transaction for its collection. */
   const performEach = async (
     tx: Transaction,
     ops: StoreOp[],
     by: By,
     seen?: Seen,
-    later?: Later,
+    staged?: Transaction,
   ) => {
-    const hooks: Hooks = {
+    const hooksFor = (target: Transaction, fleeting: boolean): Hooks => ({
       validate,
       checkUpdate: (collection, update) => void checkUpdate(collection, update),
-      checkResult: (collection, changes) => checkResult(tx, collection, changes),
+      checkResult: (collection, changes) => checkResult(target, collection, changes),
       offload: (value) =>
-        offload(
+        fleeting ? Promise.resolve(value) : offload(
           value,
           (blob) => options.blobs ? options.blobs.put(blob) : tx.putBlob(blob),
           options.blobThreshold,
@@ -1076,15 +1074,20 @@ export async function createOwner(
         lifecycle(tx, collection, changes, by);
       },
       vectors: vectorFields,
-    };
+    });
+    const hooks = hooksFor(tx, false);
+    const memoryHooks = staged && hooksFor(staged, true);
     const values: unknown[] = [];
     for (const op of ops) {
       if (isRead(op)) {
-        const value = await answer(tx, op);
+        const value = staged && inMemory(op)
+          ? await projecting(op, (readOp) => read(staged, readOp))
+          : await answer(tx, op);
         by.saw?.(op, value);
         values.push(value);
-      } else if (later && inMemory(op)) values.push((later.ops.push(op), undefined));
-      else if (op.op === "emit" && by.actor) {
+      } else if (staged && memoryHooks && inMemory(op)) {
+        values.push(await perform(staged, op, memoryHooks));
+      } else if (op.op === "emit" && by.actor) {
         values.push(await perform(tx, { ...op, event: { ...op.event, actor: by.actor } }, hooks));
       } else values.push(await perform(tx, op, hooks));
     }
@@ -1511,14 +1514,13 @@ export async function createOwner(
       while (!inbox.length) await new Promise<void>((resolve) => wake = resolve);
       return inbox.shift()!;
     };
-    const later: Later = { ops: [] };
     // How long it held the store's writer: from when the store began it to its commit or rollback.
     let began: number | undefined;
     const measured = (outcome: "commit" | "abort" | "idle" | "error") => {
       if (began !== undefined) measure.transactions.record(performance.now() - began, { outcome });
     };
     commit(
-      async (tx, seen) => {
+      async (tx, seen, staged) => {
         began = performance.now();
         for (;;) {
           const { request, reply } = await next();
@@ -1536,7 +1538,7 @@ export async function createOwner(
                 foreign: true,
               },
               seen,
-              later,
+              staged,
             );
           } catch (error) {
             reply.reject(error);
@@ -1553,8 +1555,7 @@ export async function createOwner(
           return;
         }
       },
-      true,
-      later,
+      { withMemory: true },
     ).then(
       () => {
         measured("commit");
@@ -1607,30 +1608,12 @@ export async function createOwner(
       }
       return disconnect(first.actor);
     }
-    // Trusted code going on beyond whom it acted for: as the system, or a grant, on the record.
     if (request.actor?.kind === "system" && request.actor.via) {
       measure.elevated.add(request.ops.length, { grant: request.actor.id });
-      // In an Action's code (its own job, or its caller's when it's unrecorded), for whom its
-      // labels may keep it from going beyond (a contact, say).
-      const action = request.action ?? acting.get(job);
-      const elevate = registry.labels?.elevate;
-      if (elevate && action) {
-        // Whoever went beyond themselves: the code's own actor, whatever job it runs in.
-        const by = request.actor.via as Actor;
-        const allow = registry.actions[action]?.allow;
-        if (
-          !await elevate(
-            by,
-            allow && ((who, input) => allow(who, input, callerReads(who))),
-            ruleReads,
-          )
-        ) {
-          throw forbidden(`"${action}" goes beyond what everyone in this conversation may see`);
-        }
-      }
     }
     let ops: StoreOp[], keep: Map<string, Filter>;
     try {
+      await checkElevation(request.actor, request.action ?? acting.get(job));
       const lowered = request.ops.map((op) => timers.lower(op, request.actor));
       lowered.forEach(known);
       const guarded = await guard(lowered, request.actor);
@@ -2169,7 +2152,7 @@ export async function createOwner(
             data: { action, error: failure(error), ms, attempt },
             cause: id,
           }),
-        ], { cause: id, ...(actor ? { actor } : {}) }), false).catch(() => {});
+        ], { cause: id, ...(actor ? { actor } : {}) }), { cursors: false }).catch(() => {});
       throw error;
     }
   };
@@ -2275,7 +2258,7 @@ export async function createOwner(
                 error: failure(error),
               },
             cause: event.id,
-          })), false).catch(() => {});
+          })), { cursors: false }).catch(() => {});
         if (last) return true;
         await new Promise((resolve) => {
           const timer = setTimeout(resolve, 200 * attempt);

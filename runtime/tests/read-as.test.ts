@@ -3,7 +3,8 @@
  * read calls it too, read-only, as when an Action calls it. It used to be left
  * as the reader, quietly reading less than it asked for.
  */
-import { assertEquals } from "@std/assert";
+import { READ_VIEW } from "../browsers.ts";
+import { assertEquals, assertRejects } from "@std/assert";
 import {
   type Actor,
   createRuntime,
@@ -11,6 +12,7 @@ import {
   defineCollection,
   definePlugin,
   grant,
+  people,
   type Runtime,
   type Store,
 } from "../mod.ts";
@@ -71,6 +73,68 @@ for (const [kind, make] of Object.entries(stores)) {
       assertEquals(await rt.call("secret.count", {}, { actor: ana }), 3);
       // From her query, the same.
       assertEquals(await rt.query("secret.counted", {}, { actor: ana }), 3);
+    } finally {
+      await rt.close();
+    }
+  });
+}
+
+for (const [kind, make] of Object.entries(stores)) {
+  test(`${kind}: every granted query read consults the callee's elevation policy`, async () => {
+    const calls: string[] = [];
+    let entered = 0;
+    const rt = await createRuntime({
+      store: await make(),
+      plugins: [{
+        ...probe,
+        labels: {
+          read: () => [],
+          write: (_who, _collection, doc) => doc,
+          elevate: async (who, allow) => {
+            calls.push(who.id);
+            return !allow || await allow({ kind: "contact", id: "reader" }, {});
+          },
+        },
+        actions: {
+          report: defineAction({
+            allow: () => true,
+            run: (ctx) => ctx.db.collection("secret").query("counted"),
+          }),
+          preview: defineAction({
+            allow: () => true,
+            transaction: true,
+            run: (ctx) => ctx.db.collection("secret").query("counted"),
+          }),
+          "secret.count": defineAction({
+            as: "count",
+            allow: people,
+            record: false,
+            run: (ctx) => {
+              entered++;
+              return ctx.db.collection("secret").countDocuments({});
+            },
+          }),
+        },
+      }],
+    });
+    try {
+      const actor = { kind: "agent", id: "staff", for: ana };
+      for (const action of ["secret.count", "report", "preview"]) {
+        await assertRejects(() => rt.call(action, {}, { actor }), Error, "secret.count");
+      }
+      await assertRejects(() => rt.query("secret.counted", {}, { actor }), Error, "secret.count");
+      const watching = rt.observe(READ_VIEW, { collection: "secret", query: "counted" }, { actor });
+      try {
+        const value = await watching.ready;
+        assertEquals(value.status, "failed");
+        if (value.status === "failed") {
+          assertEquals((value.error as { code: string }).code, "forbidden");
+        }
+      } finally {
+        watching.close();
+      }
+      assertEquals(calls, ["staff", "staff", "staff", "staff", "staff"]);
+      assertEquals(entered, 0);
     } finally {
       await rt.close();
     }

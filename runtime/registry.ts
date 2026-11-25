@@ -26,7 +26,7 @@ import type {
 } from "./define.ts";
 import type { ScheduleDef } from "./schedules.ts";
 import type { Actor } from "./store.ts";
-import { allows, grant } from "./actor.ts";
+import { acting, allows, grant } from "./actor.ts";
 
 /** Everything crossing the runtime boundary is JSON: undefined fields disappear. */
 export const json = <T>(value: T): T =>
@@ -453,6 +453,25 @@ export function described(registry: Registry): Description {
 /** Each unrecorded Action's input check, made once. */
 const inputChecks = new WeakMap<ActionDef, (value: unknown) => void>();
 
+/** A declared grant is checked before plugin code can pass it on to another Action or read. */
+export function runAction<R>(
+  registry: Registry,
+  name: string,
+  ctx: Context,
+  input: unknown,
+  check?: (who: Actor, name: string) => Promise<unknown>,
+): R | Promise<R> {
+  const def = registry.actions[name];
+  if (def.as) {
+    ctx = ctx.as(grant(def.as));
+    if (ctx.actor?.via && registry.labels?.elevate) {
+      if (!check) throw invalid(`This context cannot check the grant for "${name}"`);
+      return check(ctx.actor, name).then(() => def.run(ctx, input) as R);
+    }
+  }
+  return def.run(ctx, input) as R;
+}
+
 /**
  * Calls an unrecorded Action from a read (a query, a View, a startup
  * check): inline, with a read-only context made from what the read reaches.
@@ -464,7 +483,8 @@ export async function readCall<R>(
   call: ReadContext["call"],
   name: string,
   input: unknown = {},
-  actingAs?: (other?: Actor) => ReadContext,
+  actingAs?: (who?: Actor, action?: string) => ReadContext,
+  checkGrant?: (who: Actor, action: string) => Promise<unknown>,
 ): Promise<R> {
   const def = registry.actions[name];
   if (!def) throw unknown("action", name, Object.keys(registry.actions));
@@ -530,15 +550,16 @@ export async function readCall<R>(
             `${other ? `${other.kind} ${other.id}` : "the system"} there. Call it from an Action`,
         );
       }
-      const them = actingAs(other);
+      const them = actingAs(acting(self, other), name);
       return contextOf(them, them.call);
     };
     const whole = { ...ctx, as, branch: () => whole } as Context;
     return whole;
   };
   if (def.transaction) throw invalid(`"${name}" needs a transaction: a read can't start one`);
-  const ctx = contextOf(reads, call);
-  return await def.run(def.as ? ctx.as(grant(def.as)) : ctx, normalized) as R;
+  const callee = actingAs?.(actor, name);
+  const ctx = contextOf(callee ?? reads, callee?.call ?? call);
+  return await runAction<R>(registry, name, ctx, normalized, checkGrant);
 }
 
 /**

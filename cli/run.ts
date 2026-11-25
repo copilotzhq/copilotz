@@ -12,7 +12,7 @@ export function regenerate(root: string, cli: string): void {
       "-A",
       ...(existsSync(join(root, "node_modules/copilotz")) ? ["--node-modules-dir=manual"] : []),
       cli.replace(
-        /^https:\/\/jsr\.io\/(@copilotz\/copilotz)\/([^/]+)\/cli\/mod\.ts$/,
+        /^https:\/\/jsr\.io\/(@copilotz\/copilotz)\/([^/]+)\/cli\/(?:mod|bin)\.ts$/,
         "jsr:$1@$2/gen",
       ),
     ]

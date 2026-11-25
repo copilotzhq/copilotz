@@ -158,6 +158,11 @@ export const email: Plugin = definePlugin({
       }
     }
     const origin = publicOrigin(merged.resources);
+    if (settings.adapter === "capture" && origin && settings.capture?.allowPublicOrigin !== true) {
+      throw new Error(
+        `the capture email adapter keeps messages locally, but the app's links origin (${origin}) is public. Use a delivery adapter, or set email.capture.allowPublicOrigin for a test`,
+      );
+    }
     if (settings.adapter === "console" && origin) {
       throw new Error(
         `the console email adapter writes codes to the log, for a laptop, but the app's links ` +

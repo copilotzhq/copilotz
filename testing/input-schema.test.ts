@@ -306,12 +306,83 @@ test({
     const dir = tempDir();
     writeFileSync(
       join(dir, "deno.jsonc"),
-      JSON.stringify({ imports: { typescript: `npm:typescript@${ts.version}` }, lock: false }),
+      JSON.stringify({
+        imports: {
+          typescript: `npm:typescript@${ts.version}`,
+          schemaTypes: "npm:@cfworker/json-schema@4.1.1",
+        },
+        lock: false,
+      }),
     );
     const file = join(dir, "order.ts");
-    writeFileSync(file, "export default {run(_ctx: unknown, name: string) {}}");
+    writeFileSync(
+      file,
+      'import type {SchemaDraft} from "schemaTypes"; export default {run(_ctx: unknown, draft: SchemaDraft) {}}',
+    );
     assert.deepEqual(generated(await inputSchemas([file]), file), {
-      type: "string",
+      enum: ["2019-09", "2020-12", "4", "7"],
     });
   },
+});
+
+test("an embedded Infer keeps local references rooted at its own schema", async () => {
+  const file = join(tempDir(), "mail.ts");
+  const define = fileURLToPath(new URL("../runtime/define.ts", import.meta.url)).replaceAll(
+    "\\",
+    "/",
+  );
+  writeFileSync(
+    file,
+    `import type { Infer } from ${JSON.stringify(define)};
+    const schema = {
+      type: "object",
+      properties: { text: { $ref: "#/$defs/text" } },
+      required: ["text"],
+      $defs: { text: { type: "string", minLength: 2 } },
+    } as const;
+    type Body = Infer<typeof schema>;
+    export default { run(_: unknown, input: { body: Body; copies: Body[] }) {} }`,
+  );
+  const schema = generated(await inputSchemas([file], { ts }), file);
+  const check = validator(schema, "mail");
+  check({ body: { text: "ok" }, copies: [{ text: "also ok" }] });
+  assert.throws(() => check({ body: { text: "x" }, copies: [] }), { code: "invalid" });
+  assert.throws(() => check({ body: { text: "ok" }, copies: [{ text: "x" }] }), {
+    code: "invalid",
+  });
+});
+
+test("Deno import-map aliases resolve relative to the map and name missing imports at their site", async () => {
+  const dir = tempDir();
+  writeFileSync(join(dir, "deno.jsonc"), '{ /* app */ "importMap": "./imports.json" }');
+  writeFileSync(
+    join(dir, "imports.json"),
+    JSON.stringify({ imports: { "app/": "./", "contract": "./customer.ts" } }),
+  );
+  writeFileSync(join(dir, "customer.ts"), "export type Customer = {name:string}");
+  const file = join(dir, "order.ts");
+  for (const specifier of ["contract", "app/customer.ts", "app/missing.ts"]) {
+    writeFileSync(
+      file,
+      `import type { Customer } from "${specifier}";\nexport default {run(_: unknown, input: Customer) {}}`,
+    );
+    const result = await inputSchemas([file], { ts });
+    if (specifier.includes("missing")) {
+      assert.match(result.get(file)?.error ?? "", /order\.ts:1:\d+.*app\/missing\.ts/);
+    } else {
+      assert.deepEqual(generated(result, file).properties, { name: { type: "string" } });
+    }
+  }
+  writeFileSync(
+    join(dir, "customer.ts"),
+    'import type { Name } from "app/missing.ts"; export type Customer = {name: Name};',
+  );
+  writeFileSync(
+    file,
+    'import type { Customer } from "contract"; export default {run(_: unknown, input: Customer) {}}',
+  );
+  assert.match(
+    (await inputSchemas([file], { ts })).get(file)?.error ?? "",
+    /customer\.ts:1:\d+.*app\/missing\.ts/,
+  );
 });

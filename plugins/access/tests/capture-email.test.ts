@@ -1,4 +1,4 @@
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createRuntime } from "../../../runtime/mod.ts";
@@ -74,4 +74,20 @@ test("the email resource alone can select capture and its directory", async () =
   } finally {
     await runtime.close();
   }
+});
+
+test("capture on a public origin needs an explicit test opt-in", async () => {
+  const start = (allowPublicOrigin?: boolean) =>
+    createRuntime({
+      store: memoryStore(),
+      plugins: [email, {
+        name: "test-mail",
+        resources: {
+          links: { origin: "https://mail.example.com" },
+          email: { adapter: "capture", capture: { allowPublicOrigin } },
+        },
+      }],
+    });
+  await assertRejects(async () => (await start()).close(), Error, "capture");
+  await (await start(true)).close();
 });

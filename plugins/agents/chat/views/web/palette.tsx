@@ -15,6 +15,7 @@ import { go, type PaletteGroup } from "../../../../../hosts/web/mod.ts";
 import type { Thread } from "../../collections/thread.ts";
 import { type Listed, threadTitle, titleOf } from "./listed.ts";
 import { moveStep } from "./move.tsx";
+import { renameStep } from "./rename.tsx";
 import { plain } from "./plain.ts";
 import { say } from "./words.ts";
 
@@ -47,6 +48,12 @@ export const chatPaletteView = (_: unknown, ctx: ViewContext<ReactNode>): Palett
       title: say("thisChatGroup"),
       order: 10,
       items: [{
+        key: "chat:rename-this",
+        label: say("renameThisChat"),
+        icon: "pencil",
+        keywords: [say("keywordTitle")],
+        step: renameStep({ thread: open, title, call: ctx.call }),
+      }, {
         key: "chat:move",
         label: say("moveThisChat"),
         icon: "move",

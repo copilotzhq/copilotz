@@ -392,14 +392,6 @@ export type CollectionDef = {
    */
   durable?: false;
   /**
-   * How updates keep to the schema, as MongoDB's `validationLevel`: `"strict"`
-   * (the default) checks every update; `"moderate"` checks only updates to
-   * documents that were valid before, for a collection whose older documents
-   * predate its schema (they're left as they are until fixed). Inserts and
-   * replaces are always checked.
-   */
-  validation?: "strict" | "moderate";
-  /**
    * Indexes, each a list of fields (`[["at"], ["tags.tenant", "at"]]`), for
    * the stores to serve filters on them without reading every document. A
    * field must be a scalar its schema types (string, number, integer or
@@ -755,7 +747,6 @@ export const defineCollection = <const S extends JSONSchema>(
     events?: boolean;
     records?: boolean;
     durable?: false;
-    validation?: "strict" | "moderate";
     indexes?: string[][];
     private?: string[];
     queries?: Record<string, QueryDef<Infer<S> & { _id: string }>>;

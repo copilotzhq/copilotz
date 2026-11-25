@@ -247,14 +247,12 @@ each("$push takes $each, and refuses the modifiers it doesn't support", async (r
   assertEquals((await stored(rt))?.tags, ["x", "y", "y"]);
 });
 
-// Older documents that predate their schema. Strict still lets them be updated, refusing only
-// what an update adds to what was wrong (every store can tell that alike); moderate lets updates
-// to them be, as MongoDB's validationLevel does. Both keep valid documents valid.
+// Older documents that predate their schema may still be updated: what an update adds to what was
+// wrong is refused (every store can tell that alike), and valid documents stay valid.
 const legacy = definePlugin({
   name: "legacy",
   collections: {
-    old: defineCollection({ schema: customer.schema, validation: "moderate" }),
-    strict: defineCollection({ schema: customer.schema }),
+    old: defineCollection({ schema: customer.schema }),
   },
   actions: {
     "old.update": defineAction({
@@ -272,13 +270,11 @@ const legacy = definePlugin({
 });
 
 for (const [kind, make] of Object.entries(stores)) {
-  test(`${kind}: a document older than its schema: strict refuses new problems, moderate none`, async () => {
+  test(`${kind}: a document older than its schema: updated, refusing only new problems`, async () => {
     const store = await make();
     const { epoch } = await store.open();
     await store.transaction(epoch, async (tx) => {
-      for (const collection of ["old", "strict"]) {
-        await tx.insert(collection, [{ _id: "was", price: 3 }, { _id: "ok", name: "A", price: 1 }]);
-      }
+      await tx.insert("old", [{ _id: "was", price: 3 }, { _id: "ok", name: "A", price: 1 }]);
     });
     const rt = await createRuntime({ store, plugins: [legacy] });
     try {
@@ -286,25 +282,18 @@ for (const [kind, make] of Object.entries(stores)) {
         rt.call("old.update", { collection, id, update });
       const price = async (collection: string, id: string) =>
         (await store.find(collection, { _id: id }))[0]?.price;
-      // A document that wasn't valid (no name): both update it with what fits.
-      for (const collection of ["old", "strict"]) {
-        await update(collection, "was", { $set: { price: 4 } });
-        assertEquals(await price(collection, "was"), 4);
-      }
-      // A new problem: strict refuses it, whether it's told before or after the store's work;
-      // moderate lets it be.
-      await refused(() => update("strict", "was", { $set: { price: -1 } }), "price");
-      await refused(() => update("strict", "was", { $inc: { price: -100 } }), "price");
-      assertEquals(await price("strict", "was"), 4);
-      await update("old", "was", { $inc: { price: -100 } });
-      assertEquals(await price("old", "was"), -96);
-      // A valid one keeps to the schema on both.
-      for (const collection of ["old", "strict"]) {
-        await refused(() => update(collection, "ok", { $set: { price: "x" } }), "price");
-        await refused(() => update(collection, "ok", { $unset: { name: "" } }), "name");
-        await update(collection, "ok", { $set: { price: 2 } });
-        assertEquals(await price(collection, "ok"), 2);
-      }
+      // A document that wasn't valid (no name) is updated with what fits.
+      await update("old", "was", { $set: { price: 4 } });
+      assertEquals(await price("old", "was"), 4);
+      // A new problem is refused, whether it's told before or after the store's work.
+      await refused(() => update("old", "was", { $set: { price: -1 } }), "price");
+      await refused(() => update("old", "was", { $inc: { price: -100 } }), "price");
+      assertEquals(await price("old", "was"), 4);
+      // A valid one keeps to the schema.
+      await refused(() => update("old", "ok", { $set: { price: "x" } }), "price");
+      await refused(() => update("old", "ok", { $unset: { name: "" } }), "name");
+      await update("old", "ok", { $set: { price: 2 } });
+      assertEquals(await price("old", "ok"), 2);
     } finally {
       await rt.close();
     }

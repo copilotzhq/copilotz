@@ -1,3 +1,21 @@
+## Unreleased
+
+**New:**
+
+- **Renaming a chat** (`chat.rename`): "Rename…" in its header's menu, a chat list's row and the
+  command palette, its title ready to type over. A person who may write in its space renames it, for
+  everyone there; its staff notes take the title too, and an agent that might have named it (a
+  routine's run) no longer does.
+- **The models catalog, refreshed from models.dev:** GPT-6.2 Astra and GPT-6.2 Sol, with their
+  prices, among others; models.dev's retired ones are gone (none Copilotz names).
+
+**Breaking:**
+
+- **`validation: "moderate"` is gone** (added in rc.62). Strict already lets a document older than
+  its schema be updated with what adds nothing wrong to it; what moderate let through besides was an
+  update writing what the schema refuses. Fix such documents with a migration. TypeScript refuses
+  the option; in JavaScript it's ignored, and the collection's updates are checked.
+
 ## 1.0.0-rc.62 — 2026-11-24
 
 Apps are written as Copilotz's own plugins are: updates keep to the schema on every store, as

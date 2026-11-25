@@ -55,7 +55,7 @@ Its named queries read for callers, as the rules let them:
 
 ## What it lets callers do
 
-Of its 17 Actions, people may call 10; agents may call 4; contacts may call 2; someone signed out
+Of its 18 Actions, people may call 11; agents may call 4; contacts may call 2; someone signed out
 may call none.
 
 | Action             | Person | Agent | Contact | Anyone | Key | Routine | Maintenance | What it does                                                                           |
@@ -67,6 +67,7 @@ may call none.
 | `chat.move`        | yes    | no    | no      | no     | no  | no      | no          | Moves a conversation, with everything in it, to another space.                         |
 | `chat.notes`       | yes    | yes   | no      | no     | yes | yes     | no          | The notes beside a chat shared outside its space, made the first time.                 |
 | `chat.open`        | yes    | yes   | no      | no     | yes | yes     | no          | Opens an empty chat in a space.                                                        |
+| `chat.rename`      | yes    | no    | no      | no     | no  | no      | no          | Renames a conversation.                                                                |
 | `chat.send`        | yes    | no    | yes     | no     | yes | yes     | no          |                                                                                        |
 | `chat.stop`        | yes    | yes   | no      | no     | yes | yes     | no          | Stops agents' turns in a conversation (and its subthreads).                            |
 | `chat.unmark`      | no     | no    | no      | no     | no  | no      | yes         | Takes the old marks off messages: each goes where only those who could read it see it. |

@@ -144,8 +144,6 @@ export type CollectionDeclaration = {
   shared: boolean;
   /** Fields holding vectors (embeddings). */
   vectors: string[];
-  /** `moderate`: updates are checked only on documents that were valid (`validation`). */
-  validation?: "moderate";
   indexes: string[][];
   queries: QueryDeclaration[];
 };
@@ -603,7 +601,6 @@ function keepsOf(plugin: Plugin, shared: Set<string>) {
         ...(typeof q === "object" && q.input ? { input: json(q.input) as JSONSchema } : {}),
         ...(typeof q === "function" ? { internal: true as const } : accessOf(q.allow, {})),
       })).sort(byName),
-      ...(def.validation === "moderate" ? { validation: "moderate" as const } : {}),
     });
   }
   return { keeps: keeps.sort(byName), indexes: indexes.sort(by((i) => i.collection)) };

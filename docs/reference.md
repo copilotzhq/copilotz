@@ -297,17 +297,16 @@ replaces). A later View, adapter or route replaces an earlier one of its name. E
 Documents with a JSON Schema, read and written with MongoDB's collection API. `defineCollection`
 types its documents and queries from the schema.
 
-| Field        | What it does                                                                                |
-| ------------ | ------------------------------------------------------------------------------------------- |
-| `schema`     | the JSON Schema every write keeps to: inserts, replaces, and what updates set and leave     |
-| `queries`    | named reads: a function, or `{ allow, description?, input?, run }` for actors from outside  |
-| `vectors`    | fields holding embeddings, kept as the store's vectors and searched with `nearest`          |
-| `indexes`    | lists of scalar fields to find by (`[["thread", "at"]]`), made as the store opens           |
-| `private`    | fields only trusted code reads: an actor's queries and Views get the documents without them |
-| `records`    | `true`: a ledger, appended to and never changed, whose documents are their own record       |
-| `durable`    | `false`: kept in the owner's memory, never in the store, with no events                     |
-| `events`     | `false`: its writes record no events                                                        |
-| `validation` | `"moderate"`: updates are checked only on documents that were valid (see Updates)           |
+| Field     | What it does                                                                                |
+| --------- | ------------------------------------------------------------------------------------------- |
+| `schema`  | the JSON Schema every write keeps to: inserts, replaces, and what updates set and leave     |
+| `queries` | named reads: a function, or `{ allow, description?, input?, run }` for actors from outside  |
+| `vectors` | fields holding embeddings, kept as the store's vectors and searched with `nearest`          |
+| `indexes` | lists of scalar fields to find by (`[["thread", "at"]]`), made as the store opens           |
+| `private` | fields only trusted code reads: an actor's queries and Views get the documents without them |
+| `records` | `true`: a ledger, appended to and never changed, whose documents are their own record       |
+| `durable` | `false`: kept in the owner's memory, never in the store, with no events                     |
+| `events`  | `false`: its writes record no events                                                        |
 
 `ctx.db.collection(name)` has `insertOne`, `insertMany`, `find` (a cursor), `findOne`,
 `countDocuments`, `updateOne`, `updateMany`, `replaceOne`, `deleteOne`, `deleteMany`, `aggregate`,
@@ -331,8 +330,8 @@ types its documents and queries from the schema.
     before its schema said what it says now) may still be updated, as long as the update adds
     nothing wrong to it; MongoDB would refuse until the update made it valid. Every store can tell
     that alike, PostgreSQL's single-statement updates included, which never see the document.
-    `validation: "moderate"` on the collection lets any update to such a document be, as MongoDB's
-    `"moderate"` does.
+    There's no `"moderate"` level: fix such documents (a migration) rather than leave updates
+    unchecked.
   - **A schema failure names its field:** `detail.field`, a dot path (`price`, `meta.a`, or the
     required field that's missing). A write from outside (REST, the socket, a View's handler) says
     it to its caller, as a public failure, so a form shows it by its field; plugin code's is its own

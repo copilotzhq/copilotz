@@ -17,7 +17,6 @@ const notes = definePlugin({
   collections: {
     note: defineCollection({
       schema: { type: "object", properties: { text: { type: "string" } } },
-      validation: "moderate",
       queries: {
         latest: {
           allow: people,
@@ -57,10 +56,9 @@ test("a query's input holds callers from outside to it; its words and schema are
   }
 });
 
-test("describe() lists a query's words and input, and a collection's validation", async () => {
+test("describe() lists a query's words and input", async () => {
   const declared = await describe(notes);
   const note = declared.keeps.find((c) => c.name === "note")!;
-  assertEquals(note.validation, "moderate");
   const latest = note.queries.find((q) => q.name === "latest")!;
   assertEquals(latest.summary, "The latest notes, newest first");
   assertEquals((latest.input as { required: string[] }).required, ["limit"]);

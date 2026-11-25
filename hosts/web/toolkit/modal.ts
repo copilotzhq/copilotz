@@ -7,9 +7,11 @@
  * Escape, a press on the backdrop or `close()` all end in `onClose`. With
  * `keep` (something it started is under way), Escape and the backdrop wait:
  * its `cancel` event is refused and a press on the backdrop does nothing.
- * With `isolated`, it answers only its own `close` and `cancel` events: React
- * passes them up through its components, so without it a dialog shown inside
- * another (a confirmation over a form) closing would close the outer one too.
+ * With `isolated`, its `close` and `cancel` are its own: it answers only
+ * those its own element fires, and they go no further. React passes them up
+ * through the components, so without it a dialog closing reaches every dialog
+ * it's shown inside (a confirmation over a form, a sheet's question), and a
+ * dialog shown inside it closing closes it too.
  */
 import { type PointerEvent, type SyntheticEvent, useEffect, useRef } from "react";
 
@@ -45,14 +47,21 @@ export function useModal(
     events: {
       onClose: isolated
         ? (event: SyntheticEvent<HTMLDialogElement>) => {
-          if (event.target === event.currentTarget) onClose();
+          // Another dialog's (shown inside it) isn't its; its own goes no further.
+          if (event.target !== event.currentTarget) return;
+          event.stopPropagation();
+          onClose();
         }
         : () => onClose(),
       // Escape, or the browser's own light dismiss: refused while it's kept open.
-      ...(keep
+      ...(keep || isolated
         ? {
           onCancel: (event: SyntheticEvent<HTMLDialogElement>) => {
-            if (!isolated || event.target === event.currentTarget) event.preventDefault();
+            if (isolated) {
+              if (event.target !== event.currentTarget) return;
+              event.stopPropagation();
+            }
+            if (keep) event.preventDefault();
           },
         }
         : {}),

@@ -11,8 +11,9 @@
  * started is under way), Escape, the backdrop and its close button wait, and
  * it says so (`aria-busy`). `role="alertdialog"` for one that interrupts to
  * ask (`ConfirmDialog`), and `aria-describedby` for what describes it when
- * that isn't its `description`. `isolated`: it closes only when it's closed
- * itself, not when a dialog shown inside it (a confirmation over a form) is.
+ * that isn't its `description`. `isolated`: its close and Escape are its
+ * own: a dialog shown inside it (a confirmation over a form) closing doesn't
+ * close it, and its own closing doesn't reach a dialog it's shown inside.
  *
  * Its look is the theme's: `dialog-width` (and `-sm`, `-lg`), `dialog-radius`,
  * `dialog-head-*` (background, foreground, padding, border), `dialog-title-*`,
@@ -106,8 +107,9 @@ export function Dialog(
      */
     busy?: boolean;
     /**
-     * It answers only its own close and Escape: a dialog shown inside it (a confirmation over a
-     * form) closing doesn't close it too, as React passes those events up through components.
+     * Its close and Escape are its own: a dialog shown inside it (a confirmation over a form)
+     * closing doesn't close it, and its own closing doesn't reach a dialog it's shown inside (React
+     * passes those events up through the components).
      */
     isolated?: boolean;
     /** `alertdialog` for one that interrupts to ask before going on (see `ConfirmDialog`). */

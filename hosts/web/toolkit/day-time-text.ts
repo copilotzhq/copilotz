@@ -17,6 +17,7 @@ import {
   dayTimeOf,
   formatPattern,
   isDay,
+  isDayTime,
   partsOf,
   weekdayOf,
 } from "./dates.ts";
@@ -606,4 +607,16 @@ export function rangeSecondsPattern(
     : `${format.slice(0, mm.index + 2)}:ss${format.slice(mm.index + 2)}`;
   const problem = patternProblem(pattern, locale);
   return problem ? { pattern: own, setAside: problem } : { pattern };
+}
+/** An end as the toolkit keeps one, typed or pasted: `2026-11-02 14:30:05`, or with a `T`. */
+const KEPT = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)$/;
+
+/** An end read from typed text: by the pattern, or as the toolkit keeps one; always with seconds. */
+export function readEnd(text: string, pattern: string, locale: string): DayTime | undefined {
+  const read = parseDayTime(text, pattern, locale);
+  if (read) return read;
+  const kept = KEPT.exec(text.replace(/\p{Cf}/gu, "").trim());
+  const value = kept && `${kept[1]} ${kept[2]}`;
+  if (!value || !isDayTime(value)) return undefined;
+  return value.length === 16 ? `${value}:00` : value;
 }

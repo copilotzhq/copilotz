@@ -6,8 +6,8 @@
  */
 import { type ReactNode, useEffect, useId, useState } from "react";
 import { lang } from "../words.ts";
-import { type DayTime, formatPattern, isDayTime } from "./dates.ts";
-import { parseDayTime, rangeSecondsPattern } from "./day-time-text.ts";
+import { type DayTime, formatPattern } from "./dates.ts";
+import { rangeSecondsPattern, readEnd } from "./day-time-text.ts";
 import { Input } from "./input.tsx";
 import { sheet } from "./sheet.tsx";
 
@@ -37,19 +37,6 @@ export function secondsPatternOf(format: unknown): string {
     );
   }
   return pattern;
-}
-
-/** An end as the toolkit keeps one, typed or pasted: `2026-11-02 14:30:05`, or with a `T`. */
-const KEPT = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)$/;
-
-/** An end read from typed text: by the pattern, or as the toolkit keeps one; always with seconds. */
-export function readEnd(text: string, pattern: string, locale: string): DayTime | undefined {
-  const read = parseDayTime(text, pattern, locale);
-  if (read) return read;
-  const kept = KEPT.exec(text.replace(/\p{Cf}/gu, "").trim());
-  const value = kept && `${kept[1]} ${kept[2]}`;
-  if (!value || !isDayTime(value)) return undefined;
-  return value.length === 16 ? `${value}:00` : value;
 }
 
 /**

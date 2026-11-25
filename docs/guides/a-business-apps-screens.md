@@ -1,6 +1,6 @@
 ---
 title: "A business app's screens"
-description: "The screens back-office apps are made of, the Copilotz way: one View per file, the app's own shared components in lib/, Views that read and handlers that save, an app's own frame and home, lists with search, filters, paging and exports, forms in dialogs, dates, sign-in, printed documents, shortcuts and files, all from the toolkit with no CSS."
+description: "The screens back-office apps are made of, the Copilotz way: one View per file, the app's own shared components in lib/, Views that read and handlers that save, an app's own frame and home, lists with search, filters, paging and exports, deletes that ask first, records in dialogs, dates, sign-in, printed documents, shortcuts and files, all from the toolkit with no CSS."
 section: Guides
 order: 9
 ---
@@ -58,7 +58,7 @@ plugins/customers/
   collections/customer.ts             defineCollection<Customer> with its named queries
   views/web/screen/customers.tsx       screen:customers
   views/web/dialog/customer.tsx        dialog:customer
-  lib/web/customer-form.tsx          a component used by the dialog
+  lib/web/delete-customer.tsx         a row's Delete, which asks first
 ```
 
 Type an Action's input on `run`. Use a document type in `defineCollection<T>` and put named queries
@@ -474,8 +474,10 @@ import type { Column, Where } from "copilotz/web";
 import type { ReactNode } from "react";
 import { formatsOf } from "../../../look/contract.ts";
 import type { Customer, CustomerPage } from "../../contract.ts";
+import { DeleteCustomer } from "../../lib/web/delete-customer.tsx";
 
-const columns: Column<Customer>[] = [
+/** The list's columns; the last two hold a row's Edit and Delete. */
+const columns = (remove: (c: Customer) => Promise<unknown>): Column<Customer>[] => [
   { key: "name", title: "Name" },
   { key: "phone", title: "Phone", nowrap: true },
   { key: "email", title: "Email" },
@@ -487,6 +489,12 @@ const columns: Column<Customer>[] = [
     render: (c) => (
       <IconButton icon="pencil" label={`Edit ${c.name}`} size="sm" href={`/customers/${c._id}`} />
     ),
+  },
+  {
+    key: "delete",
+    title: "",
+    label: "Delete",
+    render: (c) => <DeleteCustomer customer={c} remove={() => remove(c)} />,
   },
 ];
 
@@ -502,6 +510,9 @@ export const customersScreen = (where: Where, ctx: ViewContext<ReactNode>): Reac
     archived: archived === "yes",
   });
   const { day, timeZone } = formatsOf(ctx.resources);
+  // A plain delete, as whoever's at the screen; the row asks first.
+  const customers = ctx.db.collection<Customer>("customer");
+  const remove = (c: Customer) => customers.deleteOne({ _id: c._id });
   // A filter is in the address too, from the first page: Back takes it off again.
   const filter = (extra: Record<string, string | undefined>) =>
     go(`/customers${tableQuery(where, { ...table.state, offset: 0 }, extra)}`);
@@ -534,7 +545,7 @@ export const customersScreen = (where: Where, ctx: ViewContext<ReactNode>): Reac
         <DataTable
           {...table}
           label="Customers"
-          columns={columns}
+          columns={columns(remove)}
           rows={found.value?.rows ?? []}
           total={found.value?.total ?? 0}
           loading={found.status === "loading"}
@@ -559,6 +570,45 @@ export const customersScreen = (where: Where, ctx: ViewContext<ReactNode>): Reac
 - **A column titled `""`** holds links or buttons: it isn't sorted, searched or exported, and its
   `label` names it for screen readers. `text` is what search, sorting and files use when a cell is
   formatted.
+- **Delete asks first.** A row's Delete is a component of the plugin's `lib/web/` (a View holds no
+  hooks), and `useConfirm` asks in it: the dialog stays busy while the delete runs, says why if it's
+  refused, and closes once it's done. When the row goes with the record, the question goes with it,
+  and the toast still says it's deleted.
+  [Confirming an action](the-web-toolkit.md#confirming-an-action).
+
+```tsx
+// plugins/customers/lib/web/delete-customer.tsx
+import { IconButton, useConfirm } from "copilotz/web";
+import type { ReactNode } from "react";
+import type { Customer } from "../../contract.ts";
+
+/** A customer's Delete, in their row: asks, then deletes. */
+export function DeleteCustomer({ customer, remove }: {
+  customer: Customer;
+  remove(): Promise<unknown>;
+}): ReactNode {
+  const [dialog, confirm] = useConfirm();
+  return (
+    <>
+      <IconButton
+        icon="trash"
+        label={`Delete ${customer.name}`}
+        size="sm"
+        onClick={() =>
+          confirm({
+            title: `Delete ${customer.name}?`,
+            message: "Their visits stay, under their name. This can't be undone.",
+            danger: true,
+            toast: "Customer deleted.",
+            onConfirm: remove,
+          })}
+      />
+      {dialog}
+    </>
+  );
+}
+```
+
 - **Exports:** the menu saves the visible columns of the rows shown, as `<exportName>.csv`, `.xlsx`
   or `.pdf` (`exports` picks the formats). In server mode that's the page. To export every matching
   row, either give the table every row (the visits list under Dates: `exportAll`), or add an Action
@@ -572,17 +622,27 @@ export const customersScreen = (where: Where, ctx: ViewContext<ReactNode>): Reac
 
 A record opens in a dialog over its list, at an address of the list's (`/customers/new`,
 `/customers/<id>`): Back closes it, a link opens it, and closing goes back to the list as it was.
-The dialog's View reads the record. The form is a React component, so it can keep what's typed: a
-View is a function the runtime runs again, and holds no state or hooks.
+The dialog's View reads the record and returns a `RecordDialog`. The dialog keeps what's typed
+itself, so the View needs no component of its own: a View is a function the runtime runs again, and
+holds no state or hooks.
 
 ```tsx
 // plugins/customers/views/web/customer-dialog.tsx
 import type { ViewContext } from "copilotz";
-import { Dialog, go, todayIn } from "copilotz/web";
+import { DatePicker, Dialog, Field, go, Input, RecordDialog, todayIn } from "copilotz/web";
 import type { ReactNode } from "react";
 import { formatsOf } from "../../../look/contract.ts";
 import type { Customer } from "../../contract.ts";
-import { CustomerForm } from "../../lib/web/customer-form.tsx";
+
+/**
+ * What the form says of a field the schema refuses: the schema names the field, in words for
+ * developers; these are the words for people.
+ */
+const SAYS = {
+  name: "Give the customer's name.",
+  email: "That email address isn't complete.",
+  since: "Give the day they first came.",
+};
 
 /** `dialog:customer`: a customer's form over the list (`_id` "new" for a new one). */
 export const customerDialog = (
@@ -596,140 +656,81 @@ export const customerDialog = (
   if (found?.status === "loading") return null;
   const close = () => go(item.back);
   if (found && !found.value) return <Dialog open onClose={close} title="No such customer" />;
+  const customer = found?.value ?? undefined;
   const { timeZone, day } = formatsOf(ctx.resources);
+  const today = todayIn(timeZone);
+  const customers = ctx.db.collection<Customer>("customer");
+  // A View inside this one, shown in this View's body: its own reads, live on its own.
+  const visits = customer ? ctx.show("panel:customer_visits", { _id: customer._id }) : null;
   return (
-    <CustomerForm
-      customer={found?.value ?? undefined}
-      today={todayIn(timeZone)}
-      dayFormat={day}
-      // A plain save: the collection, as whoever's at the screen.
-      save={(input) =>
-        fresh
-          ? ctx.db.collection<Customer>("customer").insertOne(input)
-          : ctx.db.collection<Customer>("customer").updateOne({ _id: item._id }, input)}
-      close={close}
-      // A View inside this one: its own reads, live on its own.
-      visits={fresh ? null : ctx.show("panel:customer_visits", { _id: item._id })}
-    />
-  );
-};
-```
-
-```tsx
-// plugins/customers/lib/web/customer-form.tsx
-import { Button, DatePicker, Dialog, Field, Form, Input, Stack, toast } from "copilotz/web";
-import { type ReactNode, useState } from "react";
-import type { Customer } from "../../contract.ts";
-
-/** A refusal as a save or `ctx.call` rejects with it: its words, and the field it's about, if any. */
-type Refused = { message: string; detail?: { field?: string } };
-
-/**
- * What the form says of a field the schema refuses: the schema names the field, in words for
- * developers; these are the words for people.
- */
-const SAYS: Record<string, string> = {
-  name: "Give the customer's name.",
-  email: "That email address isn't complete.",
-  since: "Give the day they first came.",
-};
-
-/** The customer's form: a React component, so it keeps what's typed (a View can't). */
-export function CustomerForm({ customer, today, dayFormat, save, close, visits }: {
-  customer?: Customer;
-  today: string;
-  dayFormat: string;
-  save(input: { name: string; phone: string; email: string; since: string }): Promise<unknown>;
-  close(): void;
-  visits: ReactNode;
-}): ReactNode {
-  const [since, setSince] = useState(customer?.since ?? today);
-  const [refused, setRefused] = useState<Refused>();
-  const errorOf = (field: string) =>
-    refused?.detail?.field === field ? SAYS[field] ?? refused.message : undefined;
-  return (
-    <Dialog
-      open
-      onClose={close}
+    <RecordDialog<Customer>
       title={customer ? customer.name : "New customer"}
-      placement="top"
+      record={customer}
+      defaults={{ since: today }}
       size="lg"
-      footer={
-        <>
-          <Button onClick={close}>Cancel</Button>
-          <Button type="submit" form="customer" variant="primary">Save</Button>
-        </>
-      }
+      errors={SAYS}
+      toast="Customer saved."
+      // A plain save: the collection, as whoever's at the screen.
+      onSave={(change) =>
+        change.kind === "create"
+          ? customers.insertOne(change.values)
+          : customers.updateOne({ _id: change._id }, change.update)}
+      onClose={close}
     >
-      <Stack gap="lg">
-        <Form
-          id="customer"
-          onSubmit={async (_values, form) => {
-            const typed = new FormData(form);
-            const text = (name: string) => String(typed.get(name) ?? "");
-            setRefused(undefined);
-            try {
-              await save({ name: text("name"), phone: text("phone"), email: text("email"), since });
-            } catch (error) {
-              // A refusal about one field goes under it; any other, the form says at its top.
-              if (!(error as Refused).detail?.field) throw error;
-              setRefused(error as Refused);
-              return;
-            }
-            toast("Customer saved.", "success");
-            close();
-          }}
-        >
-          <Field layout="row" label="Name" required error={errorOf("name")}>
-            {(control) => <Input {...control} name="name" defaultValue={customer?.name} required />}
+      {(form) => (
+        <>
+          <Field layout="row" label="Name" required error={form.error("name")}>
+            {(control) => <Input {...control} {...form.text("name")} required />}
           </Field>
-          <Field layout="row" label="Phone" htmlFor="phone">
-            <Input id="phone" name="phone" type="tel" defaultValue={customer?.phone} />
+          <Field layout="row" label="Phone" error={form.error("phone")}>
+            {(control) => <Input {...control} {...form.text("phone")} type="tel" />}
           </Field>
-          <Field layout="row" label="Email" error={errorOf("email")}>
-            {(control) => (
-              <Input
-                {...control}
-                name="email"
-                type="email"
-                icon="mail"
-                defaultValue={customer?.email}
-              />
-            )}
+          <Field layout="row" label="Email" error={form.error("email")}>
+            {(control) => <Input {...control} {...form.text("email")} type="email" icon="mail" />}
           </Field>
-          <Field layout="row" label="Customer since" htmlFor="since">
+          <Field layout="row" label="Customer since" htmlFor="since" error={form.error("since")}>
             <DatePicker
               id="since"
-              value={since}
-              onChange={setSince}
+              {...form.value("since")}
               today={today}
-              format={dayFormat}
+              format={day}
               max={today}
             />
           </Field>
-        </Form>
-        {visits}
-      </Stack>
-    </Dialog>
+          {visits}
+        </>
+      )}
+    </RecordDialog>
   );
-}
+};
 ```
+
+What the save sends:
+
+- **A new customer** is `{ kind: "create", values }`: the defaults (`since`, today) with what was
+  typed, for `insertOne`.
+- **A customer's edit** is `{ kind: "update", _id, set, unset, update }`, only what changed. A field
+  nobody touched isn't in it, so an email someone else changed while the dialog was open stays
+  theirs. A phone emptied is a clear (`unset`, `$unset` in `update`), not an empty string. With
+  nothing changed, the dialog just closes.
+- **While it saves**, Save is busy and the dialog stays open: Escape, the backdrop and Cancel wait.
+  It closes after the save answered, with a toast.
 
 Where its errors come from:
 
 - **The browser's own checks** run first: `required`, `type="email"`.
 - **The collection schema checks the save** for every caller. When it refuses a field, the error
-  names it in `detail.field`. The customer form catches the error and passes a message to that
-  `Field`'s `error`. A `Field` whose child is a function of its control
-  (`{(control) => <Input {...control} />}`) ties the error to the field for screen readers too
-  (`aria-invalid`, `aria-describedby`).
-- **A form that calls an Action** can also receive a public `failure` from the Action. When
-  `onSubmit` throws, `Form` shows the message at its top as an alert.
+  names it in `detail.field`, and the dialog shows it under that field's `Field` (the one whose
+  `error` is `form.error(name)`), in `SAYS`' words, and moves the focus to it. A `Field` whose child
+  is a function of its control (`{(control) => <Input {...control} />}`) ties the error to the field
+  for screen readers too (`aria-invalid`, `aria-describedby`).
+- **A save through an Action** can receive a public `failure` from it, shown the same way: by its
+  field when it has a `detail.field`, at the form's top otherwise.
 
-The dialog closes and shows a `toast` after the save succeeds. A row `Field` (`layout="row"`) puts
-its label in a column beside its control: `labelWidth` and `controlWidth` are each a share of the
-whole row (`"33.33%"` and `"66.67%"` fill it). The footer's Save button submits the form by its id
-(`form="customer"`), since a dialog's footer is outside it.
+A row `Field` (`layout="row"`) puts its label in a column beside its control: `labelWidth` and
+`controlWidth` are each a share of the whole row (`"33.33%"` and `"66.67%"` fill it). Each record is
+a draft of its own: an error or an edit never shows on the next customer opened.
+[A record in a dialog](the-web-toolkit.md#a-record-in-a-dialog) has every binder and rule.
 
 ## A View inside a View
 

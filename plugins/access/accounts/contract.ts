@@ -5,8 +5,7 @@
  * the rest by name:
  *
  * - the `account` collection, each person reading their own;
- * - its queries `account.providers` (what can be connected, and how) and
- *   `account.uses` (which models would run on the asker's accounts);
+ * - its query `account.providers` (what can be connected, and how);
  * - its Actions `account.connect`, `account.complete`, `account.disconnect`
  *   (a person's), `account.token` (trusted code only: a model provider, a
  *   tool calling the provider's API for its person) and `account.connected`
@@ -35,7 +34,6 @@
  * ```
  */
 import type { IconName } from "../../../hosts/web/mod.ts";
-import type { ModelRef } from "../../models/contract.ts";
 
 /** Whether an account can be used: it can, it needs signing in again, or the provider ended it. */
 export type Status = "connected" | "needs_reconnect" | "revoked";
@@ -145,20 +143,6 @@ export type AccountSection = { view: string; order?: number };
 
 /** What `account.connect` answers: where to sign in, and (to paste back) where the person lands. */
 export type Connecting = { url: string; paste?: string };
-
-/** `account.uses`: for each agent, the account its model would run on, or one that needs reconnecting. */
-export type Uses = Record<string, Use>;
-export type Use = {
-  provider: string;
-  title: string;
-  label?: string;
-  plan?: string;
-  /** It would run there, but the account needs signing in again: it runs on the app's instead. */
-  reconnect?: true;
-};
-
-/** `account.uses`' params: the models agents use, by agent. */
-export type UsesParams = { models: Record<string, ModelRef> };
 
 /** `account.changed`: an account connected, lost (needs reconnecting, revoked) or disconnected. */
 export type Changed = {

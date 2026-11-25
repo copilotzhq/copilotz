@@ -1,11 +1,10 @@
 /**
  * What the accounts page says, as plain functions: how an account stands,
  * who it is, how a connection that came back went, whether what was pasted
- * is the address a sign-in lands on, and the line a chat shows when its
- * agents run on the person's plan.
+ * is the address a sign-in lands on.
  */
 import type { Tone } from "../../../../../hosts/web/mod.ts";
-import type { Account, Use, Uses } from "../../contract.ts";
+import type { Account } from "../../contract.ts";
 
 /** How an account stands, as its badge says it. */
 export function standing(account?: Pick<Account, "status">): { label: string; tone: Tone } {
@@ -67,37 +66,3 @@ export const shortAddress = (address: string) => {
     return address;
   }
 };
-
-/**
- * The line over a chat's composer: which of its agents run on the person's
- * plan, or whose account needs them; nothing when none do. `named` are the
- * agents' names as the chat shows them.
- */
-export function usesLine(
-  uses: Uses,
-  agents: string[],
-  named: (agent: string) => string = (a) => a,
-): { tone: "plan" | "reconnect"; text: string; provider: string } | undefined {
-  const on = agents.filter((a) => uses[a] && !uses[a].reconnect);
-  const lapsed = agents.filter((a) => uses[a]?.reconnect);
-  if (on.length) {
-    const use = uses[on[0]] as Use;
-    const plan = use.plan ? `${use.title} ${use.plan} plan` : `${use.title} plan`;
-    const who = on.length === agents.length
-      ? "Runs"
-      : `${list(on.map(named))} ${on.length > 1 ? "run" : "runs"}`;
-    return { tone: "plan", text: `${who} on your ${plan}`, provider: use.provider };
-  }
-  if (lapsed.length) {
-    const use = uses[lapsed[0]];
-    return {
-      tone: "reconnect",
-      text: `Reconnect ${use.title} to run on your plan: for now, the app's models answer`,
-      provider: use.provider,
-    };
-  }
-  return undefined;
-}
-
-const list = (names: string[]) =>
-  names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;

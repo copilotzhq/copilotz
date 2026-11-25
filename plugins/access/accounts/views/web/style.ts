@@ -55,14 +55,8 @@ export const STYLE = `
 .accounts-done-who { margin: 2px 0 0; color: var(--muted-foreground); font-size: 13.5px; overflow-wrap: anywhere; }
 .accounts-done-next { margin: 14px 0 0; line-height: 1.55; }
 
-.accounts-uses { display: flex; justify-content: flex-end; margin: 0 8px -4px; font-size: 12.5px; line-height: 1.4; }
-.accounts-uses a { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 9px;
   border-radius: var(--radius-full); color: var(--muted-foreground); text-decoration: none;
   transition: background-color .15s, color .15s; }
-.accounts-uses a:hover { background: var(--accent); color: var(--accent-foreground); }
-.accounts-uses span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.accounts-uses-plan .copilotz-icon { flex: none; color: var(--primary-text); }
-.accounts-uses-reconnect a { color: var(--warning-text); }
 
 /* The person's own API keys */
 .own-keys { display: grid; gap: 12px; margin-top: 16px; padding: 16px 18px; }

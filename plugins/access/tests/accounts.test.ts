@@ -247,22 +247,6 @@ test("agents run on the plan of whom they work for, and on the app's model witho
       "ana",
       0,
     ]);
-
-    // Which agents run on whose plan, as the chat shows it.
-    assertEquals(
-      await s.rt.query("account.uses", { models: { lead: PLAN, other: "fake/echo" } }, {
-        actor: ana,
-      }),
-      { lead: { provider: "chatgpt", title: "ChatGPT", label: "ana@example.com", plan: "Plus" } },
-    );
-    assertEquals(await s.rt.query("account.uses", { models: { lead: PLAN } }, { actor: bob }), {});
-    // A model of the app's first: it's the app's, whatever comes after.
-    assertEquals(
-      await s.rt.query("account.uses", { models: { lead: ["fake/echo", ...PLAN] } }, {
-        actor: ana,
-      }),
-      {},
-    );
   } finally {
     await s.close();
   }
@@ -499,14 +483,12 @@ test("an account the provider refuses needs reconnecting; one it can't reach los
       "This sign-in was ended at the provider. Sign in again to use it.",
       false,
     ]);
-    // Her agents move on to the next model, and the chat can say why.
+    // Her agents move on to the next model, and it's no plan of hers until she signs in again.
     assertEquals(
       (await s.rt.call<Completion>("peek.ask", { actor: lead(ana) })).text,
       "You said: hi",
     );
-    assertEquals(await s.rt.query("account.uses", { models: { lead: PLAN } }, { actor: ana }), {
-      lead: { provider: "chatgpt", title: "ChatGPT", reconnect: true },
-    });
+    assertEquals(await s.rt.call("peek.connected", { actor: lead(ana) }), []);
     // Signing in again connects it again.
     assertEquals((await connect(s, ana)).status, "connected");
     const changes = (await s.store.events(0, 10_000)).filter((e) => e.type === "account.changed");

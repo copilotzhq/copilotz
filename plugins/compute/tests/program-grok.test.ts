@@ -16,7 +16,6 @@ import { join } from "node:path";
 import process from "node:process";
 import { tempDir, test } from "../../../testing/mod.ts";
 import { createEngines } from "../computers/program/agents/engines.ts";
-import { grok } from "../computers/program/agents/grok.ts";
 import { createMcp, type HeldCall } from "../computers/program/agents/mcp.ts";
 import type { Peer, PromptResponse, SessionUpdate } from "../computers/program/agents/types.ts";
 import { fakeCli } from "./fake-cli.ts";

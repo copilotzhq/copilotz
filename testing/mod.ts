@@ -23,7 +23,14 @@ import type { Hypervisor } from "@oxian/oxian-js";
  */
 export { createWorker, type WorkerWorkHandler } from "@oxian/oxian-js";
 export { boundaries } from "./boundaries.ts";
-import { type Actor, definePlugin, type Plugin, type Plugins } from "../runtime/mod.ts";
+import {
+  type ActionDef,
+  type Actor,
+  type AllowContext,
+  definePlugin,
+  type Plugin,
+  type Plugins,
+} from "../runtime/mod.ts";
 import { merge } from "../runtime/registry.ts";
 
 type Fn = () => unknown;
@@ -212,7 +219,8 @@ export async function ticketFor(
  * alternatives to each other): the Actions whose `allow` admits it, the named
  * queries that do, and the events it may hear, asked as it would ask about
  * itself (its own id wherever one is named), sorted. For checking that a kind
- * of caller (a contact, a key) reaches only what's opened to it:
+ * of caller (a contact, a key) reaches only what's opened to it. This synchronous
+ * inventory throws for an async or database-backed check. Test that rule with the running app.
  *
  * ```ts
  * assertEquals(openTo({ kind: "contact", id: "c-1" }, [boards, documents]), []);
@@ -220,14 +228,29 @@ export async function ticketFor(
  */
 export function openTo(actor: Actor, plugins: Plugins): string[] {
   const own = { person: actor.id, agent: actor.id, id: actor.id };
+  const admits = (allow?: ActionDef["allow"]) => {
+    const dynamic = () => new Error("Check database-backed or async allow with a runtime call.");
+    const answer = allow?.(actor, own, {
+      actor,
+      in: actor.in as string | undefined,
+      get db(): AllowContext["db"] {
+        throw dynamic();
+      },
+    });
+    if (answer instanceof Promise) {
+      void answer.catch(() => {});
+      throw dynamic();
+    }
+    return answer;
+  };
   return plugins.flat(Infinity as 1).flatMap((plugin) => {
     const registry = merge([plugin as Plugin], { elsewhere: true });
     return [
-      ...Object.entries(registry.actions).filter(([, def]) => def.allow?.(actor, own))
+      ...Object.entries(registry.actions).filter(([, def]) => admits(def.allow))
         .map(([name]) => name),
       ...Object.entries(registry.collections).flatMap(([collection, def]) =>
         Object.entries(def.queries ?? {}).filter(([, query]) =>
-          typeof query === "object" && query.allow(actor, own)
+          typeof query === "object" && admits(query.allow)
         ).map(([name]) => `${collection}.${name}`)
       ),
       ...Object.entries(registry.events).filter(([, def]) => def.allow?.(actor))

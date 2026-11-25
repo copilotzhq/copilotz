@@ -167,7 +167,12 @@ export type ApiEnv = {
   /** An outsider's own write, admitted, as theirs (see `writeOutside`). */
   write(actor: Actor, op: WriteOp): Promise<unknown>;
   /** Whether a query lets an actor run it (its `allow`, and the actor's scope). */
-  askable(actor: Actor, collection: string, query: string, params: unknown): boolean;
+  askable(
+    actor: Actor,
+    collection: string,
+    query: string,
+    params: unknown,
+  ): boolean | Promise<boolean>;
   ruled(
     actor: Actor,
     collection: string,
@@ -562,7 +567,7 @@ export function createApi(env: ApiEnv): Api {
       ).sort(byName),
       queries: Object.entries(registry.collections).flatMap(([name, def]) =>
         Object.entries(def.queries ?? {}).flatMap(([q, query]) =>
-          typeof query === "object" ? [`${name}.${q}`] : []
+          typeof query === "object" && query.allow ? [`${name}.${q}`] : []
         )
       ).sort().map(query),
       views: Object.keys(registry.views).filter((name) => name !== READ_VIEW).sort().map(view),
@@ -682,7 +687,7 @@ export function createApi(env: ApiEnv): Api {
     else if (request.method === "POST") params = await bodyJson(request);
     else throw allowOnly("GET, POST", "A query");
     if (watching(request)) {
-      if (!env.askable(actor, collection, query, params)) {
+      if (!await env.askable(actor, collection, query, params)) {
         throw fault("forbidden", `${actor.kind} ${actor.id} may not run "${name}".`);
       }
       return watched(env.watch({ collection, query, params }, actor), actor, again);

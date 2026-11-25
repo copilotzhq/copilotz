@@ -4,7 +4,7 @@
  * Views it observes, over its own reads.
  */
 import { collection, type Query, type Run } from "./collection.ts";
-import type { Context, ReadContext } from "./define.ts";
+import type { AllowContext, Context, QueryDef, ReadContext } from "./define.ts";
 import type { Metrics } from "./metrics.ts";
 import { isRead } from "./ops.ts";
 import {
@@ -18,7 +18,8 @@ import {
 } from "./registry.ts";
 import type { Actor, Edge } from "./store.ts";
 import { presenter } from "./views.ts";
-import { acting, whereOf } from "./actor.ts";
+import { forbidden } from "./errors.ts";
+import { acting, allows, inScope, whereOf } from "./actor.ts";
 
 /** What keeps what rules work out (`ReadContext.kept`): the owner's, for its rules' reads. */
 export type Keeper = <T>(
@@ -45,10 +46,11 @@ export function reading(
   actor?: Actor,
   keeper: Keeper = unkept,
   runAs?: RunAs,
+  outsideQuery = false,
 ): ReadContext {
   const reads: Run = (op) =>
     isRead(op) ? run(op) : Promise.reject(invalid("Queries are read-only"));
-  const query = querying(registry, reads, record, metrics, fetch, actor, runAs);
+  const query = querying(registry, reads, record, metrics, fetch, actor, runAs, outsideQuery);
   // An Action it calls, acting as someone else, reads as them: what that reader can't, fails.
   const as = runAs
     ? (other?: Actor) => {
@@ -78,6 +80,18 @@ export function reading(
   return ctx;
 }
 
+/** Admission for an outside query, including each refresh of a watched query. */
+export function queryAllowed(
+  def: QueryDef | undefined,
+  name: string,
+  params: unknown,
+  actor: Actor | undefined,
+  reads: (who: Actor) => AllowContext,
+) {
+  return !actor || actor.kind === "system" || (typeof def === "object" && !!def.allow &&
+    inScope(actor, "query", name) && allows(def.allow, actor, params, reads));
+}
+
 /**
  * Runs a collection's named query here, over the caller's reads: in a
  * transaction it sees the transaction's own writes.
@@ -90,11 +104,22 @@ export const querying = (
   fetch: typeof globalThis.fetch,
   actor?: Actor,
   runAs?: RunAs,
+  outsideQuery = false,
 ): Query =>
 async (name, queryName, params) => {
   const def = registry.collections[name]?.queries?.[queryName];
   if (!def) throw unknown("query", `${name}.${queryName}`, queriesOf(registry));
   const ctx = reading(registry, run, record, metrics, fetch, actor, unkept, runAs);
+  if (
+    outsideQuery && actor &&
+    !await queryAllowed(def, `${name}.${queryName}`, params, actor, (who) => {
+      if (who === actor) return ctx;
+      if (!runAs) throw invalid("This read can't check another actor's permission");
+      return reading(registry, runAs(who), record, metrics, fetch, who, unkept, runAs);
+    })
+  ) {
+    throw forbidden(`${actor.kind} ${actor.id} may not run "${name}.${queryName}".`);
+  }
   return await (typeof def === "function" ? def : def.run)(
     ctx.db.collection(name),
     json(params),

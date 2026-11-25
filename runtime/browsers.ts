@@ -297,7 +297,12 @@ export function createBrowsers(env: {
   /** An actor's own write to a collection, as theirs: admitted, within their reach. */
   write(actor: Actor, op: WriteOp): Promise<unknown>;
   /** Whether a query lets an actor run it (its `allow`, and the actor's scope). */
-  askable(actor: Actor, collection: string, query: string, params: unknown): boolean;
+  askable(
+    actor: Actor,
+    collection: string,
+    query: string,
+    params: unknown,
+  ): boolean | Promise<boolean>;
   /** Calls an Action as an actor; with `id`, the caller's own id for it (theirs alone). */
   call(action: string, input: unknown, actor: Actor, id?: string): Promise<unknown>;
   emit(type: string, data: Record<string, unknown>, actor: Actor): Promise<void>;
@@ -511,7 +516,7 @@ export function createBrowsers(env: {
           // A named query runs when it lets the person (its own reads keep to the rules);
           // read directly, a collection must be one the rules speak for.
           if ("query" in read) {
-            if (!env.askable(actor, read.collection, read.query, read.params ?? null)) {
+            if (!await env.askable(actor, read.collection, read.query, read.params ?? null)) {
               return refused(
                 key,
                 `${actor.kind} ${actor.id} may not run "${read.collection}.${read.query}".`,

@@ -3,6 +3,7 @@
  * meaning only as primitives. It never knows what a plugin is for.
  */
 import type { FromSchema, JSONSchema } from "json-schema-to-ts";
+import { emptyInput } from "./action-input.ts";
 import type { Pipeline } from "./aggregate.ts";
 import type { Metrics } from "./metrics.ts";
 import type { Scheduled, ScheduleDef, ScheduleOptions, SchedulePatch } from "./schedules.ts";
@@ -59,7 +60,7 @@ export type TransactionScope = {
   /** Removes a timer with the transaction's writes. */
   unschedule(id: string): void;
   /**
-   * Calls an atomic Action (`atomic: true`), this plugin's or another's, in
+   * Calls an atomic Action (`atomic: true` or `transaction: true`), this plugin's or another's, in
    * this transaction: its reads see the transaction's writes, and what it
    * writes, emits and schedules commits with them, or rolls back with them.
    * Checked as `ctx.call` is, as this code's actor: its `allow` and its
@@ -356,12 +357,12 @@ export type QueryFn<T = any> = (
  * A named read declared on a collection. Plugin code runs any of them (as
  * whom it acts for, under the rules). From outside (a host acting for a
  * person, a browser), an actor runs only one that lets them (`allow`), as
- * with Actions: a bare function is the system's.
+ * with Actions. A bare function uses the plugin's default allow, or is internal.
  */
 // deno-lint-ignore no-explicit-any
 export type QueryDef<T = any> = QueryFn<T> | {
   // deno-lint-ignore no-explicit-any
-  allow(actor: Actor, params: any): boolean;
+  allow?(actor: Actor, params: any, ctx: AllowContext): boolean | Promise<boolean>;
   /** What it answers, in a line: `GET /api/` and `describe()` list it. */
   description?: string;
   /** Its params' JSON Schema: checked for callers from outside, and listed with it. */
@@ -420,6 +421,10 @@ export type CollectionDef = {
   vectors?: string[];
 };
 
+/** The caller and its guarded collection reads, for a permission check before an Action or query. */
+export type AllowContext = Pick<ReadContext, "db" | "actor" | "in">;
+
+/** A named operation, its admission rule and the code every caller runs. */
 export type ActionDef = {
   /**
    * Who may call it: an actor's call runs only if this says yes, from
@@ -428,9 +433,10 @@ export type ActionDef = {
    * it works for too (`for`). Without it, it's internal: actors can't call
    * it from outside, and code may, as whoever it acts for. Code that goes on
    * where the actor couldn't acts as a grant of the system's (`ctx.as`).
-   * Which documents a call reaches is the rules' business, not this.
+   * A plugin's defaults.allow supplies a missing rule. The check may await
+   * reads in the caller's reach before the Action takes its grant.
    */
-  allow?(actor: Actor, input: unknown): boolean;
+  allow?(actor: Actor, input: unknown, ctx: AllowContext): boolean | Promise<boolean>;
   /** What it does, for people and tools that list Actions. */
   description?: string;
   input?: JSONSchema;
@@ -461,6 +467,10 @@ export type ActionDef = {
    * any Action does.
    */
   atomic?: boolean;
+  /** Run as this named system grant after checking the caller. Writes record the grant via the caller. */
+  as?: string;
+  /** Run in one transaction, joining the caller's when it already holds one. */
+  transaction?: boolean;
   // deno-lint-ignore no-explicit-any
   run(ctx: Context, input: any): unknown;
 };
@@ -540,6 +550,8 @@ export type Workers = {
 
 export type Plugin = {
   name: string;
+  /** Who may call this plugin's Actions and named queries unless they declare their own allow. */
+  defaults?: { allow?: ActionDef["allow"] };
   /**
    * The plugins it builds on, by name: their contracts are what it imports,
    * their Actions, collections and events what it uses. The runtime doesn't
@@ -682,7 +694,7 @@ export type Labels = {
   ): Record<string, unknown> | Promise<Record<string, unknown>>;
   elevate?(
     actor: Actor,
-    allow: ((actor: Actor, input: unknown) => boolean) | undefined,
+    allow: ((actor: Actor, input: unknown) => boolean | Promise<boolean>) | undefined,
     ctx: ReadContext,
   ): boolean | Promise<boolean>;
 };
@@ -754,18 +766,15 @@ export const defineCollection = <const S extends JSONSchema>(
   },
 ) => def;
 
-/** An Action whose `input` type comes from its JSON Schema. */
-export const defineAction = <const S extends JSONSchema, R>(
-  def: {
-    description?: string;
-    input: S;
-    record?: boolean;
-    private?: string[];
-    atomic?: boolean;
-    allow?(actor: Actor, input: Infer<S>): boolean;
+/** Declare an Action. Its JSON Schema types run's input. Omit input for a call with no parameters. */
+export const defineAction = <const S extends JSONSchema = typeof emptyInput, R = unknown>(
+  def: Omit<ActionDef, "input" | "run" | "allow"> & {
+    input?: S;
+    allow?(actor: Actor, input: Infer<S>, ctx: AllowContext): boolean | Promise<boolean>;
     run(ctx: Context, input: Infer<S>): R | Promise<R>;
   },
-): ActionDef => def as ActionDef;
+): ActionDef =>
+  def.input === undefined ? { ...def, input: emptyInput } as ActionDef : def as ActionDef;
 
 export const defineProcessor = (def: ProcessorDef): ProcessorDef => def;
 

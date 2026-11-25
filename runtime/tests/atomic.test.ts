@@ -384,7 +384,7 @@ each(
     // Refused before anything of it ran, it ends nothing: caught, the transaction goes on.
     assertEquals(
       await runtime.call("sale.tries", {}, { actor: ana }),
-      '"card.report" isn\'t atomic: a transaction calls only Actions declared `atomic: true`. ' +
+      '"card.report" isn\'t atomic: a transaction calls only Actions declared `atomic: true` or `transaction: true`. ' +
         "Call it once the transaction has committed, or have it hear an event the transaction emits.",
     );
     assertEquals((await store.find("sale", {})).map((s) => s._id), ["tried"]);

@@ -9,7 +9,7 @@ import { test } from "../../../testing/mod.ts";
 import { addMonths, isDayTime } from "../toolkit/dates.ts";
 import { DateRangePicker } from "../toolkit/date-picker.tsx";
 import { rangeSecondsPattern, readEnd } from "../toolkit/day-time-text.ts";
-import { blur, click, ENDS, press, type } from "./date-range-steps.ts";
+import { blur, click, ENDS, fromEmpty, press, retyped, type } from "./date-range-steps.ts";
 import { page } from "./page.ts";
 
 type Range = { start: string; end: string };
@@ -309,28 +309,6 @@ test("an end being typed moves nothing until it's left or applied", () =>
     await press("Apply");
     assert.deepEqual(applied.splice(0), []);
   }));
-
-/** The texts a field holds as a person types `target` from empty, a character at a time. */
-const fromEmpty = (target: string) => [...target].map((_, i, all) => all.slice(0, i + 1).join(""));
-
-/**
- * The texts a field holds as a person retypes `old` into `target`: each run of digits, or of other
- * characters, that differs, deleted and typed again a character at a time.
- */
-function retyped(old: string, target: string): string[] {
-  const runs = (text: string) => text.match(/\p{Nd}+|\P{Nd}+/gu) ?? [];
-  const [now, next] = [runs(old), runs(target)];
-  if (now.length !== next.length) return fromEmpty(target);
-  const out: string[] = [];
-  for (const [i, run] of next.entries()) {
-    if (now[i] === run) continue;
-    for (let k = 0; k <= [...run].length; k++) {
-      now[i] = [...run].slice(0, k).join("");
-      out.push(now.join(""));
-    }
-  }
-  return out;
-}
 
 const KEYED: unknown[] = [undefined, "dd/MM/yyyy", "d MMM yyyy", "MM/dd/yyyy hh:mm:ss a"];
 const START: Range = { start: "2026-11-15 08:00:00", end: "2026-11-21 23:59:59" };

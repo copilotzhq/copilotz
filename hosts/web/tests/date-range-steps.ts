@@ -48,6 +48,29 @@ export const blur = (selector: string, index = 0) =>
 /** The From and To fields' inputs. */
 export const ENDS = ".copilotz-date-end-input input";
 
+/** The texts a field holds as a person types `target` from empty, a character at a time. */
+export const fromEmpty = (target: string): string[] =>
+  [...target].map((_, i, all) => all.slice(0, i + 1).join(""));
+
+/**
+ * The texts a field holds as a person retypes `old` into `target`: each run of digits, or of other
+ * characters, that differs, deleted and typed again a character at a time.
+ */
+export function retyped(old: string, target: string): string[] {
+  const runs = (text: string) => text.match(/\p{Nd}+|\P{Nd}+/gu) ?? [];
+  const [now, next] = [runs(old), runs(target)];
+  if (now.length !== next.length) return fromEmpty(target);
+  const out: string[] = [];
+  for (const [i, run] of next.entries()) {
+    if (now[i] === run) continue;
+    for (let k = 0; k <= [...run].length; k++) {
+      now[i] = [...run].slice(0, k).join("");
+      out.push(now.join(""));
+    }
+  }
+  return out;
+}
+
 /** A step: its name and what it does. */
 export type Step = [name: string, run: () => Promise<void>];
 

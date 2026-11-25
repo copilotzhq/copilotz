@@ -212,7 +212,7 @@ export function code128(text: string, options?: { set?: "auto" | "B" }): number[
  * blank margins scanners need (ten modules for Code 128 and Code 39).
  * With no width, use 300 units or the minimum for one unit per module, whichever is wider.
  */
-export function bars(
+export function barcodeBars(
   text: string,
   width = 300,
   options: BarcodeOptions = {},
@@ -239,4 +239,13 @@ export function bars(
     x += w;
   });
   return { module, width: modules * module, bars: out };
+}
+
+/** Code 128 bars, using the selected code set and quiet margins. */
+export function bars(
+  text: string,
+  width = 300,
+  { set, quiet }: { set?: "auto" | "B"; quiet?: boolean } = {},
+) {
+  return barcodeBars(text, width, { set, quiet });
 }

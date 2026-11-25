@@ -179,3 +179,46 @@ test("rc.63 exports match the recorded bytes for every call", () => {
     assert.equal(createHash("sha256").update(output).digest("hex"), expected[name], name);
   }
 });
+
+test("rc.63 JavaScript callers can attach their own sheet, options and barcode metadata", () => {
+  const sheet = { headers: ["Amount"], rows: [[42]] };
+  const invoice = { ...sheet, footerRows: [{ Amount: 42 }], keys: 17 };
+  const options = { bom: false, pdf: { title: "Invoice" } };
+  const metadata = {
+    ...options,
+    csv: { delimiter: "" },
+    tableName: "unrelated",
+    values: "raw",
+    formats: { csv: "imported" },
+    pdf: { ...options.pdf, columns: 42, titleLines: "private" },
+  };
+  assert.equal(Reflect.apply(api.toCsv, undefined, [invoice, metadata]), '"Amount"\n"42"');
+  for (const { format } of api.EXPORT_FORMATS) {
+    assert.deepEqual(
+      api.exportFile(format, invoice, "invoice", metadata),
+      api.exportFile(format, sheet, "invoice", options),
+      format,
+    );
+  }
+  assert.equal(api.toJson(invoice, metadata), api.toJson(sheet, options));
+  assert.equal(api.toXml(invoice), api.toXml(sheet));
+  assert.equal(api.toSql(invoice, "invoice"), api.toSql(sheet, "invoice"));
+  assert.equal(api.toExcel(invoice, "invoice", metadata), api.toExcel(sheet, "invoice", options));
+  assert.deepEqual(api.toXlsx(invoice, "invoice"), api.toXlsx(sheet, "invoice"));
+  assert.deepEqual(api.toPdf(invoice, metadata.pdf), api.tablePdf(sheet, options.pdf));
+
+  const label = { barcode: "SKU", x: 0, y: 0, width: 200, height: 30, quiet: true };
+  const annotated = {
+    ...label,
+    value: label.barcode,
+    image: "label.png",
+    format: "ean8",
+    check: 42,
+  };
+  assert.deepEqual(api.documentPdf([[annotated]]), api.documentPdf([[label]]));
+  assert.deepEqual(api.bars("SKU", 200, annotated), api.bars("SKU", 200, label));
+  assert.equal(
+    renderToStaticMarkup(createElement(Barcode, annotated)),
+    renderToStaticMarkup(createElement(Barcode, { ...label, value: label.barcode })),
+  );
+});

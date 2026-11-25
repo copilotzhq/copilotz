@@ -27,22 +27,12 @@
  */
 import type { Sheet, TableExportSheet } from "./export.ts";
 import type { PdfImage } from "./pdf-image.ts";
-import { type BarcodeOptions, bars } from "./code128.ts";
+import { barcodeBars, type BarcodeOptions, bars } from "./code128.ts";
 
 /** How the PDF looks: its page, its title, and its colours (`#rrggbb`). */
 export type PdfOptions = {
   /** A line over the table, on the first page. */
   title?: string;
-  /** Multiple title lines, in place of title. */
-  titleLines?: string[];
-  /** Smaller lines under the title, on the first page. */
-  subtitle?: string | string[];
-  /** Paper in points. Named paper defaults to landscape, a pair keeps its given orientation. */
-  size?: "a4" | "letter" | [number, number];
-  /** Columns in visible order. Widths are points. Unspecified columns share what remains. */
-  columns?: { width?: number; align?: "left" | "center" | "right" }[];
-  /** A prepared logo beside the first page's title. Width and height are in points. */
-  headerImage?: { image: PdfImage; width: number; height: number };
   /** Rotates the paper to landscape or portrait. Named paper defaults to landscape. */
   orientation?: "landscape" | "portrait";
   /** The header band's colour, and its text's. */
@@ -52,6 +42,22 @@ export type PdfOptions = {
   stripeColor?: string | null;
   /** Points, 9 by default. */
   fontSize?: number;
+};
+
+type PdfColumn = { width?: number; align?: "left" | "center" | "right" };
+
+/** A table file's page, heading and exported columns. */
+export type TablePdfOptions = PdfOptions & {
+  /** Multiple title lines, in place of title. */
+  titleLines?: string[];
+  /** Smaller lines under the title, on the first page. */
+  subtitle?: string | string[];
+  /** Paper in points. Named paper defaults to landscape, a pair keeps its given orientation. */
+  size?: "a4" | "letter" | [number, number];
+  /** Columns by key or in exported order. Widths are points. Unspecified columns share what remains. */
+  columns?: Record<string, PdfColumn> | PdfColumn[];
+  /** A prepared logo beside the first page's title. Width and height are in points. */
+  headerImage?: { image: PdfImage; width: number; height: number };
 };
 
 /** Unicode's characters WinAnsi has between 0x80 and 0x9f. */
@@ -170,16 +176,22 @@ function automaticTablePdf(
 }
 
 /** The enhanced layout is opt-in. A normal table keeps its original fitting and pagination. */
-export function usesTableLayout(options?: PdfOptions, footerRows?: unknown[]): boolean {
+export function usesTableLayout(options?: TablePdfOptions, footerRows?: unknown[]): boolean {
   return !!footerRows?.length || options?.columns !== undefined || options?.size !== undefined ||
     options?.titleLines !== undefined || options?.subtitle !== undefined ||
     options?.headerImage !== undefined;
 }
 
+/** Resolve settings against the sheet being written. */
+export function pdfColumn(settings: TablePdfOptions["columns"], key: string, index: number) {
+  if (Array.isArray(settings)) return settings[index];
+  return settings && Object.hasOwn(settings, key) ? settings[key] : undefined;
+}
+
 /** A printable table, with repeated column headings and totals after its final row. */
 export function renderTablePdf(
   sheet: TableExportSheet,
-  options: PdfOptions = {},
+  options: TablePdfOptions = {},
 ): Uint8Array {
   const { headers, rows, footerRows = [] } = sheet;
   if (!usesTableLayout(options, footerRows)) {
@@ -203,7 +215,8 @@ export function renderTablePdf(
     headers.map((_, i) => winAnsi(String(row[i] ?? "")))
   );
   const heads = headers.map(winAnsi);
-  const columns = options.columns ?? [];
+  const settings = options.columns;
+  const columns = headers.map((header, i) => pdfColumn(settings, sheet.keys?.[i] ?? header, i));
   const weights = heads.map((h, i) =>
     columns[i]?.width === undefined ? Math.max(3, Math.min(40, h.length)) : 0
   );
@@ -310,9 +323,9 @@ export function renderTablePdf(
   return assemble(pages, ["regular", "bold"], logo ? new Map([[logo.image, "Im1"]]) : undefined);
 }
 
-/** A table of text and numbers, with optional print layout and totals. */
+/** A table of text and numbers with automatic column widths. */
 export function tablePdf(sheet: Sheet, options: PdfOptions = {}): Uint8Array {
-  return renderTablePdf(sheet, options);
+  return automaticTablePdf(sheet, options);
 }
 
 /** Fits WinAnsi text to the available points, including the ellipsis and the chosen face. */
@@ -619,13 +632,11 @@ export type Drawn =
     height: number;
     set?: "auto" | "B";
     quiet?: boolean;
-    format?: BarcodeOptions["format"];
-    check?: boolean;
     color?: string;
   };
 
 /** drawDocumentPdf can size a barcode from its position and the page's width. */
-type BarcodeInput = Omit<Extract<Drawn, { barcode: string }>, "width"> & {
+type BarcodeInput = Omit<Extract<Drawn, { barcode: string }>, "width"> & BarcodeOptions & {
   width?: number;
 };
 type DocumentItem =
@@ -723,24 +734,21 @@ function draw(
           `${box} ${paint}`,
         ].filter(Boolean).join(" "),
       );
-    } else if ("image" in item) {
-      const name = images.get(item.image) ?? `Im${images.size + 1}`;
-      images.set(item.image, name);
-      ops.push(
-        `q ${n(item.width)} 0 0 ${n(item.height)} ${n(item.x)} ${
-          up(item.y + item.height)
-        } cm /${name} Do Q`,
-      );
-    } else {
-      const drawn = bars(item.barcode, item.width ?? width - item.x, item);
+    } else if ("barcode" in item) {
+      const barWidth = item.width ?? width - item.x;
+      if (checkBounds && !(barWidth > 0 && item.height > 0)) {
+        throw new RangeError("Barcode width and height must be positive.");
+      }
+      const drawn = checkBounds
+        ? barcodeBars(item.barcode, barWidth, item)
+        : bars(item.barcode, item.width, item);
       const first = drawn.bars[0];
       const last = drawn.bars[drawn.bars.length - 1];
       const tolerance = 1e-6; // points
       if (
-        (checkBounds || item.format !== undefined || item.check !== undefined ||
-          item.width === undefined) &&
+        checkBounds &&
         !(item.x + first.x >= -tolerance && item.x + last.x + last.w <= width + tolerance &&
-          item.y >= -tolerance && item.height >= 0 && item.y + item.height <= height + tolerance)
+          item.y >= -tolerance && item.y + item.height <= height + tolerance)
       ) {
         throw new RangeError("Barcode bars must fit on the page.");
       }
@@ -751,6 +759,14 @@ function draw(
           `${n(item.x + bar.x)} ${up(item.y + item.height)} ${n(bar.w)} ${n(item.height)} re f`,
         );
       }
+    } else {
+      const name = images.get(item.image) ?? `Im${images.size + 1}`;
+      images.set(item.image, name);
+      ops.push(
+        `q ${n(item.width)} 0 0 ${n(item.height)} ${n(item.x)} ${
+          up(item.y + item.height)
+        } cm /${name} Do Q`,
+      );
     }
   }
   return ops.join("\n");

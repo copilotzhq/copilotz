@@ -80,37 +80,87 @@ test("rc.63 Form parity: later parts and the final save read state when they run
     ]);
   }));
 
-test("table PDF settings follow the visible export columns", () =>
+test("positional PDF widths follow the columns in each downloaded invoice", () =>
   page(async (render) => {
-    let options: unknown;
     await render(
       <DataTable
         columns={[
-          { key: "secret", title: "Secret", hidden: true },
-          { key: "name", title: "Name" },
-          { key: "total", title: "Total" },
+          { key: "warehouse", title: "Warehouse", hidden: true },
+          { key: "qty", title: "Qty" },
+          { key: "amount", title: "Amount" },
+          { key: "memo", title: "Memo" },
         ]}
-        rows={[]}
+        rows={[{ warehouse: "W", qty: 2, amount: "1234.56", memo: "M" }]}
         rowKey={() => 1}
         exports={["pdf"]}
-        exportOptions={{ pdf: { columns: [{ width: 110 }, { align: "right" }] } }}
-        formats={{
-          pdf: {
-            label: "PDF",
-            type: "application/pdf",
-            extension: "pdf",
-            serialize: (_sheet, _name, given) => {
-              options = given.pdf?.columns;
-              return "";
-            },
-          },
+        tableExportOptions={{
+          pdf: { columns: [{ width: 16 }, { width: 80 }, { width: 100 }, { width: 50 }] },
         }}
       />,
     );
+    let url = "";
+    document.addEventListener("click", (event) => {
+      if (event.target instanceof window.HTMLAnchorElement) {
+        event.preventDefault();
+        url = event.target.href;
+      }
+    });
     document.querySelector<HTMLElement>('[role="menu"]')!.hidePopover = () => {};
-    document.addEventListener("click", (event) => event.preventDefault());
-    await act(() => document.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
-    assert.deepEqual(options, [{ align: undefined, width: 110 }, { align: "right" }]);
+    const toggle = (index: number) =>
+      act(() =>
+        document.querySelectorAll<HTMLInputElement>(".copilotz-table-columns input")[index].click()
+      );
+    const amountAt = async (x: number) => {
+      await act(() => document.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
+      const pdf = await (await fetch(url)).text();
+      for (const value of ["Amount", "1234.56"]) {
+        assert.ok(
+          pdf.split("\n").some((line) =>
+            line.includes(`Tf ${x} `) && line.endsWith(`(${value}) Tj ET`)
+          ),
+          value,
+        );
+      }
+      url = "";
+    };
+    await amountAt(55); // Warehouse starts hidden. Qty gets 16 points.
+    await toggle(0);
+    await amountAt(135); // Warehouse, Qty, Amount.
+    await toggle(1);
+    await amountAt(55); // Hide the middle Qty column.
+    await toggle(3);
+    await amountAt(55); // Qty and Memo both hidden.
+  }));
+
+test("unknown export choices warn once and stay out of the menu on re-render", () =>
+  page(async (render) => {
+    const warnings: string[] = [];
+    const warn = console.warn;
+    console.warn = (message) => warnings.push(String(message));
+    try {
+      for (const label of ["Orders", "Invoices"]) {
+        await render(
+          <DataTable
+            label={label}
+            columns={[]}
+            rows={[]}
+            rowKey={() => 1}
+            exportChoices={["missing", { format: "toString", label: "Broken" }, "missing", {
+              format: "csv",
+              label: "Save CSV",
+            }]}
+          />,
+        );
+        assert.deepEqual(
+          Array.from(document.querySelectorAll('[role="menuitem"]'), (el) => el.textContent),
+          ["Save CSV"],
+        );
+      }
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0], /missing, toString/);
+    } finally {
+      console.warn = warn;
+    }
   }));
 
 test("hiding sales columns keeps PDF widths and alignment with their fields", () =>
@@ -118,7 +168,7 @@ test("hiding sales columns keeps PDF widths and alignment with their fields", ()
     await render(
       <DataTable
         columns={[
-          { key: "id", title: "ID" },
+          { key: "id", title: "ID", hidden: true },
           { key: "qty", title: "Qty" },
           { key: "product", title: "Product" },
         ]}
@@ -126,8 +176,14 @@ test("hiding sales columns keeps PDF widths and alignment with their fields", ()
         rowKey={(row) => row.id}
         footerRows={[{ product: "Total" }]}
         exports={["pdf"]}
-        exportOptions={{
-          pdf: { columns: [{ width: 14 }, { width: 45, align: "right" }, { width: 120 }] },
+        tableExportOptions={{
+          pdf: {
+            columns: {
+              id: { width: 14 },
+              qty: { width: 45, align: "right" },
+              product: { width: 120 },
+            },
+          },
         }}
       />,
     );
@@ -156,7 +212,6 @@ test("hiding sales columns keeps PDF widths and alignment with their fields", ()
       if (showQty) assert.match(pdf, /Tf 73 [\d.]+ Td \(2\)/); // right-aligned in 45 points
       url = "";
     };
-    await toggle(0);
     await check(false, true);
     await toggle(0);
     await toggle(1);
@@ -167,13 +222,14 @@ test("hiding sales columns keeps PDF widths and alignment with their fields", ()
 
 test("a table with rc.63 props downloads the automatic PDF even with aligned screen columns", () =>
   page(async (render) => {
+    const options = { pdf: { title: "Purchasing", titleLines: [123], columns: "app-owned" } };
     await render(
       <DataTable
         columns={[{ key: "order", title: "Order" }, { key: "qty", title: "Qty", align: "right" }]}
         rows={[{ order: "PO-42", qty: 9 }]}
         rowKey={(row) => row.order}
         exports={["pdf"]}
-        exportOptions={{ pdf: { title: "Purchasing" } }}
+        exportOptions={options}
       />,
     );
     let url = "";

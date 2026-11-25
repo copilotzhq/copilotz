@@ -13,7 +13,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "../../../testing/mod.ts";
 import { tableQuery, tableState } from "../table-address.ts";
 import { type Column, DataTable, TableExportFormats } from "../toolkit/data-table.tsx";
-import { Barcode } from "../toolkit/barcode.tsx";
+import { ProductBarcode } from "../toolkit/barcode.tsx";
 import { Pagination } from "../toolkit/pagination.tsx";
 
 type Row = { id: number; name: string; total: number };
@@ -321,7 +321,7 @@ test("toolbar buttons keep selection off, a single page size can show, and visib
 });
 
 test("a product SVG shows its complete EAN under the bars", () => {
-  const svg = html(<Barcode value="590123412345" format="ean13" caption />);
+  const svg = html(<ProductBarcode value="590123412345" format="ean13" caption />);
   assertStringIncludes(svg, 'aria-label="5901234123457"');
   assertStringIncludes(svg, ">5901234123457</span>");
   assertStringIncludes(svg, "<path");

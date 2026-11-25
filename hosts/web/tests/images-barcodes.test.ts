@@ -1,10 +1,10 @@
 import { assertEquals, assertRejects, assertStringIncludes, assertThrows } from "@std/assert";
 import { test } from "../../../testing/mod.ts";
 import {
+  barcodeBars,
   barcodePng,
   bars,
   code39,
-  documentPdf,
   drawDocumentPdf,
   ean13,
   ean8,
@@ -63,14 +63,14 @@ test("Code 39 has its framing symbols, inter-character spaces and optional Mod 4
 test("barcode PNG round-trips as the same whole pixels as its bars, on every row", async () => {
   for (const format of ["code128", "code39", "ean8", "ean13"] as const) {
     const value = format === "ean8" ? "0123456" : "590123412345";
-    const drawn = bars(value, 350, { format, quiet: true });
+    const drawn = barcodeBars(value, 350, { format, quiet: true });
     const row = new Uint8Array(drawn.width).fill(255);
     for (const { x, w } of drawn.bars) row.fill(0, x, x + w);
     const png = readPng(await barcodePng(value, { format, width: 350, height: 2 }));
     assertEquals([png.width, png.height], [drawn.width, 2]);
     assertEquals(await pngPixels(png), Uint8Array.from([...row, ...row]));
     const vector = String.fromCharCode(
-      ...documentPdf([[{
+      ...drawDocumentPdf([[{
         barcode: value,
         format,
         x: 0,
@@ -258,10 +258,10 @@ test("a Code 128 label fits flush with a fractional page edge", () => {
     width: 121,
     height: 40.2,
   };
-  const pdf = String.fromCharCode(...documentPdf([[label]], { size: [200, 70.3] }));
+  const pdf = String.fromCharCode(...drawDocumentPdf([[label]], { size: [200, 70.3] }));
   assertStringIncludes(pdf, " 0 2 40.2 re f");
   assertThrows(
-    () => documentPdf([[label]], { size: [200, 70.299] }),
+    () => drawDocumentPdf([[label]], { size: [200, 70.299] }),
     RangeError,
     "on the page",
   );
@@ -288,5 +288,13 @@ test("PDF barcode bounds use the first and last bars, including bars flush with 
       RangeError,
       "on the page",
     );
+  }
+});
+
+test("drawDocumentPdf requires positive barcode dimensions", () => {
+  const label = { barcode: "A", x: 0, y: 0, width: 180, height: 30 };
+  for (const length of [0, -1]) {
+    assertThrows(() => drawDocumentPdf([[{ ...label, height: length }]]), RangeError);
+    assertThrows(() => drawDocumentPdf([[{ ...label, width: length }]]), RangeError);
   }
 });

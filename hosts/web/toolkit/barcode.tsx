@@ -13,7 +13,7 @@
  * ```
  */
 import type { ReactNode } from "react";
-import { type BarcodeOptions, bars } from "./code128.ts";
+import { barcodeBars, type BarcodeOptions } from "./code128.ts";
 import { eanDigits } from "./retail-barcodes.ts";
 import { cx } from "./cx.ts";
 import { sheet } from "./sheet.tsx";
@@ -32,27 +32,48 @@ const SHEET = sheet(
 `,
 );
 
-/** Draws a scannable SVG with an optional human-readable caption. */
+type BarcodeProps = {
+  value: string;
+  /** Preferred width in pixels. Each module takes at least one pixel. */
+  width?: number;
+  /** Height of the bars in pixels. */
+  height?: number;
+  /** Show the value beneath the bars. */
+  caption?: boolean;
+  quiet?: boolean;
+  set?: "auto" | "B";
+  className?: string;
+};
+
+/** A Code 128 barcode with optional caption and quiet margins. */
 export function Barcode(
+  { value, width, height, caption, quiet, set, className }: BarcodeProps,
+): ReactNode {
+  return (
+    <ProductBarcode
+      value={value}
+      width={width}
+      height={height}
+      caption={caption}
+      quiet={quiet}
+      set={set}
+      className={className}
+    />
+  );
+}
+
+/** Draws a scannable SVG with an optional human-readable caption. */
+export function ProductBarcode(
   { value, width, height = 50, caption = false, quiet = true, set, format, check, className }:
-    & BarcodeOptions
-    & {
-      value: string;
-      /** Preferred width in pixels. Each module takes at least one pixel. */
-      width?: number;
-      /** Its bars' height, in pixels. */
-      height?: number;
-      /** Prints the value under the bars. */
-      caption?: boolean;
-      className?: string;
-    },
+    & BarcodeProps
+    & BarcodeOptions,
 ): ReactNode {
   const label = format === "ean13"
     ? eanDigits(value, 13)
     : format === "ean8"
     ? eanDigits(value, 8)
     : value;
-  const drawn = bars(label, width, { quiet, set, format, check });
+  const drawn = barcodeBars(label, width, { quiet, set, format, check });
   // One path of rectangles, not a node per bar.
   const d = drawn.bars.map(({ x, w }) => `M${x} 0h${w}v${height}h-${w}z`).join("");
   return (

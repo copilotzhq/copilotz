@@ -23,7 +23,7 @@
  * download("xlsx", { headers: ["Name", "Total"], rows: [["Ann", 12.5]] }, "sales");
  * ```
  */
-import { type PdfOptions, renderTablePdf, tablePdf } from "./pdf.ts";
+import { type PdfOptions, renderTablePdf, tablePdf, type TablePdfOptions } from "./pdf.ts";
 import { zip } from "./zip.ts";
 
 /** The formats a table exports to. */
@@ -41,14 +41,18 @@ export type TableExportSheet<Cell extends ExportCell = ExportCell> = {
 };
 
 /** The string and number cells accepted by the built-in file functions. */
-export type Sheet = TableExportSheet<string | number>;
+export type Sheet = { headers: string[]; rows: (string | number)[][] };
 
 /** Add one of these to formats, keyed by its name, to offer a file anywhere a table is exported. */
 export type TableExportFormat = {
   label: string;
   extension: string;
   type: string;
-  serialize(sheet: TableExportSheet, name: string, options: ExportOptions): string | Uint8Array;
+  serialize(
+    sheet: TableExportSheet,
+    name: string,
+    options: TableExportOptions,
+  ): string | Uint8Array;
 };
 
 /** How the files are made. */
@@ -59,6 +63,12 @@ export type ExportOptions = {
   bom?: boolean;
   /** JSON's shape: rows as objects by header (the default), or the table export's. */
   json?: "records" | "table";
+  /** The PDF's title and colours. */
+  pdf?: PdfOptions;
+};
+
+/** Settings for a table file, including custom formats and print layout. */
+export type TableExportOptions = ExportOptions & {
   /** CSV and text delimiters, quoting and line endings. Defaults preserve the quoted CSV format. */
   csv?: {
     quote?: "always" | "needed";
@@ -74,7 +84,7 @@ export type ExportOptions = {
   /** Add or replace named formats for this export. */
   formats?: Record<string, TableExportFormat>;
   /** The PDF's page layout, title, logo and colours. */
-  pdf?: PdfOptions;
+  pdf?: TablePdfOptions;
 };
 
 function dataRows({ rows, footerRows }: TableExportSheet) {
@@ -114,7 +124,7 @@ const markup = (value: string) =>
 /** CSV, quoted and formula-guarded by default. Set csv to match a file's dialect. */
 function serializeCsv(
   sheet: TableExportSheet,
-  options: ExportOptions = {},
+  options: TableExportOptions = {},
 ): string {
   const { formulas, csv = {} } = options;
   const preserveNumericText = options.values === "raw" || options.csv !== undefined ||
@@ -138,7 +148,7 @@ function serializeCsv(
 /** JSON: the rows as objects by header, or the table export's shape. */
 function serializeJson(
   sheet: TableExportSheet,
-  { json = "records", values }: ExportOptions = {},
+  { json = "records", values }: TableExportOptions = {},
 ): string {
   const { headers } = sheet;
   const rows = dataRows(sheet);
@@ -196,7 +206,7 @@ function serializeSql(sheet: TableExportSheet, table: string): string {
 function serializeExcel(
   sheet: TableExportSheet,
   name: string,
-  options: ExportOptions = {},
+  options: TableExportOptions = {},
 ): string {
   const { headers } = sheet;
   const rows = dataRows(sheet);
@@ -228,7 +238,7 @@ const column = (index: number): string =>
 function serializeXlsx(
   input: TableExportSheet,
   name: string,
-  { values }: ExportOptions = {},
+  { values }: TableExportOptions = {},
 ): Uint8Array {
   const { headers } = input;
   const rows = dataRows(input);
@@ -283,34 +293,38 @@ function serializeXlsx(
   ]);
 }
 
-/** CSV with the selected dialect and formula guard. */
-export function toCsv(sheet: Sheet, options: ExportOptions = {}): string {
-  return serializeCsv(sheet, options);
+/** Quoted CSV with the optional formula guard. */
+export function toCsv({ headers, rows }: Sheet, { formulas }: ExportOptions = {}): string {
+  return serializeCsv({ headers, rows }, { formulas });
 }
 
 /** JSON records by header, or a table keyed by column position. */
-export function toJson(sheet: Sheet, options: ExportOptions = {}): string {
-  return serializeJson(sheet, options);
+export function toJson({ headers, rows }: Sheet, { json }: ExportOptions = {}): string {
+  return serializeJson({ headers, rows }, { json });
 }
 
 /** XML fields followed by the rows in column order. */
-export function toXml(sheet: Sheet): string {
-  return serializeXml(sheet);
+export function toXml({ headers, rows }: Sheet): string {
+  return serializeXml({ headers, rows });
 }
 
 /** One SQL INSERT into the named table per row. */
-export function toSql(sheet: Sheet, table: string): string {
-  return serializeSql(sheet, table);
+export function toSql({ headers, rows }: Sheet, table: string): string {
+  return serializeSql({ headers, rows }, table);
 }
 
 /** An HTML table for Excel's .xls format. */
-export function toExcel(sheet: Sheet, name: string, options: ExportOptions = {}): string {
-  return serializeExcel(sheet, name, options);
+export function toExcel(
+  { headers, rows }: Sheet,
+  name: string,
+  { formulas }: ExportOptions = {},
+): string {
+  return serializeExcel({ headers, rows }, name, { formulas });
 }
 
 /** An XLSX workbook with one named worksheet. */
-export function toXlsx(sheet: Sheet, name: string): Uint8Array {
-  return serializeXlsx(sheet, name);
+export function toXlsx({ headers, rows }: Sheet, name: string): Uint8Array {
+  return serializeXlsx({ headers, rows }, name);
 }
 
 /** A PDF of the table. */
@@ -367,7 +381,7 @@ export function exportTableFile(
   format: string,
   sheet: TableExportSheet,
   name: string,
-  options: ExportOptions = {},
+  options: TableExportOptions = {},
 ): { file: string; type: string; content: string | Uint8Array } {
   const custom = options.formats;
   const def = custom && Object.hasOwn(custom, format)
@@ -388,7 +402,7 @@ export function downloadTableFile(
   format: string,
   sheet: TableExportSheet,
   name: string,
-  options?: ExportOptions,
+  options?: TableExportOptions,
 ): void {
   const { file, type, content } = exportTableFile(format, sheet, name, options);
   const url = URL.createObjectURL(new Blob([content as BlobPart], { type }));
@@ -401,22 +415,34 @@ export function downloadTableFile(
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** Project only the options declared by the original file APIs. Callers may attach other data. */
+export function fileOptions({ formulas, bom, json, pdf }: ExportOptions = {}): ExportOptions {
+  if (!pdf) return { formulas, bom, json };
+  const { title, orientation, headerColor, headerText, stripeColor, fontSize } = pdf;
+  return {
+    formulas,
+    bom,
+    json,
+    pdf: { title, orientation, headerColor, headerText, stripeColor, fontSize },
+  };
+}
+
 /** Makes a built-in file from a sheet of text and numbers. */
 export function exportFile(
   format: ExportFormat,
-  sheet: Sheet,
+  { headers, rows }: Sheet,
   name: string,
   options: ExportOptions = {},
 ): { file: string; type: string; content: string | Uint8Array } {
-  return exportTableFile(format, sheet, name, options);
+  return exportTableFile(format, { headers, rows }, name, fileOptions(options));
 }
 
 /** Saves a built-in file in the browser. */
 export function download(
   format: ExportFormat,
-  sheet: Sheet,
+  { headers, rows }: Sheet,
   name: string,
   options?: ExportOptions,
 ): void {
-  downloadTableFile(format, sheet, name, options);
+  downloadTableFile(format, { headers, rows }, name, fileOptions(options));
 }

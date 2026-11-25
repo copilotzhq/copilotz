@@ -1,4 +1,4 @@
-import type { ExportCell, ExportOptions, Sheet, TableExportSheet } from "./export.ts";
+import type { ExportCell, TableExportOptions, TableExportSheet } from "./export.ts";
 
 /** The column properties used to project rows into an export. */
 export type SheetColumn<R> = {
@@ -35,18 +35,18 @@ export function tableSheet<R, C extends AppColumn<R> = AppColumn<R>>(
   rows: R[],
   footerRows?: Record<string, ExportCell>[],
   values?: "display",
-): Sheet;
+): TableExportSheet<string>;
 export function tableSheet<R, C extends AppColumn<R> = AppColumn<R>>(
   columns: C[],
   rows: R[],
   footerRows?: Record<string, ExportCell>[],
-  values?: ExportOptions["values"],
+  values?: TableExportOptions["values"],
 ): TableExportSheet;
 export function tableSheet<R, C extends AppColumn<R> = AppColumn<R>>(
   columns: C[],
   rows: R[],
   footerRows: Record<string, ExportCell>[] = [],
-  values: ExportOptions["values"] = "display",
+  values: TableExportOptions["values"] = "display",
 ): TableExportSheet {
   const fields = columns.filter((column) => column.title !== "");
   const keys = fields.map((column) => column.key);

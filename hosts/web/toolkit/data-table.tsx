@@ -55,9 +55,11 @@ import {
   type ExportCell,
   type ExportFormat,
   type ExportOptions,
+  fileOptions,
   type TableExportFormat,
+  type TableExportOptions,
 } from "./export.ts";
-import { usesTableLayout } from "./pdf.ts";
+import { pdfColumn, usesTableLayout } from "./pdf.ts";
 import { Icon } from "./icon.tsx";
 import { Input } from "./input.tsx";
 import { Menu } from "./menu.tsx";
@@ -233,6 +235,8 @@ type DataTableProps<R> = {
   exportAll?: boolean;
   /** How the files are made (see `export.ts`). */
   exportOptions?: ExportOptions;
+  /** Settings for table files. When given, these take the place of exportOptions. */
+  tableExportOptions?: TableExportOptions;
   /** Additional or replacement formats for this table, keyed by name. */
   formats?: Record<string, TableExportFormat>;
   /** Totals by column key, shown below the body and included in each file. */
@@ -333,34 +337,41 @@ export function DataTable<R>(props: DataTableProps<R>): ReactNode {
   const titled = columns.filter((column) => !isLinks(column as Column<unknown>));
   const visibleTitled = visible.filter((column) => !isLinks(column as Column<unknown>));
   const sharedFormats = useContext(TableExportFormats);
-  const definitions = { ...sharedFormats, ...props.exportOptions?.formats, ...props.formats };
+  const options: TableExportOptions = props.tableExportOptions ?? fileOptions(props.exportOptions);
+  const definitions = { ...sharedFormats, ...options.formats, ...props.formats };
   const choices = exports === false ? false : props.exportChoices ?? exports ??
     [...new Set(["csv", "xlsx", "pdf", ...Object.keys(definitions)])];
-  const formats = choices === false ? [] : choices.map((choice) => {
-    if (typeof choice !== "string") return choice;
-    const label = Object.hasOwn(definitions, choice)
-      ? definitions[choice].label
-      : EXPORT_FORMATS.find((f) => f.format === choice)?.label ?? choice;
-    return { format: choice, label };
+  const warned = useRef(new Set<string>());
+  const unknown = new Set<string>();
+  const formats = (choices || []).flatMap((choice) => {
+    const format = typeof choice === "string" ? choice : choice.format;
+    const definition = Object.hasOwn(definitions, format)
+      ? definitions[format]
+      : EXPORT_FORMATS.find((entry) => entry.format === format);
+    if (!definition) {
+      if (!warned.current.has(format)) unknown.add(format);
+      return [];
+    }
+    return [typeof choice === "string" ? { format, label: definition.label } : choice];
   });
+  if (unknown.size) {
+    console.warn(`Unknown table export formats: ${[...unknown].join(", ")}`);
+    for (const format of unknown) warned.current.add(format);
+  }
   const save = (format: string) => {
     const sheet = tableSheet(
       visibleTitled,
       props.exportAll ? matching : page,
       props.footerRows,
-      props.exportOptions?.values,
+      options.values,
     );
-    const pdf = props.exportOptions?.pdf;
-    // Positional settings describe the initially visible columns, before chooser edits.
-    const byKey = new Map(
-      titled.filter((c) => !c.hidden).map((c, i) => [c.key, pdf?.columns?.[i]]),
-    );
-    const columns = visibleTitled.map((c) => ({
-      align: c.align,
-      ...byKey.get(c.key),
+    const pdf = options.pdf;
+    const columns = visibleTitled.map((column, i) => ({
+      align: column.align,
+      ...pdfColumn(pdf?.columns, column.key, i),
     }));
     downloadTableFile(format, sheet, props.exportName ?? "export", {
-      ...props.exportOptions,
+      ...options,
       formats: definitions,
       pdf: usesTableLayout(pdf, props.footerRows) ? { ...pdf, columns } : pdf,
     });

@@ -389,7 +389,7 @@ Return text or bytes. Use a built-in name such as `csv` to replace its format. P
 table, or put `<TableExportFormats value={formats}>` around the screens in the app's shell. A
 table's definitions win. The default menu adds the supplied formats to CSV, Excel and PDF. An
 explicit `exports` list selects built-ins. Use `exportChoices` to order a menu that includes custom
-names.
+names. Unknown names are omitted, with one render warning per table for newly encountered names.
 
 ```tsx
 import { DataTable, type TableExportFormat } from "copilotz/web";
@@ -416,7 +416,7 @@ const formats = {
   formats={formats}
   exportChoices={["csv", "json", "sql", "pdf", "jsonl"]}
   exportName="stock"
-  exportOptions={{
+  tableExportOptions={{
     values: "raw",
     json: "records",
     tableName: "products",
@@ -434,8 +434,8 @@ const formats = {
 - **CSV and TXT.** The defaults are `quote: "always"`, a comma (use any single delimiter character
   except a quote or line break), `lineEnding: "\n"`, a header and no final newline. With
   `quote: "needed"`, a quote, delimiter or line break in a field makes it quoted. Set
-  `header: false` to start with the first data row. Set `bom: false` on `exportOptions` for a file
-  without the byte-order mark.
+  `header: false` to start with the first data row. Set `bom: false` on `tableExportOptions` for a
+  file without the byte-order mark.
 - **JSON and SQL.** `json: "records"` gives objects by header. `json: "table"` gives
   `{ header, data }` with cells keyed by position. Its default is text and `values: "raw"` preserves
   their scalar types. `tableName` sets the SQL table independently of the file name.
@@ -445,9 +445,28 @@ const formats = {
   `tableSheet(chosenColumns, rows, totalsByKey, "raw")` to make one. A server-paged table can export
   the rows it has. For the whole list, the Action reads the matching rows as its caller.
 
-With `values: "raw"`, XLSX stores strings as text cells and finite numbers as numeric cells. PDF
-column widths and alignments follow the visible titled columns in export order. When CSV uses
-`quote: "needed"`, a row containing one empty field is written as `""`.
+Use `tableExportOptions` for the full set of file settings. When supplied, this prop takes the place
+of `exportOptions`. With `values: "raw"`, XLSX stores strings as text cells and finite numbers as
+numeric cells. A single empty field with minimal CSV quoting is written as `""`.
+
+To save the same file from a browser button, import `downloadTableFile` from `copilotz/web`. This
+button downloads the displayed rows and the supplied total as a semicolon-delimited CSV.
+
+```tsx
+import {
+  Button,
+  downloadTableFile,
+  type ExportCell,
+  type TableExportOptions,
+  type TableExportSheet,
+  tableSheet,
+} from "copilotz/web";
+
+const totals: Record<string, ExportCell>[] = [{ name: "Total", units: 12 }];
+const stock: TableExportSheet = tableSheet(columns, products, totals, "raw");
+const options: TableExportOptions = { csv: { delimiter: ";", quote: "needed" }, values: "raw" };
+<Button onClick={() => downloadTableFile("csv", stock, "stock", options)}>Download stock</Button>;
+```
 
 ## A toolbar of your own
 
@@ -469,36 +488,54 @@ fits.
 
 ## Printing a table
 
-Use `tablePdf` from `copilotz/web/export` in an Action to make attachment bytes, or give `DataTable`
-the same layout in `exportOptions.pdf`. Named paper (`"a4"` or `"letter"`) defaults to landscape. A
-`[width, height]` pair uses points (72 per inch). The first page holds the logo and title lines.
-`titleLines` supplies multiple lines in place of `title`. Every page repeats the column headings,
-and totals print in bold after the last row.
+Use `exportTableFile("pdf", sheet, name, { pdf })` in an Action for an attachment, or pass the same
+layout to `DataTable` in `tableExportOptions.pdf`. Named paper (`"a4"` or `"letter"`) defaults to
+landscape. A `[width, height]` pair uses points (72 per inch). The first page holds the logo,
+`titleLines` and `subtitle`. Every page repeats the column headings. Totals print in bold after the
+last row.
 
 ```ts
-import { pdfImage, tablePdf } from "copilotz/web/export";
+import {
+  exportTableFile,
+  type PdfImage,
+  pdfImage,
+  type TablePdfOptions,
+} from "copilotz/web/export";
 
 export async function invoicePdf(logoBytes: Uint8Array) {
-  const logo = await pdfImage(logoBytes);
-  return tablePdf({
-    headers: ["Product", "Amount"],
-    rows: [["Coffee", "12.50"]],
-    footerRows: [["Total", "12.50"]],
-  }, {
+  const logo: PdfImage = await pdfImage(logoBytes);
+  const pdf: TablePdfOptions = {
     size: "letter",
     orientation: "portrait",
-    fontSize: 10,
-    title: "Invoice 1042",
-    subtitle: ["Customer 27", "November orders"],
+    titleLines: ["Invoice 1042", "Customer 27"],
+    subtitle: "November orders",
     headerImage: { image: logo, width: 60, height: 60 * logo.height / logo.width },
-    columns: [{}, { width: 90, align: "right" }],
-  });
+    columns: { qty: { width: 16 }, amount: { width: 90, align: "right" } },
+  };
+  return exportTableFile(
+    "pdf",
+    {
+      keys: ["qty", "amount"],
+      headers: ["Qty", "Amount"],
+      rows: [[1, "1234.56"]],
+      footerRows: [["", "1234.56"]],
+    },
+    "invoice-1042",
+    { pdf },
+  );
 }
 ```
 
-Each fixed column width is in points. The other columns share the remaining width. Alignment is
-`"left"`, `"center"` or `"right"`. On a `DataTable`, list PDF columns in the order of its titled
-columns. The table keeps widths and alignment with their fields when the chooser hides one.
+**Use column keys for widths and alignment.** In the example, `amount` keeps its 90-point width
+whenever it is visible. A `DataTable` supplies the keys automatically. On a hand-built sheet, give
+`keys` in header order, or use the header text as the key when `keys` is omitted. Fixed widths use
+points. Other columns share the remaining width. Alignment is `"left"`, `"center"` or `"right"`.
+
+A positional array applies to the columns **as exported** on each download. These are the visible
+titled columns in display order. Initially hidden columns, columns hidden later in the chooser and
+untitled action columns consume no slots. For example, with Warehouse hidden and Qty and Amount
+visible, `columns: [{ width: 16 }, { width: 90, align: "right" }]` gives Amount 90 points. If Qty is
+then hidden, Amount takes the first slot.
 
 ## Dates
 
@@ -667,8 +704,8 @@ const receipt = documentPdf([[
 
 `Barcode` draws an SVG of whole-pixel bars. `width` sets the space available, `height` the bars'
 height, and `caption` shows the value beneath. Its quiet margins are on by default. Code 128 packs
-digit pairs where they fit (`set="B"` uses text throughout). Choose `format="code39"`,
-`format="ean8"` or `format="ean13"` for the other symbols.
+digit pairs where they fit (`set="B"` uses text throughout). Use `ProductBarcode` with
+`format="code39"`, `format="ean8"` or `format="ean13"` for the other symbols.
 
 ## Images and barcodes in a document
 
@@ -696,21 +733,40 @@ export async function invoiceFiles(logoBytes: Uint8Array) {
 
 EAN-8 takes seven digits and EAN-13 takes twelve, or give the complete number and its check digit is
 verified. Keep leading zeros by passing a string. Code 39 accepts uppercase letters, digits, space
-and `-.$/+%`. Set `check: true` for its Mod 43 character. `bars()` gives the same vector geometry
-for other renderers. A product screen can print the complete EAN under its SVG:
+and `-.$/+%`. The encoders return alternating bar and space widths in modules. Use `barcodeBars`
+when a renderer needs each bar's position and width.
+
+```ts
+import {
+  barcodeBars,
+  type BarcodeOptions,
+  code39,
+  ean13,
+  ean8,
+  eanDigits,
+} from "copilotz/web/export";
+
+const product = eanDigits("590123412345", 13);
+const options: BarcodeOptions = { format: "ean13", quiet: true };
+const geometry = barcodeBars(product, 300, options);
+const retail = [ean8("0123456"), ean13(product)];
+const shelf = code39("SHELF-2", { check: true }); // Include the Mod 43 check character.
+```
+
+A product screen can print the complete EAN under its SVG:
 
 ```tsx
-import { Barcode } from "copilotz/web";
+import { ProductBarcode } from "copilotz/web";
 
-<Barcode format="ean13" value="590123412345" width={300} height={60} caption />;
+<ProductBarcode format="ean13" value="590123412345" width={300} height={60} caption />;
 ```
 
 Barcode widths grow to fit at least one whole unit per module, including the requested quiet
 margins. For example, Code 128 with `SKU-12345` and quiet margins grows from a requested 120 units
 to 143. EAN-13 with quiet margins requires 113 pixels for PNG or 113 points for PDF. In
 `drawDocumentPdf`, omitting the barcode's `width` uses the space from its `x` position to the page
-edge. Printed bars extending beyond the page raise a `RangeError`. The blank quiet margins can
-extend beyond its edges.
+edge. A width or height of zero or less raises a `RangeError`, as do printed bars extending beyond
+the page. The blank quiet margins can extend beyond its edges.
 
 ## A route's own page
 

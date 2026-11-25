@@ -19,6 +19,7 @@ export {
   exportTableFile,
   type Sheet,
   type TableExportFormat,
+  type TableExportOptions,
   type TableExportSheet,
   toCsv,
   toExcel,
@@ -36,12 +37,13 @@ export {
   type PdfFont,
   type PdfOptions,
   tablePdf,
+  type TablePdfOptions,
   textWidth,
   wrapText,
 } from "./toolkit/pdf.ts";
 export { barcodePng } from "./toolkit/barcode-png.ts";
 export { code39, ean13, ean8, eanDigits } from "./toolkit/retail-barcodes.ts";
 export { type PdfImage, pdfImage } from "./toolkit/pdf-image.ts";
-export { type BarcodeOptions, bars, code128 } from "./toolkit/code128.ts";
+export { barcodeBars, type BarcodeOptions, bars, code128 } from "./toolkit/code128.ts";
 
 export { tableSheet } from "./toolkit/table-sheet.ts";

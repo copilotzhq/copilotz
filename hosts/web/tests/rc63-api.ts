@@ -31,6 +31,19 @@ export function title(props: ComponentProps<typeof web.DataTable>): string {
   return props.exportOptions?.pdf?.title?.trim() ?? "";
 }
 
+// Metadata attached by the application before assigning to an rc.63 type.
+const invoice = { headers: ["Amount"], rows: [[42]], footerRows: [{ Amount: 42 }], keys: 17 };
+export const invoiceSheet: files.Sheet = invoice;
+const settings = {
+  bom: false,
+  csv: "accounting",
+  formats: 42,
+  pdf: { title: "Invoice", columns: "net" },
+};
+export const invoiceOptions: files.ExportOptions = settings;
+const label = { barcode: "SKU", width: 100, height: 30, x: 0, y: 0, format: 42, check: "paid" };
+export const invoiceLabel: files.Drawn = label;
+
 // Both directions catch changes to existing fields and new required members.
 type Compatible<A, B> = [A, B] extends [B, A]
   ? Exclude<keyof B, keyof A> extends never ? true : false
@@ -40,6 +53,16 @@ export type FileContracts = [
   Check<Compatible<files.ExportFormat, Format>>,
   Check<Compatible<web.ExportChoice, Choice>>,
   Check<Compatible<files.Sheet, Sheet>>,
+  Check<Compatible<keyof files.Sheet, keyof Sheet>>,
+  Check<Compatible<keyof files.ExportOptions, keyof Options>>,
+  Check<Compatible<keyof files.PdfOptions, keyof Pdf>>,
+  Check<Compatible<keyof NonNullable<Parameters<typeof files.bars>[2]>, "set" | "quiet">>,
+  Check<
+    Compatible<
+      keyof Extract<files.Drawn, { barcode: string }>,
+      "barcode" | "x" | "y" | "width" | "height" | "set" | "quiet" | "color"
+    >
+  >,
   Check<Compatible<files.ExportOptions, Options>>,
   Check<Compatible<files.PdfOptions, Pdf>>,
   Check<Compatible<Parameters<typeof web.download>, FileArgs>>,

@@ -13,6 +13,8 @@ import {
   exportTableFile,
   guard,
   type Sheet,
+  type TableExportOptions,
+  type TableExportSheet,
   toCsv,
   toExcel,
   toJson,
@@ -32,6 +34,16 @@ const sheet: Sheet = {
     ["@sum", "-12.5", "-x"],
   ],
 };
+
+function csvFile(sheet: TableExportSheet, options: TableExportOptions) {
+  return String(exportTableFile("csv", sheet, "report", { ...options, bom: false }).content);
+}
+
+function pdfFile(sheet: TableExportSheet, pdf: TableExportOptions["pdf"]) {
+  const { content } = exportTableFile("pdf", sheet, "report", { pdf });
+  assert(content instanceof Uint8Array);
+  return content;
+}
 
 /** A zip's entries, read back: name, stored data, and the CRC it says. */
 function unzip(bytes: Uint8Array) {
@@ -167,7 +179,7 @@ test("CSV and TXT preserve raw and written numbers and guard formula-like text",
     );
   }
   assertEquals(
-    toCsv({ headers: ["Delta"], rows: [[-1e-7], ["-1e-7"]] }, {
+    csvFile({ headers: ["Delta"], rows: [[-1e-7], ["-1e-7"]] }, {
       csv: { quote: "needed" },
     }),
     "Delta\n-1e-7\n-1e-7",
@@ -249,7 +261,7 @@ test("CSV dialect quotes only what needs it and keeps the formula guard", () => 
     footerRows: [["Total", 7]],
   };
   assertEquals(
-    toCsv(input, {
+    csvFile(input, {
       csv: {
         quote: "needed",
         delimiter: ";",
@@ -261,14 +273,14 @@ test("CSV dialect quotes only what needs it and keeps the formula guard", () => 
     '\'=1;"quote"""\r\n"a;b";"a\nb"\r\nTotal;7\r\n',
   );
   assertEquals(
-    toCsv({ headers: ["A"], rows: [] }, { csv: { header: false, finalNewline: true } }),
+    csvFile({ headers: ["A"], rows: [] }, { csv: { header: false, finalNewline: true } }),
     "",
   );
   assertEquals(
-    toCsv(input, { csv: { delimiter: "\t", lineEnding: "\r" } }).split("\r")[0],
+    csvFile(input, { csv: { delimiter: "\t", lineEnding: "\r" } }).split("\r")[0],
     '"First"\t"Second"',
   );
-  assertThrows(() => toCsv(input, { csv: { delimiter: "" } }));
+  assertThrows(() => csvFile(input, { csv: { delimiter: "" } }));
 });
 
 test("custom serializers get the projected sheet, totals, base name and options", () => {
@@ -340,14 +352,18 @@ test("all eight built-in formats include the supplied totals", () => {
     footerRows: [["Grand Total", 2]],
   };
   for (const format of ["csv", "txt", "xlsx", "excel", "sql", "pdf", "json", "xml"] as const) {
-    const { content } = exportFile(format, sheet, "products");
+    const { content } = exportTableFile(format, sheet, "products");
     const text = typeof content === "string" ? content : new TextDecoder().decode(content);
     assertStringIncludes(text, "Grand Total");
   }
-  assertEquals(JSON.parse(toJson(sheet, { json: "table" })).data.at(-1), {
-    0: "Grand Total",
-    1: "2",
-  });
+  assertEquals(
+    JSON.parse(String(exportTableFile("json", sheet, "products", { json: "table" }).content)).data
+      .at(-1),
+    {
+      0: "Grand Total",
+      1: "2",
+    },
+  );
 });
 
 test("a table PDF repeats headings, lays out its logo and titles, and aligns its totals", async () => {
@@ -358,7 +374,7 @@ test("a table PDF repeats headings, lays out its logo and titles, and aligns its
     footerRows: [["Total", 40]],
   };
   const file = String.fromCharCode(
-    ...tablePdf(sheet, {
+    ...pdfFile(sheet, {
       size: [300, 200],
       fontSize: 10,
       titleLines: ["Orders", "November"],
@@ -376,11 +392,16 @@ test("a table PDF repeats headings, lays out its logo and titles, and aligns its
   assertStringIncludes(file, "q 40 0 0 16 36 148 cm /Im1 Do Q");
   const x = Number(file.match(/Tf ([\d.]+) [\d.]+ Td \(40\) Tj/)![1]);
   assertEquals(x, 249.88); // right edge 264, minus padding 3 and Helvetica Bold's 11.12 points
+  const keyed = { amount: { align: "right" }, order: { width: 130 } } as const;
+  const positional = [{ width: 130 }, { align: "right" as const }];
+  const expected = pdfFile(sheet, { columns: positional });
+  assertEquals(pdfFile({ ...sheet, keys: ["order", "amount"] }, { columns: keyed }), expected);
+  assertEquals(pdfFile(sheet, { columns: { Amount: keyed.amount, Order: keyed.order } }), expected);
   const letter = String.fromCharCode(
-    ...tablePdf(sheet, { size: "letter", orientation: "portrait" }),
+    ...pdfFile(sheet, { size: "letter", orientation: "portrait" }),
   );
   assertStringIncludes(letter, "/MediaBox [0 0 612 792]");
-  assertThrows(() => tablePdf(sheet, { size: [100, 150], columns: [{ width: 90 }] }));
+  assertThrows(() => pdfFile(sheet, { size: [100, 150], columns: [{ width: 90 }] }));
 });
 
 test("automatic columns in a custom PDF layout leave room for a single digit", () => {
@@ -398,7 +419,7 @@ test("automatic columns in a custom PDF layout leave room for a single digit", (
   ];
   const sheet = { headers, rows: [headers.map((h) => h === "Qty" ? 9 : h.repeat(40))] };
   for (const orientation of ["landscape", "portrait"] as const) {
-    const pdf = tablePdf(sheet, { size: "a4", orientation, subtitle: "Open purchases" });
+    const pdf = pdfFile(sheet, { size: "a4", orientation, subtitle: "Open purchases" });
     assertStringIncludes(new TextDecoder().decode(pdf), "(9) Tj");
   }
 });
@@ -440,11 +461,11 @@ test("an Action makes invoice attachments through the server export entry point"
 
 test("minimal CSV quotes preserve a single empty field as a record", () => {
   assertEquals(
-    toCsv({ headers: ["Value"], rows: [[""]] }, { csv: { quote: "needed" } }),
+    csvFile({ headers: ["Value"], rows: [[""]] }, { csv: { quote: "needed" } }),
     'Value\n""',
   );
   assertEquals(
-    toCsv({ headers: ["A", "B"], rows: [["", ""]] }, { csv: { quote: "needed" } }),
+    csvFile({ headers: ["A", "B"], rows: [["", ""]] }, { csv: { quote: "needed" } }),
     "A,B\n,",
   );
 });

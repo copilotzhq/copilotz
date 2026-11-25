@@ -26,12 +26,21 @@ table exports, printed invoices and barcode labels. The guides ship with the run
   declared grant (`as`) takes effect. `transaction: true` opens or joins a transaction and rolls
   back the writes together on failure. An Action with no parameters can omit `input`. An explicit
   schema types both `run` and `allow`.
-- **Table files and printed documents.** Give `DataTable` a custom `formats` record, or share it
-  with `TableExportFormats`. Export visible columns with totals, raw or displayed values, a CSV
-  dialect or a SQL table name. The toolbar accepts the screen's controls and can show a lone page
-  size. `tablePdf` takes a paper size, headings, a logo, column widths and alignment. `pdfImage`
-  prepares a PNG or JPEG for it or a `drawDocumentPdf` page. Code 39 (with optional Mod 43), EAN-8
-  and EAN-13 join Code 128 on screen and in PDF. `barcodePng` makes an image for a label or email.
+- **Table files.** `tableSheet` projects the exported columns and totals into a `TableExportSheet`
+  of `ExportCell` values. `exportTableFile` builds the file and `downloadTableFile` saves it in the
+  browser. `TableExportOptions` sets `values` (raw or displayed), the SQL `tableName` and the `csv`
+  dialect (`quote`, `delimiter`, `lineEnding`, `finalNewline`, `header`).
+- **Table controls.** Give `DataTable` the file settings in `tableExportOptions` and totals by
+  column key in `footerRows`. Supply a `TableExportFormat` through `formats` or share formats
+  through `TableExportFormats`. `exportChoices` orders the available menu entries. `toolbarContent`
+  adds a button or filter. `showSinglePageSize` keeps a lone page size visible on `DataTable` and
+  `Pagination`.
+- **Printed invoices and labels.** `TablePdfOptions` adds `size`, `titleLines`, `subtitle`,
+  `headerImage` and `columns` with widths and alignment by key or in exported order. `pdfImage`
+  prepares a reusable `PdfImage` from PNG or JPEG. `drawDocumentPdf` places images and vector
+  barcodes on a page. `ProductBarcode`, `barcodeBars` and `barcodePng` draw the symbol selected by
+  `BarcodeOptions.format`. `code39` supports Mod 43 with `check`, `ean8` and `ean13` encode retail
+  symbols, and `eanDigits` completes or verifies the check digit.
 - **Mail in tests.** `captureEmail()` keeps messages and attachments sent through `email.send`.
   Inspect `messages` and reset with `clear()`. The capture adapter can also write MIME messages as
   `.eml` files.

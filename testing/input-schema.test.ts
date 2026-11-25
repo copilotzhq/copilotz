@@ -1,0 +1,263 @@
+import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
+import { inputSchemas } from "../cli/input-schema.ts";
+import { validator } from "../runtime/mod.ts";
+import { productSchema } from "./fixtures/input-schema/contracts.ts";
+import { runtime, tempDir, test } from "./mod.ts";
+
+const fixture = (name: string) =>
+  fileURLToPath(new URL(`./fixtures/input-schema/${name}.ts`, import.meta.url));
+const order = fixture("order.place");
+const product = fixture("product.edit");
+
+type Results = Awaited<ReturnType<typeof inputSchemas>>;
+function generated(results: Results, file: string) {
+  const result = results.get(file);
+  assert.ok(result?.schema && typeof result.schema === "object", result?.error);
+  return result.schema;
+}
+
+test("one program reads the Actions, their imports, descriptions and constraints in a stable order", async () => {
+  const explicit = fixture("explicit");
+  const empty = fixture("no-parameter");
+  const files = [order, product, explicit, empty];
+  let programs = 0;
+  const results = await inputSchemas(files, {
+    ts: {
+      ...ts,
+      createProgram: new Proxy(ts.createProgram, {
+        apply(target, receiver, args) {
+          programs++;
+          return Reflect.apply(target, receiver, args);
+        },
+      }),
+    },
+  });
+  assert.equal(programs, 1);
+  for (const skipped of [explicit, empty]) {
+    assert.ok(results.has(skipped));
+    assert.equal(results.get(skipped), undefined);
+  }
+  // Resolve TypeScript from the app on the second pass, with a different file order.
+  const again = await inputSchemas(files.toReversed());
+  for (const file of files) {
+    assert.equal(JSON.stringify(results.get(file)), JSON.stringify(again.get(file)));
+  }
+
+  const schema = generated(results, order);
+  assert.equal(schema.description, "An order placed for a customer.");
+  assert.deepEqual(schema.required, [
+    "approved",
+    "customerId",
+    "delivery",
+    "discount",
+    "lines",
+    "priority",
+  ]);
+  assert.equal(schema.additionalProperties, false);
+  const fields = schema.properties!;
+  assert.deepEqual(Object.keys(fields), Object.keys(fields).sort());
+  assert.deepEqual(fields.customerId, {
+    type: "string",
+    description: "Who placed the order.",
+    minLength: 2,
+    maxLength: 6,
+    pattern: "^[A-Z]+$",
+    examples: ["AC", "WEST"],
+  });
+  assert.deepEqual(fields.lines, {
+    type: "array",
+    description: "Each product once.",
+    minItems: 1,
+    maxItems: 3,
+    uniqueItems: true,
+    items: {
+      type: "object",
+      additionalProperties: false,
+      required: ["quantity", "sku"],
+      properties: {
+        name: { type: "string" },
+        sku: { ...fields.customerId as object, description: "The customer's account code." },
+        quantity: {
+          type: "integer",
+          description: "Units on this line.",
+          minimum: 1,
+          maximum: 20,
+          default: 1,
+        },
+      },
+    },
+  });
+  assert.deepEqual(fields.ratio, { type: "number", exclusiveMinimum: 0, exclusiveMaximum: 1 });
+  assert.deepEqual(fields.cents, { type: "integer" });
+  assert.deepEqual(fields.receipt, { type: "string", format: "email" });
+  assert.deepEqual(fields.priority, { enum: [1, 2, 3] });
+  assert.deepEqual(fields.prepaid, { const: true });
+  assert.deepEqual(fields.status, { enum: ["draft", "sent"] });
+  assert.deepEqual(fields.canceled, { type: "null" });
+  assert.deepEqual(fields.weights, {
+    type: "object",
+    properties: {},
+    additionalProperties: { type: "number" },
+  });
+
+  const p = generated(results, product).properties!;
+  assert.deepEqual(p.original, productSchema);
+  assert.deepEqual(p.key, {
+    ...productSchema,
+    properties: { code: productSchema.properties.code },
+    required: ["code"],
+  });
+  const { required: _, ...base } = productSchema;
+  assert.deepEqual(p.patch, {
+    ...base,
+    properties: { price: productSchema.properties.price, note: productSchema.properties.note },
+  });
+});
+
+test("the runtime's Action input check accepts and refuses the generated shapes", async () => {
+  const schema = generated(await inputSchemas([order]), order);
+  const check = validator(schema, 'action "order.place" input');
+  const line = { sku: "AB", quantity: 1 };
+  const sample = {
+    customerId: "AC",
+    lines: [line],
+    delivery: { kind: "collect", location: "west" },
+    priority: 2,
+    approved: false,
+    discount: null,
+  };
+  check(sample);
+  check({
+    ...sample,
+    discount: 0.5,
+    delivery: { kind: "ship", postalCode: "12345" },
+    counts: ["red", 1, 2],
+    window: ["2026-11-24T12:00:00Z"],
+    marker: [],
+    reason: "requested",
+    weights: { box: 2 },
+  });
+  for (
+    const changes of [
+      { extra: true },
+      { customerId: "lowercase" },
+      { lines: [] },
+      { lines: [line, line] },
+      { lines: [{ ...line, quantity: 1.5 }] },
+      { lines: [{ ...line, quantity: 0 }] },
+      { lines: [{ ...line, quantity: 21 }] },
+      { lines: [{ ...line, discontinued: true }] },
+      { approved: 0 },
+      { delivery: { kind: "ship", location: "west" } },
+      { delivery: { kind: "collect" } },
+      { priority: 5 },
+      { weights: { box: "large" } },
+      { cents: 2.3 },
+      { ratio: 1 },
+      { window: [] },
+      { window: ["yesterday"] },
+      { counts: ["red", "two"] },
+      { window: Array(3).fill("2026-11-24T12:00:00Z") },
+      { marker: [1] },
+      { prepaid: false },
+    ]
+  ) {
+    assert.throws(
+      () => check({ ...sample, ...changes }),
+      { code: "invalid" },
+      JSON.stringify(changes),
+    );
+  }
+  const { customerId: _, ...missing } = sample;
+  assert.throws(() => check(missing), { code: "invalid" });
+});
+
+test("a type the generator cannot represent names its Action, property and reason", async () => {
+  const dir = tempDir();
+  const cases = [
+    ["() => void", "functions"],
+    ["symbol", "symbol"],
+    ["bigint", "bigint"],
+    ["T", "generic"],
+    ["Partial<T>", "generic"],
+    ["{ [K in keyof T]: number }", "generic"],
+    ["any", "any"],
+    ["unknown", "unknown"],
+    ["Product<number>", "class instance"],
+    ["Date", "class instance"],
+    ["Recursive", "recursive"],
+    ["never", "never"],
+    ["undefined", "undefined"],
+    ["Record<number, string>", "index signatures"],
+  ];
+  const files = cases.map(([type], i) => {
+    const path = join(dir, `action-${i}.ts`);
+    writeFileSync(
+      path,
+      `class Product<T> { code!: T; } class Date {} interface Recursive { next: Recursive }
+      export default {run<T>(_ctx: unknown, _input: {lines: {field: ${type}}[]}) {}};`,
+    );
+    return path;
+  });
+  const results = await inputSchemas(files, { ts });
+  for (const [i, file] of files.entries()) {
+    const message = results.get(file)?.error ?? "";
+    for (
+      const part of [
+        file,
+        "input.lines[].field",
+        cases[i][1],
+        "write `input` by hand for this Action",
+      ]
+    ) {
+      assert.ok(message.includes(part), message);
+    }
+  }
+});
+
+test("a supplied tsconfig resolves app path aliases and preserves nullable types", async () => {
+  const dir = tempDir();
+  const config = join(dir, "tsconfig.app.json");
+  writeFileSync(
+    config,
+    JSON.stringify({ compilerOptions: { paths: { "app/*": ["./*"] }, strictNullChecks: false } }),
+  );
+  writeFileSync(join(dir, "customer.ts"), "export interface Customer { name: string | null }");
+  const file = join(dir, "order.ts");
+  writeFileSync(
+    file,
+    'import type { Customer } from "app/customer"; export default {run(_ctx: unknown, input: Customer) {}}',
+  );
+  const schema = generated(await inputSchemas([file], { ts, tsconfig: config }), file);
+  const check = validator(schema, "customer");
+  check({ name: null });
+  check({ name: "Ana" });
+  assert.throws(() => check({ name: 2 }), { code: "invalid" });
+});
+
+test("an app missing TypeScript gets its installation instruction", async () => {
+  const file = join(tempDir(), "order.ts");
+  await assert.rejects(inputSchemas([file]), /typescript as a devDependency of the app/);
+});
+
+test({
+  name: "Deno resolves the app's compiler from its import map without node_modules",
+  ignore: runtime !== "deno",
+  async fn() {
+    const dir = tempDir();
+    writeFileSync(
+      join(dir, "deno.jsonc"),
+      JSON.stringify({ imports: { typescript: `npm:typescript@${ts.version}` }, lock: false }),
+    );
+    const file = join(dir, "order.ts");
+    writeFileSync(file, "export default {run(_ctx: unknown, date: Date) {}}");
+    assert.deepEqual(generated(await inputSchemas([file]), file), {
+      type: "string",
+      format: "date-time",
+    });
+  },
+});

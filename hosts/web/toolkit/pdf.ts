@@ -27,7 +27,7 @@
  */
 import type { ExportCell, Sheet } from "./export.ts";
 import type { PdfImage } from "./pdf-image.ts";
-import { type BarcodeOptions, bars } from "./code128.ts";
+import { type BarcodeOptions, layoutBars } from "./code128.ts";
 
 /** How the PDF looks: its page, its title, and its colours (`#rrggbb`). */
 export type PdfOptions = {
@@ -641,10 +641,15 @@ function draw(
         } cm /${name} Do Q`,
       );
     } else {
-      if (!(item.x >= 0 && item.x < width)) {
-        throw new RangeError(`Barcode x must be on the page (0 <= x < ${width}).`);
+      const drawn = layoutBars(item.barcode, item, item.width, width - item.x);
+      const first = drawn.bars[0];
+      const last = drawn.bars[drawn.bars.length - 1];
+      if (
+        !(item.x + first.x >= 0 && item.x + last.x + last.w <= width &&
+          item.y >= 0 && item.height >= 0 && item.y + item.height <= height)
+      ) {
+        throw new RangeError("Barcode bars must fit on the page.");
       }
-      const drawn = bars(item.barcode, item.width ?? width - item.x, item);
       // Whole modules, as the screen's: a module is the most whole points that fit.
       ops.push(`${rgb(item.color ?? "#000")} rg`);
       for (const bar of drawn.bars) {

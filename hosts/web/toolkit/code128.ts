@@ -217,6 +217,16 @@ export function bars(
   width?: number,
   options: BarcodeOptions = {},
 ): { module: number; width: number; bars: { x: number; w: number }[] } {
+  return layoutBars(text, options, width, 300);
+}
+
+/** An explicit width must fit the symbol. A preferred width can grow to one unit per module. */
+export function layoutBars(
+  text: string,
+  options: BarcodeOptions,
+  width: number | undefined,
+  preferredWidth: number,
+) {
   const widths = options.format === "code39"
     ? code39(text, options)
     : options.format === "ean8"
@@ -228,7 +238,7 @@ export function bars(
   const left = !options.quiet ? 0 : options.format === "ean13" ? 11 : retail ? 7 : 10;
   const right = !options.quiet ? 0 : retail ? 7 : 10;
   const modules = widths.reduce((a, b) => a + b, 0) + left + right;
-  const available = width === undefined ? Math.max(300, modules) : width;
+  const available = width === undefined ? Math.max(preferredWidth, modules) : width;
   if (!Number.isFinite(available) || available < modules) {
     throw new RangeError(`Barcode width must be finite and at least ${modules} units.`);
   }

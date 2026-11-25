@@ -327,9 +327,10 @@ function readPattern(
   pattern: string,
   locale: string,
   localeSeparators: boolean,
-): Read | undefined {
+  interpret: (read: Read) => string | undefined,
+  widths?: { d: number; M: number },
+): string | undefined {
   const order: string[] = [];
-  const months = new Map<string, string[]>();
   const tokens = [...pattern.matchAll(TOKENS)];
   const timed = tokens.some(([token]) => TIME_LETTERS.has(token));
   const seconds = tokens.some(([token]) => token === "ss");
@@ -341,7 +342,8 @@ function readPattern(
     source += spaced(pattern.slice(last, end));
   };
   const digits = (kind: string) => {
-    source += "(\\p{Nd}{1,2})";
+    const width = widths && (kind === "d" || kind === "M") ? widths[kind] : "1,2";
+    source += `(\\p{Nd}{${width}})`;
     order.push(kind);
   };
   for (const hit of tokens) {
@@ -361,20 +363,7 @@ function readPattern(
       source += timed ? "((?<!\\p{Nd})\\p{Nd}{4}(?!\\p{Nd})|\\p{Nd}{2})" : "(\\p{Nd}{2})";
       order.push("yy");
     } else if (token === "MMMM" || token === "MMM") {
-      const names = Array.from(
-        { length: 12 },
-        (_, i) =>
-          asciiDigits(formatPattern(dayOf(2000, i + 1, 1), token, locale), locale)
-            .toLowerCase().replace(/\.$/, ""),
-      );
-      months.set(token, names);
-      // Numeric month names can use the locale's digits too. Look up the captured name below.
-      const alternatives = names.map((name) => {
-        const localized = escaped(name).replace(/\d/g, (d) => `[${d}${localeDigits(locale)[+d]}]`);
-        // A numeric name needs boundaries: 112 could mean January 12 or November 2.
-        return /^\d+$/.test(name) ? `(?<!\\p{Nd})${localized}(?!\\p{Nd})` : localized;
-      });
-      source += `(${alternatives.join("|")})\\.?`;
+      source += "(\\p{L}+\\.?)";
       order.push(token);
     } else if (token === "MM" || token === "M") digits("M");
     else if (token === "dd" || token === "d") digits("d");
@@ -402,6 +391,7 @@ function readPattern(
   const match = new RegExp(`^${source}$`, "iu").exec(text.trim());
   if (!match) return undefined;
   const read: Read = {};
+  let localizedDate = false;
   for (const [i, kind] of order.entries()) {
     const token = match[i + 1];
     if (token === undefined) continue; // seconds left out
@@ -409,11 +399,21 @@ function readPattern(
       read.period = token;
       continue;
     }
-    const part = asciiDigits(token, locale);
     if (kind === "MMM" || kind === "MMMM") {
-      read.month = months.get(kind)!.indexOf(part.toLowerCase()) + 1;
+      const wanted = token.toLowerCase().replace(/\.$/, "");
+      let found: number | undefined;
+      for (let month = 1; month <= 12; month++) {
+        const name = formatPattern(dayOf(2000, month, 1), kind, locale);
+        if (name.toLowerCase().replace(/\.$/, "") !== wanted) continue;
+        if (found !== undefined) return undefined;
+        found = month;
+      }
+      if (found === undefined) return undefined;
+      read.month = found;
       continue;
     }
+    const part = asciiDigits(token, locale);
+    if (part !== token && ["y", "yy", "M", "d"].includes(kind)) localizedDate = true;
     const value = Number(part);
     if (!Number.isInteger(value)) return undefined;
     if (kind === "y") read.year = value;
@@ -425,7 +425,20 @@ function readPattern(
     else if (kind === "m") read.minute = value;
     else if (kind === "s") read.second = value;
   }
-  return read;
+  let value = interpret(read);
+  if (localizedDate && !widths && order.includes("d") && order.includes("M")) {
+    // rc.63 never read locale digits. For that extension, try both widths of each
+    // numeric date field so compact input cannot silently select one of two dates.
+    for (const d of [1, 2]) {
+      for (const M of [1, 2]) {
+        const candidate = readPattern(text, pattern, locale, localeSeparators, interpret, { d, M });
+        if (candidate === undefined) continue;
+        if (value !== undefined && value !== candidate) return undefined;
+        value = candidate;
+      }
+    }
+  }
+  return value;
 }
 
 /** The day a reading names, if it's a real one: no February 30th, no 13th month. */
@@ -451,8 +464,7 @@ export function parsePattern(
   localeSeparators = false,
 ): string | undefined {
   if (hasTime(pattern)) return undefined;
-  const read = readPattern(text, pattern, locale, localeSeparators);
-  return read && dayRead(read);
+  return readPattern(text, pattern, locale, localeSeparators, dayRead);
 }
 
 /** Whether a pattern shows seconds: a clock that doesn't ticks once a minute. */
@@ -718,20 +730,21 @@ export function parseDayTime(
     if (isDayTime(kept)) return kept;
   }
   const by = pattern ?? dayTimePattern(locale);
-  const read = readPattern(typed, by, locale, localeSeparators);
-  const day = read && dayRead(read);
-  if (!read || !day || read.hour === undefined) return undefined;
-  let hour = read.hour;
-  if (read.twelve) {
-    const pm = read.period === undefined ? false : afternoon(read.period, locale);
-    if (hour < 1 || hour > 12 || pm === undefined) return undefined;
-    hour = (hour % 12) + (pm ? 12 : 0);
-  }
-  const minute = read.minute ?? 0;
-  if (hour > 23 || minute > 59 || (read.second ?? 0) > 59) return undefined;
-  // Seconds the app's pattern writes are always there; the language's, only when typed.
-  const second = read.second ?? (pattern !== undefined && showsSeconds(pattern) ? 0 : undefined);
-  return dayTimeOf(day, hour, minute, second);
+  return readPattern(typed, by, locale, localeSeparators, (read) => {
+    const day = dayRead(read);
+    if (!day || read.hour === undefined) return undefined;
+    let hour = read.hour;
+    if (read.twelve) {
+      const pm = read.period === undefined ? false : afternoon(read.period, locale);
+      if (hour < 1 || hour > 12 || pm === undefined) return undefined;
+      hour = (hour % 12) + (pm ? 12 : 0);
+    }
+    const minute = read.minute ?? 0;
+    if (hour > 23 || minute > 59 || (read.second ?? 0) > 59) return undefined;
+    // Seconds the app's pattern writes are always there; the language's, only when typed.
+    const second = read.second ?? (pattern !== undefined && showsSeconds(pattern) ? 0 : undefined);
+    return dayTimeOf(day, hour, minute, second);
+  });
 }
 
 /**

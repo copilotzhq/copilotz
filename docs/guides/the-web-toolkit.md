@@ -256,6 +256,11 @@ field (`<Form errors={{ price: "Give the price as a number." }}>`). `useFormStat
 it's `submitting`; outside a `Form`, `useFormSubmit` says `inForm: false`, so a part can show its
 own Submit. Handing values up and saving them in one Action keeps the save one transaction.
 
+Each part receives the live form and the attempt's `AbortSignal`. After each `await`, check
+`if (signal.aborted) return` before reading or changing the form. Unmounting the form or hiding it
+with React `Activity` aborts the attempt. A later part sees edits made while an earlier part was
+waiting.
+
 ```tsx
 <Form
   onSubmit={(values, form) =>
@@ -803,8 +808,8 @@ dateOfDayTime("2026-11-16 14:30", "America/Sao_Paulo")?.toISOString(); // "2026-
 ```
 
 A timed `DateRangePicker` accepts its displayed date and 24-hour clock in From and To, including
-seconds. `parseDayTime` accepts the locale's decimal digits and the month names that `MMM` and
-`MMMM` display.
+seconds. Numeric fields accept the locale's decimal digits. `MMM` and `MMMM` read month names made
+of letters, with an optional trailing dot. Use `M` or `MM` for a numeric month.
 
 `dateOfDayTime` uses the same rule in the process or browser's zone and an explicit IANA zone. A
 skipped wall time moves forward by the length of the gap. A repeated wall time uses its earlier
@@ -946,7 +951,8 @@ import { Barcode } from "copilotz/web";
 Barcode widths must fit at least one whole unit per module, including the requested quiet margins.
 An undersized barcode raises a `RangeError` with its minimum width. EAN-13 with quiet margins
 requires 113 pixels for PNG or 113 points for PDF. In `documentPdf`, omitting the barcode's `width`
-uses the space from its `x` position to the page edge.
+uses the space from its `x` position to the page edge. All printed bars must fit on the page. The
+blank quiet margins can extend beyond its edges.
 
 ## A route's own page
 

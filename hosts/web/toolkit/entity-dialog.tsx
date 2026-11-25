@@ -41,7 +41,7 @@
  * />
  * ```
  */
-import { type ReactNode, useId, useRef, useState } from "react";
+import { type ReactNode, useId, useState } from "react";
 import { Button } from "./button.tsx";
 import { Checkbox } from "./checkbox.tsx";
 import { DatePicker } from "./date-picker.tsx";
@@ -195,11 +195,6 @@ function RecordDialog<T extends Record<string, unknown>>(
   const [draft, setDraft] = useState<Partial<T>>(start);
   const [missing, setMissing] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  const controls = useRef<Record<string, unknown>>({});
-  const submitting = (busy: boolean, element: HTMLFormElement) => {
-    if (busy) controls.current = formValues(element);
-    setSaving(busy);
-  };
 
   const set = (change: Partial<T>) => {
     setDraft((now) => ({ ...now, ...change }));
@@ -210,7 +205,7 @@ function RecordDialog<T extends Record<string, unknown>>(
     element: HTMLFormElement,
     signal: AbortSignal,
   ) => {
-    const ready = entityValues(fields, { ...draft, ...controls.current, ...handed }, given);
+    const ready = entityValues(fields, { ...draft, ...formValues(element), ...handed }, given);
     setMissing(ready.missing);
     if (ready.missing.length) return;
     const answer = await onSubmit(ready.values as Omit<T, "_id">, element, ready.unset);
@@ -237,7 +232,7 @@ function RecordDialog<T extends Record<string, unknown>>(
         </>
       }
     >
-      <Form id={form} onSubmittingChange={submitting} errors={errors} onSubmit={submit}>
+      <Form id={form} onSubmittingChange={setSaving} errors={errors} onSubmit={submit}>
         {fields.map((field) => (
           <Field
             key={field.name}

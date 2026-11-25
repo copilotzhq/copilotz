@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { mock } from "node:test";
 import { Window } from "happy-dom";
 import { act, type ReactNode } from "react";
 import { createRuntime, definePlugin, type ViewContext } from "../../../runtime/mod.ts";
@@ -34,7 +35,7 @@ async function page(run: (render: (node: ReactNode) => Promise<void>) => Promise
   }
 }
 
-const submit = () => act(() => document.querySelector("form")!.requestSubmit());
+const submit = () => act(async () => document.querySelector("form")!.requestSubmit());
 
 /** Change the control as typing does, before React handles the input event. */
 function typeInto(input: HTMLInputElement, value: string) {
@@ -51,6 +52,59 @@ function Upload({ wait }: { wait: Promise<void> }) {
   });
   return null;
 }
+
+test("an entity saves a named control after its part normalizes it", () =>
+  page(async (render) => {
+    const saved: unknown[] = [];
+    function Name() {
+      useFormSubmit((form) => {
+        form.querySelector<HTMLInputElement>('input[name="name"]')!.value = "normalized";
+      });
+      return <input name="name" defaultValue="original" />;
+    }
+    await render(
+      <EntityDialog title="Edit" onSubmit={(record) => saved.push(record)} onClose={() => {}}>
+        <Name />
+      </EntityDialog>,
+    );
+    await submit();
+    assert.deepEqual(saved, [{ name: "normalized" }]);
+  }));
+
+test("removing a form during an upload releases its parent's busy state once", () =>
+  page(async (render) => {
+    const upload = Promise.withResolvers<void>();
+    const changes: boolean[] = [];
+    const parent = (open: boolean) => (
+      <main>
+        {open && (
+          <Form onSubmittingChange={(busy) => changes.push(busy)}>
+            <Upload wait={upload.promise} />
+          </Form>
+        )}
+      </main>
+    );
+    await render(parent(true));
+    await submit();
+    assert.deepEqual(changes, [true]);
+    await render(parent(false));
+    assert.deepEqual(changes, [true, false]);
+    await act(async () => upload.resolve());
+    assert.deepEqual(changes, [true, false]);
+  }));
+
+test("the submit helper flushes the form's completion inside act", () =>
+  page(async (render) => {
+    await render(<EntityDialog title="Edit" onClose={() => {}} onSubmit={() => false} />);
+    const errors = mock.method(console, "error");
+    try {
+      await submit();
+      assert.equal(document.querySelector("form")!.hasAttribute("aria-busy"), false);
+      assert.equal(errors.mock.callCount(), 0);
+    } finally {
+      errors.mock.restore();
+    }
+  }));
 
 test("an attachment in flight belongs to the dialog that started it", () =>
   page(async (render) => {
@@ -72,7 +126,7 @@ test("an attachment in flight belongs to the dialog that started it", () =>
     await submit();
     const busy = document.querySelector<HTMLButtonElement>("footer button")!.disabled;
     await edit("B");
-    await act(() => upload.resolve());
+    await act(async () => upload.resolve());
     assert.deepEqual({ saves, closed, busy }, { saves: [], closed: [], busy: true });
     assert.equal(document.querySelector<HTMLButtonElement>("footer button")!.disabled, false);
   }));
@@ -94,7 +148,7 @@ test("a dismissed save cannot close the next dialog when it finishes", () =>
     await submit();
     assert.equal(document.querySelector("dialog")?.getAttribute("aria-busy"), "true");
     await edit("B");
-    await act(() => save.resolve());
+    await act(async () => save.resolve());
     assert.deepEqual(closed, []);
   }));
 
@@ -118,7 +172,7 @@ test("a form captures its callbacks before awaiting its first part", () =>
     await show("first");
     await submit();
     await show("second");
-    await act(() => upload.resolve());
+    await act(async () => upload.resolve());
     assert.deepEqual(ran, ["first", "save first"]);
   }));
 

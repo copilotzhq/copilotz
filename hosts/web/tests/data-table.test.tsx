@@ -36,6 +36,23 @@ const html = (node: React.ReactNode) =>
 
 const count = (text: string, part: string) => text.split(part).length - 1;
 
+test("inline UI columns infer the row in their text and renderer", () => {
+  const page = html(
+    <DataTable
+      rows={[{ id: 1, total: 12.5 }]}
+      rowKey={(row) => row.id}
+      columns={[{
+        key: "total",
+        title: "Total",
+        align: "right",
+        text: (row) => row.total.toFixed(2),
+        render: (row) => <strong>{row.total.toFixed(2)}</strong>,
+      }]}
+    />,
+  );
+  assertStringIncludes(page, "<strong>12.50</strong>");
+});
+
 test("headers sort and say so; a column of links is named; hidden columns don't show", () => {
   const page = html(
     <DataTable

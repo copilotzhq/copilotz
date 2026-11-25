@@ -34,7 +34,7 @@ const SHEET = sheet(
 
 /** Draws a scannable SVG with an optional human-readable caption. */
 export function Barcode(
-  { value, width = 300, height = 50, caption = false, quiet = true, set, format, check, className }:
+  { value, width, height = 50, caption = false, quiet = true, set, format, check, className }:
     & BarcodeOptions
     & {
       value: string;

@@ -295,16 +295,21 @@ type Read = {
   second?: number;
 };
 
-/** Reads decimal digits as the locale writes them, keeping ASCII input valid too. */
 const numerals = new Map<string, string[]>();
-export function asciiDigits(text: string, locale: string): string {
-  if (!/(?![0-9])\p{Nd}/u.test(text)) return text;
+function localeDigits(locale: string): string[] {
   let digits = numerals.get(locale);
   if (!digits) {
     const format = new Intl.NumberFormat(locale, { useGrouping: false });
     digits = Array.from({ length: 10 }, (_, n) => format.format(n));
     numerals.set(locale, digits);
   }
+  return digits;
+}
+
+/** Reads decimal digits as the locale writes them, keeping ASCII input valid too. */
+export function asciiDigits(text: string, locale: string): string {
+  if (!/(?![0-9])\p{Nd}/u.test(text)) return text;
+  const digits = localeDigits(locale);
   return text.replace(/\p{Nd}/gu, (digit) => {
     const value = digits.indexOf(digit);
     return value < 0 ? digit : String(value);
@@ -330,7 +335,7 @@ function readPattern(text: string, pattern: string, locale: string): Read | unde
     source += loosely(pattern.slice(last, end));
   };
   const digits = (kind: string) => {
-    source += "(\\d{1,2})";
+    source += "(\\p{Nd}{1,2})";
     order.push(kind);
   };
   for (const hit of tokens) {
@@ -342,11 +347,11 @@ function readPattern(text: string, pattern: string, locale: string): Read | unde
       continue;
     }
     if (token === "yyyy") {
-      source += "(\\d{4})";
+      source += "(\\p{Nd}{4})";
       order.push("y");
     } else if (token === "yy") {
       // Two digits, or the whole year typed.
-      source += "(\\d{4}|\\d{2})";
+      source += "(\\p{Nd}{4}|\\p{Nd}{2})";
       order.push("yy");
     } else if (token === "MMMM" || token === "MMM") {
       const names = Array.from(
@@ -356,7 +361,11 @@ function readPattern(text: string, pattern: string, locale: string): Read | unde
             .toLowerCase().replace(/\.$/, ""),
       );
       months.set(token, names);
-      source += `(${names.map(escaped).join("|")}\\.?)`;
+      // Numeric month names can use the locale's digits too. Look up the captured name below.
+      const alternatives = names.map((name) =>
+        escaped(name).replace(/\d/g, (digit) => `[${digit}${localeDigits(locale)[+digit]}]`)
+      );
+      source += `(${alternatives.join("|")})\\.?`;
       order.push(token);
     } else if (token === "MM" || token === "M") digits("M");
     else if (token === "dd" || token === "d") digits("d");
@@ -367,12 +376,12 @@ function readPattern(text: string, pattern: string, locale: string): Read | unde
       digits("m");
       // Seconds the pattern doesn't write may still be typed.
       if (!seconds) {
-        source += "(?::(\\d{1,2}))?";
+        source += "(?::(\\p{Nd}{1,2}))?";
         order.push("s");
       }
     } else if (token === "ss") {
       // Seconds may be left out, and the words before them too.
-      source = `${source.slice(0, words)}(?:${source.slice(words)}(\\d{1,2}))?`;
+      source = `${source.slice(0, words)}(?:${source.slice(words)}(\\p{Nd}{1,2}))?`;
       order.push("s");
     } else if (token === "a") {
       source += "(\\p{L}+\\.?(?:\\s?\\p{L}+\\.?)?)";
@@ -381,23 +390,31 @@ function readPattern(text: string, pattern: string, locale: string): Read | unde
     words = source.length;
   }
   literal(pattern.length);
-  const match = new RegExp(`^${source}$`, "iu").exec(asciiDigits(text.trim(), locale));
+  const match = new RegExp(`^${source}$`, "iu").exec(text.trim());
   if (!match) return undefined;
   const read: Read = {};
   for (const [i, kind] of order.entries()) {
-    const part = match[i + 1];
-    if (part === undefined) continue; // seconds left out
-    if (kind === "y") read.year = +part;
-    else if (kind === "yy") read.year = part.length === 4 ? +part : 2000 + +part;
-    else if (kind === "M") read.month = +part;
-    else if (kind === "MMM" || kind === "MMMM") {
-      read.month = months.get(kind)!.indexOf(part.toLowerCase().replace(/\.$/, "")) + 1;
-    } else if (kind === "d") read.day = +part;
-    else if (kind === "H") read.hour = +part;
-    else if (kind === "h") Object.assign(read, { hour: +part, twelve: true });
-    else if (kind === "m") read.minute = +part;
-    else if (kind === "s") read.second = +part;
-    else if (kind === "a") read.period = part;
+    const token = match[i + 1];
+    if (token === undefined) continue; // seconds left out
+    if (kind === "a") {
+      read.period = token;
+      continue;
+    }
+    const part = asciiDigits(token, locale);
+    if (kind === "MMM" || kind === "MMMM") {
+      read.month = months.get(kind)!.indexOf(part.toLowerCase()) + 1;
+      continue;
+    }
+    const value = Number(part);
+    if (!Number.isInteger(value)) return undefined;
+    if (kind === "y") read.year = value;
+    else if (kind === "yy") read.year = part.length === 4 ? value : 2000 + value;
+    else if (kind === "M") read.month = value;
+    else if (kind === "d") read.day = value;
+    else if (kind === "H") read.hour = value;
+    else if (kind === "h") Object.assign(read, { hour: value, twelve: true });
+    else if (kind === "m") read.minute = value;
+    else if (kind === "s") read.second = value;
   }
   return read;
 }

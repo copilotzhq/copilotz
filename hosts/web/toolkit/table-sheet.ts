@@ -10,16 +10,28 @@ export type SheetColumn<R> = {
   text?(row: R): string;
 };
 
+// A named column needs only the sheet fields. An inline UI column may carry other options,
+// and its renderer gets the same row type as its text.
+type AppColumn<R> =
+  | SheetColumn<R>
+  | (SheetColumn<R> & {
+    render?(row: R): unknown;
+    [option: string]: unknown;
+  });
+
 /** A cell as text: its column's `text`, or `row[key]`. */
-export function textOf<R>(column: SheetColumn<R>, row: R): string {
+export function textOf<R, C extends AppColumn<R> = AppColumn<R>>(
+  column: C,
+  row: R,
+): string {
   if (column.text) return column.text(row);
   const value = (row as Record<string, unknown>)?.[column.key];
   return value === undefined || value === null ? "" : String(value);
 }
 
 /** Projects the chosen columns, displayed or raw, into a file. Untitled action columns stay on screen. */
-export function tableSheet<R>(
-  columns: SheetColumn<R>[],
+export function tableSheet<R, C extends AppColumn<R> = AppColumn<R>>(
+  columns: C[],
   rows: R[],
   footerRows: Record<string, ExportCell>[] = [],
   values: ExportOptions["values"] = "display",

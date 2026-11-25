@@ -3,7 +3,7 @@
  * draws them: what's current is said, what's chosen is said, every control
  * is named, and a form gets what they hold.
  */
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "../../../testing/mod.ts";
 import { AppBar, TopBar } from "../toolkit/app-bar.tsx";
@@ -139,4 +139,10 @@ test("a barcode is a picture named by its value, its caption hidden from readers
     '<span class="copilotz-barcode-caption" aria-hidden="true">POS 12</span>',
   );
   assert(/<path d="M\d+ 0h\d+v50h-\d+z/.test(code));
+});
+
+test("a long Code 128 draws at its minimum width when width is omitted", () => {
+  const value = "A".repeat(25);
+  assertStringIncludes(html(<Barcode value={value} />), 'viewBox="0 0 330 50"');
+  assertThrows(() => html(<Barcode value={value} width={329} />), RangeError, "330");
 });

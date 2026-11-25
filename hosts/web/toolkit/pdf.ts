@@ -528,7 +528,7 @@ export type Drawn =
     barcode: string;
     x: number;
     y: number;
-    width: number;
+    width?: number;
     height: number;
     color?: string;
   });

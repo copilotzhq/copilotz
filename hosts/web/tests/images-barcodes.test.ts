@@ -203,3 +203,13 @@ test("an EAN-13 and its quiet margins must fit inside the requested PDF label", 
     "113",
   );
 });
+
+test("a long Code 128 fits its PNG and PDF when width is omitted", async () => {
+  const value = "A".repeat(25);
+  const label = { barcode: value, quiet: true, x: 0, y: 0, height: 10 };
+  assertEquals(bars(value, undefined, { quiet: true }).width, 330);
+  assertEquals(readPng(await barcodePng(value)).width, 330);
+  assertEquals(documentPdf([[label]]), documentPdf([[{ ...label, width: 330 }]]));
+  await assertRejects(() => barcodePng(value, { width: 329 }), RangeError, "330");
+  assertThrows(() => documentPdf([[{ ...label, width: 329 }]]), RangeError, "330");
+});

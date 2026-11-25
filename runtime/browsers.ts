@@ -50,6 +50,7 @@
  * - **Ended** (signed out, erased: `end`): an actor's connections close, its
  *   resume credentials go, and a connection let in before is never ready.
  */
+import type { AppName, LocalQuery } from "./names.ts";
 import type { JsonObject, WorkInput } from "@oxian/oxian-js";
 import { holderOf } from "./actor.ts";
 import type { ViewContext } from "./define.ts";
@@ -91,11 +92,14 @@ export type Push = { key: string } & Answer;
 /** Makes the read it's given, as whoever observes it. */
 export function readView(remote: Remote, ctx: ViewContext): unknown {
   if ("query" in remote) {
-    return ctx.db.collection(remote.collection).query(remote.query, remote.params).value;
+    return ctx.db.collection(remote.collection as AppName<"collections">).query(
+      remote.query as LocalQuery,
+      remote.params,
+    ).value;
   }
   const { op } = remote;
   if (op.op === "edges" || op.op === "outcome") throw new Error(`A browser can't read ${op.op}`);
-  const collection = ctx.db.collection(op.collection);
+  const collection = ctx.db.collection(op.collection as AppName<"collections">);
   switch (op.op) {
     case "find":
       return collection.find(op.filter, op.options).value;

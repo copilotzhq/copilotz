@@ -7,6 +7,7 @@
  * little. Observed (observe.ts), the same Views run again when what they read
  * changes.
  */
+import type { AppName, LocalQuery } from "./names.ts";
 import type { Pipeline } from "./aggregate.ts";
 import type { DeleteResult, UpdateResult } from "./collection.ts";
 import type { WriteOp } from "./ops.ts";
@@ -82,8 +83,8 @@ export function viewCollections(
     const id = canonical(key);
     return (pass.slots.get(id) ?? load(pass, id, ask, source)).read as Read<T>;
   };
-  const collection = <T>(name: string): ViewCollection<T> => {
-    const from = (source: ReadContext) => source.db.collection<T>(name);
+  const collection = <T, C extends AppName<"collections">>(name: C): ViewCollection<T, C> => {
+    const from = (source: ReadContext) => source.db.collection<T, C>(name);
     return {
       find: (filter = {}, options = {}) =>
         read([name, "find", filter, options], (s) => from(s).find(filter, options).toArray()),
@@ -95,8 +96,8 @@ export function viewCollections(
         read([name, "aggregate", pipeline], (s) => from(s).aggregate<R>(pipeline)),
       nearest: (vector, options = {}) =>
         read([name, "nearest", vector, options], (s) => from(s).nearest(vector, options)),
-      query: <R>(query: string, params?: unknown) =>
-        read([name, "query", query, params ?? null], (s) => from(s).query<R>(query, params)),
+      query: <R>(query: LocalQuery<C>, params?: unknown) =>
+        read<R>([name, "query", query, params ?? null], (s) => from(s).query<R>(query, params)),
       insertOne: (doc) =>
         writing({ op: "insert", collection: name, docs: [doc as never] }) as Promise<
           { acknowledged: true; insertedId: string }

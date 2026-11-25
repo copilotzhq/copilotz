@@ -39,8 +39,8 @@ export const accountsUsesView = (_: unknown, ctx: ViewContext<ReactNode>): React
   const use = Object.values(uses).find((u) => u.provider === line.provider);
   const whose = use?.label ?? `your ${use?.title} account`;
   const about = line.tone === "plan"
-    ? `On ${whose}, not the app's API key. Manage it in Connected accounts.`
-    : "Its sign-in needs you: reconnect it in Connected accounts.";
+    ? `On ${whose}, not the app's API key. Manage it in Your AI.`
+    : "Its sign-in needs you: reconnect it in Your AI.";
   return (
     <div className={`accounts-uses accounts-uses-${line.tone}`}>
       <style href="accounts-web" precedence="copilotz">{STYLE}</style>

@@ -22,8 +22,8 @@ export const accountsPaletteView = (
   if (!providers || !accounts) return null;
   const items: PaletteItem[] = [{
     key: "accounts:open",
-    label: "Connected accounts",
-    icon: "lock",
+    label: "Your AI",
+    icon: "sparkles",
     keywords: [...WORDS, ...providers.map((p) => p.title)],
     href: "/accounts",
   }];

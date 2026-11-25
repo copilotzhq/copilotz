@@ -1,6 +1,6 @@
 ---
 title: "Agents on people's own plans"
-description: "An agent's model calls can run on the plan of the person it works for (Claude, ChatGPT through Codex, Google AI through Antigravity), through the plan's CLI on a computer of theirs: the providers, signing in once, and what runs where."
+description: "An agent's model calls can run on the plan of the person it works for (Claude, ChatGPT through Codex, Google AI through Antigravity), through the plan's CLI on a computer of theirs: the providers, signing in once (installing a missing CLI), signing out, what a cloud computer keeps, and what runs where."
 section: Guides
 order: 6
 ---
@@ -53,6 +53,65 @@ the person's own use of it. The app keeps only whether it's done, and as whom.
 A plan runs only on its person's own computer, and never on one shared into a space where others'
 agents work on it as them: the sign-in would be theirs to reach.
 
+### A missing CLI
+
+On macOS and Linux, Sign in installs a CLI that isn't there yet. The dialog says what it runs on
+that computer (the plan's official installer), and its button is "Install Claude Code and sign in":
+the person's click is the consent. The installer runs in the computer's home, then the sign-in
+starts. An installer that fails shows what it said last, and the command to run by hand. On Windows,
+the page shows the command to run, as before.
+
+From code, `install: true` asks for the same on the first call; later calls poll as any sign-in's:
+
+```ts
+let step = await runtime.call("computer.engine.login", {
+  computer,
+  engine: "claude",
+  install: true,
+}, { actor: person });
+while (step.state === "running") {
+  step = await runtime.call("computer.engine.login", { computer, engine: "claude" }, {
+    actor: person,
+  });
+}
+```
+
+What runs is the app's own command for the plan (`curl -fsSL https://claude.ai/install.sh | bash`,
+`npm i -g @openai/codex`, Antigravity's script), never one the caller gives.
+
+### Signing out
+
+`computer.engine.logout` (Sign out, in the menu of a computer's line on the plan) runs the CLI's own
+sign-out on that computer, in the folder the program keeps for it: `claude auth logout`,
+`codex logout`. Their sign-ins are kept there, so when that fails the folder goes instead. The
+person's own sign-in (`~/.claude`, `~/.codex`) is never touched. Antigravity has no sign-out of its
+own here (its sign-in may be in the system's keyring): signing it out fails (`unsupported`), saying
+to sign out in Antigravity on that computer. A cloud computer wakes to sign out; a laptop must be
+on.
+
+```ts
+await runtime.call("computer.engine.logout", { computer, engine: "claude" }, { actor: person });
+```
+
+A cloud computer signed in to a plan isn't shared into a space where others' agents work on it as
+them (they answer to whoever they work for, outside a Personal space). `computer.share` and
+`computer.move` refuse it (`plan_signed_in`), and the page says to sign out of it first, with a link
+to the plans. Keeping the yes to oneself there (`answers: "owner"`) isn't sharing it with others'
+agents, so it may go.
+
+A person's own computer is theirs to share, signed in or not. Sharing it, the page says what it
+means: the space's agents run on it as them, and can read everything they can there, their own
+sign-ins included (Claude Code, Codex, SSH keys). Either way, a computer shared with others' agents
+never runs anyone's plan, and its plans can't sign in there.
+
+## What a cloud computer keeps
+
+A cloud computer serves each wake on a new VM, and only its disk lasts. So its work (its terminal,
+jobs, the plans' CLIs and its browser) runs in a home on the disk: `HOME` is `<disk>/home`, npm's
+global prefix is under it (`NPM_CONFIG_PREFIX=<disk>/home/.npm-global`), and the folders both put
+programs in come first on the `PATH`. A CLI installed there, by Sign in or from its terminal, is
+there on its next wake, signed in as it was. A person's own computer keeps their own home.
+
 ## What runs where
 
 One step of a turn is one call. The computer program keeps a session per conversation in the CLI. A
@@ -67,4 +126,15 @@ where the step began.
 
 The computer program speaks the Agent Client Protocol to the CLIs: Antigravity speaks it itself, and
 the program's own adapters speak it for Claude Code and Codex. None of them is shipped with the
-program: people install the CLI they use.
+program: people install the CLI they use, or Sign in installs it.
+
+## Known limits
+
+- A shared computer is shared whole: agents in its spaces can read everything on it, sign-ins kept
+  there included. Keep personal sign-ins on a computer you don't share.
+- Antigravity can't be signed out from here: its sign-in may be in the system's keyring, beside the
+  person's own use of it.
+- On a laptop, a CLI installed where the program doesn't look (npm's prefix under a version manager,
+  not on the program's `PATH`) isn't found: the page then shows the command to run by hand.
+- A computer program older than 1.0.0-rc.65 neither installs a CLI nor signs one out: Sign in says
+  it's missing, and Sign out fails, until it updates.

@@ -5871,6 +5871,9 @@
               },
               "stop": {
                 "type": "boolean"
+              },
+              "install": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -5880,6 +5883,42 @@
             "additionalProperties": false
           },
           "recorded": false,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
+          "name": "computer.engine.logout",
+          "summary": "Signs a plan's CLI out on one of your computers, by its own sign-out",
+          "input": {
+            "type": "object",
+            "properties": {
+              "computer": {
+                "type": "string"
+              },
+              "engine": {
+                "enum": [
+                  "claude",
+                  "codex",
+                  "antigravity"
+                ]
+              }
+            },
+            "required": [
+              "computer",
+              "engine"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
           "private": [],
           "callers": {
             "person": "yes",
@@ -7334,6 +7373,7 @@
             "computer.agents.login",
             "computer.agents.prompt",
             "computer.agents.cancel",
+            "computer.agents.logout",
             "computer.update"
           ]
         }

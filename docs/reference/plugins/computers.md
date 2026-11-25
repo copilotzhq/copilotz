@@ -46,7 +46,7 @@ Its named queries read for callers, as the rules let them:
 
 ## What it lets callers do
 
-Of its 32 Actions, people may call 20; agents may call 14; contacts and someone signed out may call
+Of its 33 Actions, people may call 21; agents may call 14; contacts and someone signed out may call
 none.
 
 | Action                   | Person | Agent | Contact | Anyone | Key | Routine | Maintenance | What it does                                                                        |
@@ -57,6 +57,7 @@ none.
 | `computer.engine`        | yes    | yes   | no      | no     | yes | yes     | no          | Runs one step of an agent's model call on its person's plan, on their computer.     |
 | `computer.engine.cancel` | yes    | yes   | no      | no     | yes | yes     | no          | Stops what an agent's model call is doing on its person's plan.                     |
 | `computer.engine.login`  | yes    | no    | no      | no     | no  | no      | no          | Signs a plan's CLI in on one of your computers, step by step.                       |
+| `computer.engine.logout` | yes    | no    | no      | no     | no  | no      | no          | Signs a plan's CLI out on one of your computers, by its own sign-out.               |
 | `computer.engines`       | yes    | no    | no      | no     | no  | no      | no          | Your computers, and which plans' CLIs each runs, signed in or not.                  |
 | `computer.forget`        | yes    | yes   | no      | no     | yes | yes     | no          | Forgets one of your computers.                                                      |
 | `computer.move`          | yes    | yes   | no      | no     | yes | yes     | no          | Moves one of your computers to another space.                                       |

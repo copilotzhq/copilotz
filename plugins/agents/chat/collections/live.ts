@@ -47,6 +47,20 @@ const liveSchema = {
       required: ["attempt", "at", "reason"],
     },
     /**
+     * Its model waits for the computer it runs on to wake (a person's plan
+     * on a cloud computer), since `at`, for about `seconds` when the app
+     * says, `slower` than usual when it says so. Gone once it's awake.
+     */
+    waking: {
+      type: "object",
+      properties: {
+        at: { type: "string" },
+        seconds: { type: "number" },
+        slower: { type: "boolean" },
+      },
+      required: ["at"],
+    },
+    /**
      * Its turn offers no tools, so every step is an answer: its words may
      * show to a contact as they're written. Without it, a step being written
      * may turn out private (its tools' calls, what it says before them): a
@@ -76,6 +90,7 @@ export type Live = {
   text: string;
   calls: LiveCall[];
   retry?: { attempt: number; at: string; reason: string };
+  waking?: { at: string; seconds?: number; slower?: true };
   open?: true;
   in?: string;
   at: string;

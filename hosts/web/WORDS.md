@@ -226,6 +226,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.startNewChat` | Start a new chat |
 | `chat.startsInPersonal` | Starts in Personal, just for you |
 | `chat.startsInSpace` | Starts in {space}, for its members |
+| `chat.stillWaking` | Still waking the computer… |
 | `chat.stop` | Stop |
 | `chat.stopped` | Stopped |
 | `chat.stopping` | Stopping… |
@@ -257,6 +258,10 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.voiceMessage` | Voice message |
 | `chat.waitingOnAnswer` | Waiting on your answer: your next message replies. |
 | `chat.waitingOnYou` | Waiting on you |
+| `chat.waking` | Waking the computer… |
+| `chat.wakingAbout` | one: Waking the computer… (about {count} second) / other: Waking the computer… (about {count} seconds) |
+| `chat.wakingSlower` | one: Waking the computer… (about {count} second: it takes longer at this hour) / other: Waking the computer… (about {count} seconds: it takes longer at this hour) |
+| `chat.wakingStatus` | waking its computer |
 | `chat.wantsTo` | {agent} wants to {doing} |
 | `chat.welcomeBack` | Back |
 | `chat.welcomeDone` | Get started |

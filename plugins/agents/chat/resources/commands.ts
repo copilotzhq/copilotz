@@ -7,6 +7,8 @@
  * (once, thread, routine, always, no; for an answer handed back, here or me).
  * `/move` says first who'll see the conversation there and what it drew on,
  * and moves it with `yes`; `/notes` opens a chat's staff notes, and back.
+ * `/archive` puts a conversation away, for everyone who sees it (`/threads
+ * archived` lists those), and `/restore` brings it back.
  * Where you are is your shell state: the open conversation is `open`, kind
  * `thread`, and the screen shows it through chat's `thread` View.
  */
@@ -28,6 +30,45 @@ const thread = async (term: Terminal) => {
 const go = (term: Terminal, id: string) =>
   term.set({ open: { kind: "thread", item: { _id: id } } });
 const none = (term: Terminal) => term.print(dim("No conversation yet."));
+
+/**
+ * The conversation `rest` names: by its number in the last list (`/threads`),
+ * or by its id or the start of it, archived or not; the open one, naming none.
+ */
+async function named(term: Terminal, rest: string): Promise<string | undefined> {
+  const given = rest.trim();
+  if (!given) return await thread(term);
+  const listed = (await term.state()).listed ?? [];
+  if (listed[Number(given) - 1]) return listed[Number(given) - 1];
+  const [all, archived] = await Promise.all([
+    term.runtime.query<Listed[]>("thread.recent", { limit: 1000 }),
+    term.runtime.query<Listed[]>("thread.recent", { limit: 1000, archived: true }),
+  ]);
+  return [...all, ...archived].find((t) => t._id.startsWith(given))?._id;
+}
+
+/** Archives the conversation `rest` names, or restores it (`chat.archive`). */
+async function archiving(term: Terminal, rest: string, archived: boolean) {
+  const id = await named(term, rest);
+  if (!id) {
+    return await term.print(
+      dim(rest.trim() ? "No such conversation; /threads lists them." : "No conversation yet."),
+    );
+  }
+  const { thread: chat } = await term.runtime.call<{ thread: string }>("chat.archive", {
+    thread: id,
+    archived,
+  });
+  await term.print(
+    dim(
+      archived
+        ? `Archived ${
+          chat.slice(0, 8)
+        }: /threads archived lists it, and a new message brings it back.`
+        : `Restored ${chat.slice(0, 8)}: /threads lists it again.`,
+    ),
+  );
+}
 
 /** This conversation's shared messages, inherited ones included, numbered as /history numbers them. */
 const numbered = async (term: Terminal, here: string) =>
@@ -211,28 +252,52 @@ export const commands: Commands = {
     },
   }),
   "/threads": command({
-    description: "The latest conversations",
-    async run(_, term) {
-      const threads = await term.runtime.query<Listed[]>("thread.recent", {});
+    description: "The latest conversations; /threads archived, those put away",
+    usage: "[archived]",
+    async run(rest, term) {
+      const archived = rest.trim() === "archived";
+      const threads = await term.runtime.query<Listed[]>(
+        "thread.recent",
+        archived ? { archived: true } : {},
+      );
       await term.set({ listed: threads.map((t) => t._id) });
       if (!threads.length) {
         return await term.print(
-          dim("No conversations you can see yet: yours, or in spaces you're a member of."),
+          dim(
+            archived
+              ? "No archived conversations: /archive puts one away."
+              : "No conversations you can see yet: yours, or in spaces you're a member of.",
+          ),
         );
       }
       const open = await thread(term);
       await term.show("threads", { threads, ...(open ? { open } : {}) });
-      await term.print(dim("/open <n> continues one."));
+      await term.print(
+        dim(
+          archived
+            ? "/open <n> opens one; /restore <n> brings it back."
+            : "/open <n> continues one.",
+        ),
+      );
     },
+  }),
+  "/archive": command({
+    description: "Put this conversation away (or one /threads listed, or named by id), for " +
+      "everyone who sees it: /threads leaves it out, /threads archived lists it, and a new " +
+      "message in it brings it back",
+    usage: "[n|id]",
+    run: (rest, term) => archiving(term, rest, true),
+  }),
+  "/restore": command({
+    description: "Bring an archived conversation back: this one, or one listed or named by id",
+    usage: "[n|id]",
+    run: (rest, term) => archiving(term, rest, false),
   }),
   "/open": command({
     description: "Continue a conversation, by number or id",
     usage: "<n|id>",
     async run(rest, term) {
-      const listed = (await term.state()).listed ?? [];
-      const all = await term.runtime.query<Listed[]>("thread.recent", { limit: 1000 });
-      const id = listed[Number(rest) - 1] ??
-        all.find((t) => rest && t._id.startsWith(rest))?._id;
+      const id = rest.trim() ? await named(term, rest) : undefined;
       if (!id) return await term.print(dim("No such conversation; /threads lists them."));
       await go(term, id);
       await term.print(dim(`Continuing ${id.slice(0, 8)}.`));

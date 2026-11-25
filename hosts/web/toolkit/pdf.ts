@@ -25,7 +25,8 @@
  * ]], { size: "receipt" });
  * ```
  */
-import { bars } from "./code128.ts";
+import type { PdfImage } from "./pdf-image.ts";
+import { type BarcodeOptions, bars } from "./code128.ts";
 
 /** How the PDF looks: its page, its title, and its colours (`#rrggbb`). */
 export type PdfOptions = {
@@ -171,9 +172,10 @@ const FACES: Record<PdfFont, [name: string, base: string]> = {
 function assemble(
   pages: { width: number; height: number; stream: string }[],
   fonts: PdfFont[],
+  images: Map<PdfImage, string> = new Map(),
 ): Uint8Array {
   const used = (Object.keys(FACES) as PdfFont[]).filter((font) => fonts.includes(font));
-  const objects: string[] = [
+  const objects: (string | (string | Uint8Array)[])[] = [
     "<< /Type /Catalog /Pages 2 0 R >>",
     "", // the pages, once their numbers are known
     ...used.map((font) =>
@@ -181,30 +183,82 @@ function assemble(
     ),
   ];
   const resources = used.map((font, i) => `/${FACES[font][0]} ${i + 3} 0 R`).join(" ");
+  const xobjects: string[] = [];
+  for (const [image, name] of images) {
+    const base = `/Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height}`;
+    const stream = (dict: string, data: Uint8Array) =>
+      objects.push([
+        `<< ${base} ${dict} /Length ${data.length} >>\nstream\n`,
+        data,
+        "\nendstream",
+      ]);
+    const mask = image.alpha &&
+      stream("/BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /FlateDecode", image.alpha);
+    const space = image.palette
+      ? `[/Indexed /DeviceRGB ${image.palette.length / 3 - 1} <${
+        Array.from(image.palette, (b) => b.toString(16).padStart(2, "0")).join("")
+      }>]`
+      : image.colors === 1
+      ? "/DeviceGray"
+      : image.colors === 3
+      ? "/DeviceRGB"
+      : "/DeviceCMYK";
+    const params = image.predictor
+      ? ` /DecodeParms << /Predictor 15 /Colors ${image.colors} /BitsPerComponent ${image.bits} /Columns ${image.width} >>`
+      : "";
+    const id = stream(
+      `/BitsPerComponent ${image.bits} /ColorSpace ${space} /Filter /${image.filter}${params}` +
+        (image.inverted ? " /Decode [1 0 1 0 1 0 1 0]" : "") + (mask ? ` /SMask ${mask} 0 R` : ""),
+      image.data,
+    );
+    xobjects.push(`/${name} ${id} 0 R`);
+  }
+  const imageResources = xobjects.length ? ` /XObject << ${xobjects.join(" ")} >>` : "";
   const kids: number[] = [];
   for (const { width, height, stream } of pages) {
     objects.push(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
     const contents = objects.length;
     objects.push(
       `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] ` +
-        `/Resources << /Font << ${resources} >> >> /Contents ${contents} 0 R >>`,
+        `/Resources << /Font << ${resources} >>${imageResources} >> /Contents ${contents} 0 R >>`,
     );
     kids.push(objects.length);
   }
   objects[1] = `<< /Type /Pages /Kids [${
     kids.map((k) => `${k} 0 R`).join(" ")
   }] /Count ${kids.length} >>`;
-  let out = "%PDF-1.4\n%\xe2\xe3\xcf\xd3\n";
+  const parts: (string | Uint8Array)[] = [];
+  let length = 0;
+  const write = (part: string | Uint8Array) => {
+    parts.push(part);
+    length += part.length;
+  };
+  write("%PDF-1.4\n%\xe2\xe3\xcf\xd3\n");
   const offsets: number[] = [];
   objects.forEach((body, i) => {
-    offsets.push(out.length);
-    out += `${i + 1} 0 obj\n${body}\nendobj\n`;
+    offsets.push(length);
+    write(`${i + 1} 0 obj\n`);
+    if (Array.isArray(body)) body.forEach(write);
+    else write(body);
+    write("\nendobj\n");
   });
-  const xref = out.length;
-  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n` +
-    offsets.map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("") +
-    `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
-  return Uint8Array.from(out, (c) => c.charCodeAt(0) & 0xff);
+  const xref = length;
+  write(
+    `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n` +
+      offsets.map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("") +
+      `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`,
+  );
+  const out = new Uint8Array(length);
+  let at = 0;
+  for (const part of parts) {
+    if (typeof part === "string") {
+      for (let i = 0; i < part.length; i++) out[at++] = part.charCodeAt(i);
+    } else {
+      out.set(part, at);
+      at += part.length;
+    }
+  }
+  return out;
 }
 
 /** Helvetica's widths (thousandths of its size), for its characters 32 to 126. */
@@ -376,17 +430,16 @@ export type Drawn =
     stroke?: string;
     thickness?: number;
   }
-  | {
-    /** A Code 128 barcode of this text, as `Barcode` draws it, at most `width` wide. */
+  | { image: PdfImage; x: number; y: number; width: number; height: number }
+  | (BarcodeOptions & {
+    /** A barcode of this text, as `Barcode` draws it, at most `width` wide. */
     barcode: string;
     x: number;
     y: number;
     width: number;
     height: number;
-    set?: "auto" | "B";
-    quiet?: boolean;
     color?: string;
-  };
+  });
 
 /** A page's size in points: a name, `[width, height]`, or a width and `"fit"` (as tall as what's on it). */
 export type PageSize =
@@ -423,7 +476,12 @@ function bottomOf(drawn: Drawn): number {
 }
 
 /** One page's drawing, as a content stream, its places turned to PDF's (from the bottom left). */
-function draw(items: Drawn[], height: number, fonts: Set<PdfFont>): string {
+function draw(
+  items: Drawn[],
+  height: number,
+  fonts: Set<PdfFont>,
+  images: Map<PdfImage, string>,
+): string {
   const ops: string[] = [];
   const up = (y: number) => n(height - y);
   for (const item of items) {
@@ -471,8 +529,16 @@ function draw(items: Drawn[], height: number, fonts: Set<PdfFont>): string {
           `${box} ${paint}`,
         ].filter(Boolean).join(" "),
       );
+    } else if ("image" in item) {
+      const name = images.get(item.image) ?? `Im${images.size + 1}`;
+      images.set(item.image, name);
+      ops.push(
+        `q ${n(item.width)} 0 0 ${n(item.height)} ${n(item.x)} ${
+          up(item.y + item.height)
+        } cm /${name} Do Q`,
+      );
     } else {
-      const drawn = bars(item.barcode, item.width, { set: item.set, quiet: item.quiet });
+      const drawn = bars(item.barcode, item.width, item);
       // Whole modules, as the screen's: a module is the most whole points that fit.
       ops.push(`${rgb(item.color ?? "#000")} rg`);
       for (const bar of drawn.bars) {
@@ -500,11 +566,12 @@ export function documentPdf(
     ? SIZES[size]
     : size;
   const fonts = new Set<PdfFont>();
+  const images = new Map<PdfImage, string>();
   const drawn = (pages.length ? pages : [[]]).map((items) => {
     const height = page.height === "fit"
       ? Math.ceil(Math.max(0, ...items.map(bottomOf)) + margin)
       : page.height;
-    return { width: page.width, height, stream: draw(items, height, fonts) };
+    return { width: page.width, height, stream: draw(items, height, fonts, images) };
   });
-  return assemble(drawn, [...fonts]);
+  return assemble(drawn, [...fonts], images);
 }

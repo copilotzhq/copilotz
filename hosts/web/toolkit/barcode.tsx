@@ -1,5 +1,5 @@
 /**
- * A Code 128 barcode (see `code128.ts`): what a receipt, a label or a shelf
+ * A product or order barcode (see `code128.ts`): what a receipt, a label or a shelf
  * tag prints for a scanner, as an SVG of whole-pixel bars at most `width`
  * pixels wide and `height` tall, named by its `value` for screen readers,
  * with the value under it when `caption` is on. It keeps the blank margin
@@ -13,7 +13,8 @@
  * ```
  */
 import type { ReactNode } from "react";
-import { bars } from "./code128.ts";
+import { type BarcodeOptions, bars } from "./code128.ts";
+import { eanDigits } from "./retail-barcodes.ts";
 import { cx } from "./cx.ts";
 import { sheet } from "./sheet.tsx";
 
@@ -31,23 +32,27 @@ const SHEET = sheet(
 `,
 );
 
+/** Draws a scannable SVG with an optional human-readable caption. */
 export function Barcode(
-  { value, width = 300, height = 50, caption = false, quiet = true, set, className }: {
-    value: string;
-    /** The most it may take, in pixels: its modules are whole pixels, as wide as fit. */
-    width?: number;
-    /** Its bars' height, in pixels. */
-    height?: number;
-    /** Prints the value under the bars. */
-    caption?: boolean;
-    /** The blank margin scanners need at each end (ten modules). */
-    quiet?: boolean;
-    /** Code set B only, as some systems print (digits aren't packed). */
-    set?: "auto" | "B";
-    className?: string;
-  },
+  { value, width = 300, height = 50, caption = false, quiet = true, set, format, check, className }:
+    & BarcodeOptions
+    & {
+      value: string;
+      /** The most it may take, in pixels: its modules are whole pixels, as wide as fit. */
+      width?: number;
+      /** Its bars' height, in pixels. */
+      height?: number;
+      /** Prints the value under the bars. */
+      caption?: boolean;
+      className?: string;
+    },
 ): ReactNode {
-  const drawn = bars(value, width, { quiet, ...(set ? { set } : {}) });
+  const label = format === "ean13"
+    ? eanDigits(value, 13)
+    : format === "ean8"
+    ? eanDigits(value, 8)
+    : value;
+  const drawn = bars(label, width, { quiet, set, format, check });
   // One path of rectangles, not a node per bar.
   const d = drawn.bars.map(({ x, w }) => `M${x} 0h${w}v${height}h-${w}z`).join("");
   return (
@@ -58,13 +63,13 @@ export function Barcode(
         height={height}
         viewBox={`0 0 ${drawn.width} ${height}`}
         role="img"
-        aria-label={value}
+        aria-label={label}
         shapeRendering="crispEdges"
       >
         <path d={d} fill="currentColor" />
       </svg>
       {caption
-        ? <span className="copilotz-barcode-caption" aria-hidden="true">{value}</span>
+        ? <span className="copilotz-barcode-caption" aria-hidden="true">{label}</span>
         : null}
     </span>
   );

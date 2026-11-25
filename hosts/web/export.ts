@@ -35,4 +35,7 @@ export {
   textWidth,
   wrapText,
 } from "./toolkit/pdf.ts";
-export { bars, code128 } from "./toolkit/code128.ts";
+export { barcodePng } from "./toolkit/barcode-png.ts";
+export { code39, ean13, ean8, eanDigits } from "./toolkit/retail-barcodes.ts";
+export { type PdfImage, pdfImage } from "./toolkit/pdf-image.ts";
+export { type BarcodeOptions, bars, code128 } from "./toolkit/code128.ts";

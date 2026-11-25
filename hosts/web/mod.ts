@@ -211,7 +211,10 @@ export { type Binding, shortcutLabel, useShortcuts } from "./toolkit/shortcuts.t
 export { NoPrint, PrintOnly } from "./toolkit/print.tsx";
 // Barcodes: Code 128, drawn, and as bars for a document made elsewhere.
 export { Barcode } from "./toolkit/barcode.tsx";
-export { bars, code128 } from "./toolkit/code128.ts";
+export { barcodePng } from "./toolkit/barcode-png.ts";
+export { code39, ean13, ean8, eanDigits } from "./toolkit/retail-barcodes.ts";
+export { type PdfImage, pdfImage } from "./toolkit/pdf-image.ts";
+export { type BarcodeOptions, bars, code128 } from "./toolkit/code128.ts";
 // Pages and details.
 export { Page } from "./toolkit/page.tsx";
 export { type Detail, DetailList } from "./toolkit/detail-list.tsx";

@@ -3,8 +3,10 @@
 This release finishes what rc.64 postponed. A retried Action finds the nested calls it completed,
 wherever it makes them, so both of rc.64's known issues are fixed and none are left. The web toolkit
 asks before going on and edits a record in a dialog. Chats can be archived, and a new message brings
-one back. Date ranges go to the second, and typed dates are read back. Rare cases are known limits,
-listed below, not code: the code stays small.
+one back. Date ranges go to the second, and typed dates are read back. A cloud computer keeps what's
+installed in its home, so a plan's CLI is still there after it sleeps; Sign in installs a missing
+CLI, and a plan signs out on one computer. Rare cases are known limits, listed below, not code: the
+code stays small.
 
 **Breaking:**
 
@@ -36,8 +38,6 @@ listed below, not code: the code stays small.
   answers only its own close and Escape, not those of a dialog shown inside it), `role`
   (`"alertdialog"`) and `aria-describedby`. Confirmations and record dialogs are always isolated:
   dismissing one never closes the `Dialog` or `Drawer` it's shown in.
-- **Words:** `toolkit.confirm`, `toolkit.delete` and `toolkit.notDone`, in English and Brazilian
-  Portuguese.
 - **Archiving a chat.** `chat.archive` (`{ thread, archived, latest? }`) puts a chat away for
   everyone who sees it, as its title is. A person who may write where the chat is archives it from
   its header's menu, a Chats tab row's menu or the command palette, or with `/archive` in the
@@ -71,6 +71,38 @@ listed below, not code: the code stays small.
   a time zone, by Temporal's "compatible" rule: a time the clocks skip moves forward by the gap, and
   a time they repeat is its first pass, as `new Date(…)` does in the page's zone. With no zone, it
   reads the page's clock as `Date` does (`TZ=GMT+3` is three hours behind UTC).
+- **A cloud computer keeps what's installed in its home.** In pool mode, a computer's work (its
+  terminal, jobs, the plans' CLIs and its browser) runs with `HOME` on its own disk (`<disk>/home`),
+  npm's global prefix under it (`NPM_CONFIG_PREFIX`), and both their programs' folders first on the
+  `PATH`. Claude Code from its installer, Codex from `npm i -g`, and anything else installed there
+  is still there on its next wake, on a new VM, signed in as it was. A person's own computer keeps
+  their own home.
+- **Sign in installs a missing CLI.** On macOS and Linux, a computer whose plan CLI is missing
+  offers "Install Claude Code and sign in", on the plan's card and in the sign-in dialog. The dialog
+  says what it runs there, and the click is the consent. `computer.engine.login` with
+  `install: true` runs the plan's official installer (the app's own command, never the caller's) in
+  the computer's home, then the sign-in. An installer that fails shows what it said last and the
+  command to run by hand. Windows keeps the instructions.
+- **A plan signs out on one computer.** `computer.engine.logout`, from the menu of the computer's
+  line on the plan. Claude Code and Codex run their own sign-out in the folder the computer program
+  keeps for them, and the folder goes when that fails. The person's own `~/.claude` and `~/.codex`
+  are never touched. Antigravity can't be signed out from here (`unsupported`): its sign-in may be
+  in the system's keyring. A cloud computer wakes to sign out; a laptop must be on.
+- **Words**, in English and Brazilian Portuguese: `toolkit.confirm`, `toolkit.delete` and
+  `toolkit.notDone` for the dialogs; `computers.installAndSignIn`, `installRuns`, `stepInstall`,
+  `installFailedTitle`, `installFailedText`, `signOut`, `signOutFailed`, `shareSignedIn` and
+  `shareOwnWarning` for plans on computers.
+
+**Changed:**
+
+- **A cloud computer signed in to a plan isn't shared with others' agents.** `computer.share` and
+  `computer.move` refuse it a desk where agents answer to whoever they work for, outside a Personal
+  space, while it last said it's signed in to a plan (`plan_signed_in`). Its person signs out of it
+  first; the share dialog says so, with a link to the plans. A person's own computer may still be
+  shared, and the dialog says what that means: the space's agents can read everything on it, its
+  owner's own sign-ins included. A computer shared with others' agents still runs nobody's plan.
+- A shared computer's line in the sign-in dialog says "Your plan runs on your own computer. This
+  shared one runs your agents' tools." (`computers.rowSharedSomewhere`).
 
 **Fixed, here since rc.63 or before:**
 
@@ -139,6 +171,13 @@ listed below, not code: the code stays small.
     new one.
   - `min` and `max` given as times of day hold for typed ends, not for picked days or presets.
   - The months' Next button goes past December 9999 without `max`.
+- **Computers and plans** ([the plans guide](docs/guides/agents-on-peoples-plans.md#known-limits)):
+  - A shared computer is shared whole: agents in its spaces can read everything on it, sign-ins kept
+    there included. Keep personal sign-ins on a computer you don't share.
+  - Antigravity can't be signed out from here: its sign-in may be in the system's keyring.
+  - On a laptop, a CLI installed where the program doesn't look (npm's prefix under a version
+    manager, not on the program's `PATH`) isn't found: the page then shows the command to run by
+    hand.
 
 **Docs:**
 
@@ -152,8 +191,11 @@ listed below, not code: the code stays small.
   restoring one, and what agents see.
 - The REST guide's list of Actions a key can't call names `chat.rename` (missing since rc.63) and
   `chat.archive`.
-- The "Find it" index in `AGENTS.md` has a Chats group, and lines for confirmations, record dialogs,
-  refused fields, ranges to the second, typed dates and nested calls.
+- [Agents on people's own plans](docs/guides/agents-on-peoples-plans.md) has "A missing CLI",
+  "Signing out", "What a cloud computer keeps" and its known limits.
+- The "Find it" index in `AGENTS.md` has two new groups, "Chats" and "Computers and plans", and
+  lines for confirmations, record dialogs, refused fields, ranges to the second, typed dates and
+  nested calls.
 
 **Upgrading:**
 
@@ -174,6 +216,9 @@ listed below, not code: the code stays small.
 - **Existing date pickers:** without `seconds`, `DateRangePicker` draws as in rc.64, and only reads
   From and To when they're done (Fixed, above). `DatePicker`, `DateTimePicker`, `parsePattern` and
   `parseDay` are unchanged.
+- **Computers:** an existing cloud computer gets its home at its next wake. A computer program older
+  than rc.65 neither installs a CLI nor signs one out: Sign in says the CLI is missing, and Sign out
+  fails, until it updates.
 
 ## 1.0.0-rc.64 — 2026-11-25
 

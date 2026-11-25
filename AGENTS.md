@@ -147,6 +147,17 @@ It runs on Node 24+, Deno 2.9+ and Bun.
 - Read a file without loading it in a list → `projection`, `runtime.bytes` →
   [Pictures in a list](docs/guides/a-business-apps-screens.md#pictures-in-a-list).
 
+**Computers and plans**
+
+- Keep a cloud computer's installed CLIs across sleep → `startPool` (its home: `<disk>/home`) →
+  [What a cloud computer keeps](docs/guides/agents-on-peoples-plans.md#what-a-cloud-computer-keeps).
+- Install a missing plan CLI, then sign in → `computer.engine.login` (`install: true`) →
+  [A missing CLI](docs/guides/agents-on-peoples-plans.md#a-missing-cli).
+- Sign a plan out on one computer → `computer.engine.logout` →
+  [Signing out](docs/guides/agents-on-peoples-plans.md#signing-out).
+- Share a computer signed in to a plan → `computer.share` (`plan_signed_in`) →
+  [Signing out](docs/guides/agents-on-peoples-plans.md#signing-out).
+
 ## How Copilotz works, in one minute
 
 An app is a **runtime** made of **plugins**. A plugin is plain objects, made of six primitives:

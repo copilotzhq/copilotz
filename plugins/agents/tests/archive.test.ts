@@ -85,11 +85,41 @@ for (const [store, make] of Object.entries(stores)) {
       assertEquals((await k.thread(notes))?.archived, undefined);
       for (const who of [ana, bob]) {
         assertEquals(await ids(k, who, { in: k.shop }), []);
-        assertEquals(await ids(k, who, { in: k.shop, archived: true }), [k.carlas]);
+        // Listed apart with the chat, its notes too (review L3: found where it is).
+        assertEquals(await ids(k, who, { in: k.shop, archived: true }), [notes, k.carlas]);
       }
       // Restored from the chat, both are listed again.
       await archive(k, ana, { thread: k.carlas, archived: false });
       assertEquals(await ids(k, bob, { in: k.shop }), [notes, k.carlas]);
+    }, { store: make });
+  });
+
+  // Review H1: from its notes, the notes' latest was checked, and the chat was archived.
+  test(`${store}: archived from its notes, what the chat said since keeps it out`, async () => {
+    await archiveKit(async (k) => {
+      await k.send({ thread: k.carlas, text: "where's my order?" }, carla);
+      const { thread: notes } = await k.runtime.call<{ thread: string }>("chat.notes", {
+        thread: k.carlas,
+      }, { actor: bob });
+      await k.send({ thread: notes, text: "she ordered on Monday", to: [] }, bob);
+      const notesLatest = (await k.thread(notes))!.latest!;
+      await k.send(
+        { thread: k.carlas, text: "WRONG ADDRESS, please stop the delivery", to: [] },
+        carla,
+      );
+      assertEquals(
+        await code(archive(k, bob, { thread: notes, archived: true, latest: notesLatest })),
+        "conflict",
+      );
+      assertEquals((await k.thread(k.carlas))?.archived, undefined);
+      assertEquals(await ids(k, bob, { in: k.shop }), [k.carlas, notes]);
+      // The newest of what the page showed, the chat's message now: it goes.
+      const chatLatest = (await k.thread(k.carlas))!.latest!;
+      assertEquals(
+        await code(archive(k, bob, { thread: notes, archived: true, latest: chatLatest })),
+        "done",
+      );
+      assert((await k.thread(k.carlas))?.archived);
     }, { store: make });
   });
 }
@@ -115,6 +145,22 @@ test("a viewer, someone outside, an agent, a key, a routine and a contact don't 
     // In a space put away, nobody writes: its chats stay as they are.
     await k.runtime.call("space.archive", { space: k.shop, archived: true }, { actor: ana });
     assertEquals(await tried(ana), "forbidden");
+  });
+});
+
+// Review L1: a viewer was told "done" for what changed nothing, and "conflict" before "forbidden".
+test("who may not archive it is told so first: before it's found changing nothing, or stale", async () => {
+  await archiveKit(async (k) => {
+    const plan = await k.send({ in: k.shop, text: "the plan for the quarter" });
+    const seen = (await k.thread(plan))!.latest!;
+    await k.send({ thread: plan, text: "and the budget" });
+    const tried = (input: Record<string, unknown>) =>
+      code(archive(k, eve, { thread: plan, ...input }));
+    assertEquals(await tried({ archived: true, latest: seen }), "forbidden");
+    assertEquals(await tried({ archived: false }), "forbidden");
+    await archive(k, ana, { thread: plan, archived: true });
+    assertEquals(await tried({ archived: true }), "forbidden");
+    assert((await k.thread(plan))?.archived);
   });
 });
 
@@ -198,12 +244,41 @@ test("what the person saw last: a message after it, and the chat isn't put away"
     const now = (await k.thread(plan))!.latest!;
     await archive(k, bob, { thread: plan, archived: true, latest: now });
     assert((await k.thread(plan))?.archived);
-    // Asked about its notes, it's what the notes last said that counts.
+    // Asked about its notes, the chat counts too: what it said after the notes' latest keeps it.
     const notes = await withNotes(k);
     const theirs = (await k.thread(notes))!.latest!;
     await k.send({ thread: k.carlas, text: "any news?" }, carla);
-    await archive(k, bob, { thread: notes, archived: true, latest: theirs });
+    assertEquals(
+      await code(archive(k, bob, { thread: notes, archived: true, latest: theirs })),
+      "conflict",
+    );
+    // And what the notes said after the chat's latest, asked about them.
+    const chats = (await k.thread(k.carlas))!.latest!;
+    await k.send({ thread: notes, text: "she wrote again", to: [] }, bob);
+    assertEquals(
+      await code(archive(k, bob, { thread: notes, archived: true, latest: chats })),
+      "conflict",
+    );
+    // The newest of the two, the notes' now: the chat said nothing since.
+    const newest = (await k.thread(notes))!.latest!;
+    await archive(k, bob, { thread: notes, archived: true, latest: newest });
     assert((await k.thread(k.carlas))?.archived);
+  });
+});
+
+// Review M1: an empty chat had no latest to say, so its first message could be put away unseen.
+test("a chat that showed nothing says so (latest: null): its first message keeps it out", async () => {
+  await archiveKit(async (k) => {
+    assertEquals((await k.thread(k.carlas))?.latest, undefined);
+    await archive(k, bob, { thread: k.carlas, archived: true, latest: null });
+    assert((await k.thread(k.carlas))?.archived);
+    await archive(k, bob, { thread: k.carlas, archived: false });
+    await k.send({ thread: k.carlas, text: "hello?" }, carla);
+    assertEquals(
+      await code(archive(k, bob, { thread: k.carlas, archived: true, latest: null })),
+      "conflict",
+    );
+    assertEquals((await k.thread(k.carlas))?.archived, undefined);
   });
 });
 

@@ -270,6 +270,10 @@ const turn = async (ctx: Context, event: Event, acting: Acting) => {
   );
   // Asked once a run: a change reaches its next reply, never a step halfway.
   const model = await modelFor(ctx, t.agent, agent, current.in, t.thread);
+  // The chat this conversation belongs to (its own, its notes', a subthread's), worked out once a
+  // turn and only when it writes: what it says here brings it back when it's archived.
+  let chatOfTurn: Promise<string> | undefined;
+  const chatHere = () => chatOfTurn ??= chatOf(ctx.as().db, current);
 
   const { maxSteps } = settingsOf(ctx);
   for (; maxSteps === undefined || step < maxSteps; step++) {
@@ -314,11 +318,19 @@ const turn = async (ctx: Context, event: Event, acting: Acting) => {
       await live.settle();
       // Its answer keeps what it was told, and its state: what it thought goes back with it.
       // And how far it had read the thread: what came after, it reads after this answer.
-      return await answer(ctx, t, run, text, {
-        ...(step === first ? { told } : {}),
-        ...(state ? { state } : {}),
-        ...(current.at ? { knew: current.at } : {}),
-      }, current);
+      return await answer(
+        ctx,
+        t,
+        run,
+        text,
+        {
+          ...(step === first ? { told } : {}),
+          ...(state ? { state } : {}),
+          ...(current.at ? { knew: current.at } : {}),
+        },
+        current,
+        await chatHere(),
+      );
     }
 
     // Ids derive from the run, so a retry rewrites nothing it already committed.
@@ -442,9 +454,13 @@ const turn = async (ctx: Context, event: Event, acting: Acting) => {
     const deliveries = await Promise.all(
       sends.map((s) => delivery(writer, s.message!, s.message!.subthread)),
     );
-    // The chat this conversation belongs to (its own, its notes', a subthread's): archived, what
-    // this step says here brings it back.
-    const chat = await chatOf(ctx.as().db, current);
+    const chat = await chatHere();
+    // A subthread it opens here moves no summary, so brings the chat back with a write of its own:
+    // only when the chat is archived as the step is written (most often from what the runtime
+    // keeps, no read). Archived since, the turn's answer here, which always follows, brings it back.
+    const opens = sends.some((s) => s.thread && s.message!.thread === t.thread);
+    let away = opens &&
+      !!(await ctx.as().db.collection<Thread>("thread").findOne({ _id: chat }))?.archived;
     await live.settle();
     await writer.transaction(async (tx) => {
       // What showed live becomes the step, and so does what was written of it.
@@ -473,7 +489,10 @@ const turn = async (ctx: Context, event: Event, acting: Acting) => {
             ...startedWith(send.message!),
           });
           // A subthread's opening is said here, and moves no summary: it brings the chat back.
-          if (send.message!.thread === t.thread) await revived(tx, chat);
+          if (away && send.message!.thread === t.thread) {
+            await revived(tx, chat);
+            away = false;
+          }
         } else await noted(tx, send.message!, send.chat ?? chat);
         await tx.db.collection("message").insertOne(send.message!);
         await deliveries[i](tx);

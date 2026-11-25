@@ -58,7 +58,9 @@
  *   it, as a title: lists leave it out, with its notes and subthreads, and
  *   list it apart when asked (`thread.recent`'s `archived`); nothing in it
  *   changes. Restoring it, or any new message in it, its notes or a
- *   subthread, brings it back, in that message's own commit.
+ *   subthread, brings it back, in that message's own commit (a subthread an
+ *   agent opens, when it's archived as the step is written; else the turn's
+ *   answer does). Archiving checks what the person saw last (`latest`).
  * - A chat shared with someone outside its space (a contact's) has notes
  *   beside it (`chat.notes`): a thread of its own in the same space, made
  *   the first time it's asked for, where its people work with agents about

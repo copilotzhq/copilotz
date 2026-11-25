@@ -1,9 +1,9 @@
 /** Threads: conversations, which may fork from another at a message. */
 import type { Message } from "./message.ts";
 import { teamOf } from "../shared/agents.ts";
-import { conversationOf } from "../shared/notes.ts";
+import { conversationOf, notesOf } from "../shared/notes.ts";
 import { said } from "../shared/summary.ts";
-import { defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
+import { type Collection, defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 
 const names = { type: "array", items: { type: "string" } } as const;
 
@@ -131,8 +131,10 @@ export const thread = defineCollection({
      * the asker may read them: at most `limit` (20), in two reads. Forks
      * (subthreads) show under the message they start at instead. Archived
      * chats (`chat.archive`) are left out, with their staff notes (one more
-     * read, when it lists notes); `archived: true` answers the archived chats
-     * instead (their notes and subthreads go with them, unlisted).
+     * read only for notes whose chat isn't on the same page). `archived:
+     * true` answers the archived chats instead (`limit` of them), each with
+     * its staff notes beside it (one more read); their subthreads go with
+     * them, unlisted.
      */
     recent: {
       allow: people,
@@ -150,16 +152,7 @@ export const thread = defineCollection({
           },
           { sort: { at: -1 }, limit: params.limit ?? 20 },
         );
-        // Staff notes go with their chat: an archived chat's are put away with it.
-        const about = shelved ? [] : [...new Set(found.flatMap((t) => t.about ? [t.about] : []))];
-        const away = about.length
-          ? new Set(
-            (await threads.find({ _id: { $in: about }, archived: { $exists: true } }, {
-              projection: { _id: 1 },
-            })).map((t) => t._id),
-          )
-          : undefined;
-        const recent = away ? found.filter((t) => !t.about || !away.has(t.about)) : found;
+        const recent = shelved ? await withNotes(threads, found) : await notesOut(threads, found);
         // What they open and end with, read as whoever asks: what they may read, nothing more.
         const ids = [...new Set(recent.flatMap((t) => [t.opened, t.latest]))]
           .filter((id): id is string => !!id);
@@ -178,6 +171,39 @@ export const thread = defineCollection({
 });
 
 export type Thread = Infer<typeof threadSchema> & { _id: string };
+
+type Finds = Pick<Collection<Thread>, "find">;
+
+/**
+ * A page of chats as listed, without the staff notes of a chat that's
+ * archived. A chat on the page isn't (archived ones aren't listed), so only
+ * notes whose chat is off it ask whether theirs is: no read when none are.
+ */
+async function notesOut(threads: Finds, found: Thread[]): Promise<Thread[]> {
+  const listed = new Set(found.map((t) => t._id));
+  const about = [
+    ...new Set(found.flatMap((t) => t.about && !listed.has(t.about) ? [t.about] : [])),
+  ];
+  if (!about.length) return found;
+  const away = new Set(
+    (await threads.find({ _id: { $in: about }, archived: { $exists: true } }, {
+      projection: { _id: 1 },
+    })).map((t) => t._id),
+  );
+  return found.filter((t) => !t.about || !away.has(t.about));
+}
+
+/**
+ * Archived chats as listed, each with its staff notes (by their ids, those
+ * the asker reads): put away with it, found with it. Newest first.
+ */
+async function withNotes(threads: Finds, found: Thread[]): Promise<Thread[]> {
+  if (!found.length) return found;
+  const notes = await threads.find({ _id: { $in: found.map((t) => notesOf(t._id)) } });
+  return [...found, ...notes.filter((n) => n.about)].sort((a, b) =>
+    a.at < b.at ? 1 : a.at > b.at ? -1 : 0
+  );
+}
 
 /** A space as `thread.moving` names it: a Personal one by its person (`owner`). */
 export type MovingPlace = { _id: string; name: string; kind: string; owner?: string };

@@ -116,6 +116,8 @@ export const answer = async (
   } = {},
   /** The turn's thread, when it has it already. */
   known?: Pick<Thread, "in" | "about" | "parent" | "fork">,
+  /** The chat the turn's thread belongs to, when the turn worked it out already (`chatOf`). */
+  knownChat?: string,
 ) => {
   const messages = ctx.db.collection<Message>("message");
   const [trigger, thread, open] = await Promise.all([
@@ -182,9 +184,9 @@ export const answer = async (
   const writer = there ? ctx.as(grant("chat.hand-back")) : ctx;
   const deliver = await delivery(writer, there ?? reply, (there ?? reply).thread, !how.stopped);
   // The chats they're said in (each the conversation's own, its notes', a subthread's): archived,
-  // they come back with them.
+  // they come back with them. Most often none is read for it (see chatOf).
   const system = ctx.as().db;
-  const chat = await chatOf(system, { _id: t.thread, ...thread });
+  const chat = knownChat ?? await chatOf(system, { _id: t.thread, ...thread });
   const home = there ? await chatOfId(system, there.thread) : undefined;
   await writer.transaction(async (tx) => {
     // What showed live while it was written becomes the reply.

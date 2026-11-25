@@ -8,14 +8,18 @@
  *
  * A person archives it (not an agent working for one, a key, a routine or a
  * contact), who may write where it is: the access rules check it, as for
- * `chat.rename`. Asked about a chat's staff notes or one of its subthreads,
- * it archives the chat, and answers with it: they go with it.
+ * `chat.rename`, before anything else (`forbidden` comes before `conflict`,
+ * and before finding there's nothing to change). Asked about a chat's staff
+ * notes or one of its subthreads, it archives the chat, and answers with it:
+ * they go with it.
  *
  * Archiving one that's archived, or restoring one that isn't, changes
- * nothing. With `latest`, archiving is refused (`conflict`) when something
- * was said in `thread` after that message: nothing new is put away unseen.
+ * nothing. With `latest`, what the person saw last, archiving is refused
+ * (`conflict`) when the chat, or the thread asked about, said something after
+ * it: nothing new is put away unseen.
  */
 import { defineAction, failure, inPerson } from "../../../../runtime/mod.ts";
+import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 import { now } from "../shared/agents.ts";
 import { chatOf } from "../shared/chat-of.ts";
@@ -30,10 +34,13 @@ export const archiveAction = defineAction({
       /** True puts it away, false brings it back. */
       archived: { type: "boolean" },
       /**
-       * The id of `thread`'s latest message as the person saw it (its
-       * `latest`). Only archiving checks it; omitted, nothing is checked.
+       * The newest message the person saw, by id: the latest of the chat and
+       * of the thread asked about (its notes, a subthread) that their page
+       * showed, whichever is newer; `null` when it showed none. Archiving is
+       * refused (`conflict`) when either has said something since. Omitted,
+       * nothing is checked. Only archiving checks it.
        */
-      latest: { type: "string", minLength: 1 },
+      latest: { anyOf: [{ type: "string", minLength: 1 }, { type: "null" }] },
     },
     required: ["thread", "archived"],
     additionalProperties: false,
@@ -52,23 +59,57 @@ export const archiveAction = defineAction({
       const named = await threads.findOne({ _id: input.thread });
       const found = chat === input.thread ? named : await threads.findOne({ _id: chat });
       if (!named || !found) throw missing();
-      if (input.archived && input.latest !== undefined && named.latest !== input.latest) {
-        throw failure("conflict", "Something new was said in it: read it before you archive it.", {
-          public: true,
-        });
-      }
-      const answer = { thread: chat, archived: input.archived };
-      if (!!found.archived === input.archived) return answer;
+      const putting = input.archived && !found.archived;
+      // The write itself asks the rules: one that changes nothing (what's so already) asks too,
+      // and records nothing. Refused below, the transaction leaves it unwritten.
       const { matchedCount } = await threads.updateOne(
         { _id: chat },
-        input.archived ? { $set: { archived: now() } } : { $unset: { archived: "" } },
+        input.archived
+          ? { $set: { archived: found.archived ?? now() } }
+          : { $unset: { archived: "" } },
       );
       if (!matchedCount) {
         throw failure("forbidden", "Only someone who may write in its space archives it.", {
           public: true,
         });
       }
-      return answer;
+      if (putting && input.latest !== undefined) {
+        const said = await saidSince(tx.db, [found, named], input.latest);
+        if (said) {
+          throw failure(
+            "conflict",
+            "Something new was said in it: read it before you archive it.",
+            {
+              public: true,
+            },
+          );
+        }
+      }
+      return { thread: chat, archived: input.archived };
     });
   },
 });
+
+type Reads = {
+  collection<T>(name: string): { findOne(filter: { _id: string }): Promise<T | null> };
+};
+
+/**
+ * Whether any of `threads` said something after `seen` (a message's id; null,
+ * nothing seen): its latest is another message, at that one's time or later.
+ * A message the person can't read, or that's gone, was never seen.
+ */
+async function saidSince(db: Reads, threads: Thread[], seen: string | null): Promise<boolean> {
+  const latest = [...new Set(threads.flatMap((t) => t.latest ? [t.latest] : []))]
+    .filter((id) => id !== seen);
+  if (!latest.length) return false;
+  if (seen === null) return true;
+  const messages = db.collection<Message>("message");
+  const saw = await messages.findOne({ _id: seen });
+  if (!saw) return true;
+  for (const id of latest) {
+    const last = await messages.findOne({ _id: id });
+    if (!last || last.at >= saw.at) return true;
+  }
+  return false;
+}

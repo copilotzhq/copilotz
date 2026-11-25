@@ -936,6 +936,16 @@ resources: {
   `max`. A level a model doesn't take stops the runtime from starting.
 - **Checked at start:** chat checks every agent's model, history its summarizer, memory its embedder
   and extractor, so a missing provider or a wrong effort fails `createRuntime`, not a turn.
+- **People's plans first:** a provider with `harness` is a person's plan that runs other providers'
+  models (`claude-plan`, `chatgpt`): `harness: { order, serves, plan }`, where `serves` maps API ids
+  (`"anthropic/claude-opus-5-5"`, or every one of a provider's, `"anthropic/*"`) to its own names
+  (`"*"`: the same). A list given `harnesses` (a person's plans, in their order) runs each model on
+  those that serve it first, model by model, then its own entries:
+  `{ model: [opus, sol], harnesses:
+  ["chatgpt"] }` tries `chatgpt/…sol`, then the Anthropic and
+  OpenAI APIs. An entry naming a plan stands for its model on plans only. `models.check` answers
+  what a list would try, in order. The tiers plugin gives each turn's chain its person's plans: see
+  [Agents on people's own plans](guides/agents-on-peoples-plans.md#plans-first).
 
 Action inputs name models and never carry keys, because inputs are recorded. A plugin adds an
 adapter under `adapters.llm`, `adapters.embeddings`, `adapters.transcription` or `adapters.image`,

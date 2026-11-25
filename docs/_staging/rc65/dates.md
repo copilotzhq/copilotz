@@ -14,15 +14,13 @@ Under `**New:**`:
   What's typed is read when it's left, on Enter or on Apply, and only then moves an end; text that
   can't be read, or a range that would end before it starts, is marked and keeps Apply off, so
   what's shown is what's saved. A typed end stays within `min` and `max`, and within 200 years of
-  `today` (and 0000 to 9999) where they don't bound it, so a Buddhist or Persian year typed out of
-  habit is refused.
+  `today` where they don't bound it, so a Buddhist or Persian year typed out of habit is refused.
 - **Typed day-times read back.** `parseDayTime(text, pattern, locale)` reads what `formatPattern`
-  writes with the same pattern, in any language, for years 0000 to 9999: any case by the language's
-  rules and any spacing, names without their final dot, the language's digits, seconds left out. It
-  refuses what isn't one real day and time (`31/02`, 13 PM), a two-digit year (the century is never
-  guessed), and text that could be two day-times. `patternProblem` says why a pattern can't be read
-  back (`yy`, `yyyy/dM`, Chinese `dMMM`, Persian month names, Thai month names, which are Julian
-  before 1582), and `dayTimePattern(locale)` is the language's own.
+  writes with the same pattern, in any language, for years 0000 to 9999: any case and any spacing,
+  names without their final dot, the language's digits, seconds left out. It refuses what isn't one
+  real day and time (`31/02`, 13 PM), a two-digit year (the century is never guessed), and text that
+  could be two day-times. `patternProblem` says why a pattern can't be read back (`yy`, month names
+  of a calendar other than the Gregorian one), and `dayTimePattern(locale)` is the language's own.
 - **A wall-clock time's moment.** `dateOfDayTime(value, timeZone)` is the `Date` a day-time names in
   a time zone, by Temporal's "compatible" rule: a time the clocks skip moves forward by the gap, and
   a time they repeat is its first pass, as `new Date(…)` does in the page's zone. With no zone, the
@@ -37,6 +35,19 @@ Under `**Fixed:**`:
   field left empty is its end again, and a field's own text always reads as its end. And with a
   first day picked, To is empty until the second is: where rc.54 couldn't read an end's text back
   (Arabic's short date, a function `format`), it kept showing the old end.
+
+Under `**Known limits:**` (the toolkit guide's "Known limits of dates and times"):
+
+- Fields of no fixed length run together (`yyyy/dM`) can't always be read back, and `patternProblem`
+  doesn't say so.
+- With `seconds`, a year-first format in another order than the toolkit's (`yyyy-dd-MM`): text read
+  as two different ends is refused.
+- Names typed in capitals may not read in Greek or Turkish.
+- Spaces at a format's edges: what it writes isn't read back.
+- With `seconds`, `today` is 200 years or more from 0000 and 9999.
+- Changing the format or the page's language while a range is open.
+- `min` and `max` given as times of day hold for typed ends, not for picked days or presets.
+- The months' Next button goes past December 9999 without `max`.
 
 Under `**Docs:**`:
 
@@ -71,9 +82,8 @@ with:
 ```markdown
 - Dates in the browser's locale (`toLocaleString`, `<input type="date">`) or as ISO timestamps given
   to a picker; a function `format` on a range people type into (it can't be read back: use a
-  pattern); a pattern with a two-digit year (`yy`) or fields that run together (`yyyy/dM`) where
-  people type (`patternProblem` says which); a record's date-time saved unchanged without its
-  seconds.
+  pattern); a pattern with a two-digit year (`yy`: `patternProblem` says so) or fields that run
+  together (`yyyy/dM`) where people type; a record's date-time saved unchanged without its seconds.
 ```
 
 ## (c) "Find it" lines

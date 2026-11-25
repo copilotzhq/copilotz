@@ -1,5 +1,10 @@
 ## Unreleased
 
+**New:**
+
+- **The models catalog, refreshed from models.dev:** GPT-6.2 Astra and GPT-6.2 Sol, with their
+  prices, among others; models.dev's retired ones are gone (none Copilotz names).
+
 **Breaking:**
 
 - **`validation: "moderate"` is gone** (added in rc.62). Strict already lets a document older than

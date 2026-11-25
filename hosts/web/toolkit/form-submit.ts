@@ -9,12 +9,16 @@
  * agreed. A failure about one field (`detail.field`, as a schema's refusal
  * and an Action's `failure` with a `detail` say it) says which.
  */
+import { stageForm } from "./form-stage.ts";
 
 /** What a part's handler gives back: values for the form's own, `false` to stop, or nothing. */
 export type PartAnswer = Record<string, unknown> | false | void | undefined;
 
-/** A part's handler, given the form's element. */
-export type PartSubmit = (form: HTMLFormElement) => PartAnswer | Promise<PartAnswer>;
+/** A part's handler, given this attempt's working copy of the form and its cancellation signal. */
+export type PartSubmit = (
+  form: HTMLFormElement,
+  signal: AbortSignal,
+) => PartAnswer | Promise<PartAnswer>;
 
 /** How a submit ended: saved, or stopped (with the words to say, when a throw gave some). */
 export type Submitted =
@@ -62,17 +66,22 @@ export async function submitAll(
   form: HTMLFormElement,
   parts: PartSubmit[],
   own?: (values: Record<string, unknown>, form: HTMLFormElement) => unknown,
-  signal?: AbortSignal,
+  signal = new AbortController().signal,
+  start?: () => void,
 ): Promise<Submitted> {
   const values: Record<string, unknown> = {};
   try {
-    for (const part of parts) {
-      if (signal?.aborted) return { ok: false };
-      const answer = await part(form);
-      if (answer === false) return { ok: false };
-      if (answer && typeof answer === "object") Object.assign(values, answer);
+    start?.();
+    if (signal.aborted) return { ok: false };
+    if (parts.length) {
+      const stage = stageForm(form);
+      for (const part of parts) {
+        const answer = await part(stage.form, signal);
+        if (signal.aborted || answer === false) return { ok: false };
+        if (answer && typeof answer === "object") Object.assign(values, answer);
+      }
+      stage.commit();
     }
-    if (signal?.aborted) return { ok: false };
     await own?.(values, form);
     return { ok: true, values };
   } catch (error) {

@@ -49,7 +49,7 @@ import { DateTimePicker } from "./date-time-picker.tsx";
 import { Dialog } from "./dialog.tsx";
 import { type Control, Field } from "./field.tsx";
 import { Form } from "./form.tsx";
-import { entityValues, formValues, namedControls } from "./form-values.ts";
+import { captureNamedControls, entityValues, formValues } from "./form-values.ts";
 import { Input } from "./input.tsx";
 import { Picker, type PickerOption } from "./picker.tsx";
 import { Textarea } from "./textarea.tsx";
@@ -196,9 +196,9 @@ function RecordDialog<T extends Record<string, unknown>>(
   const [missing, setMissing] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
-  const controls = useRef<ReturnType<typeof namedControls>>([]);
+  const controls = useRef<ReturnType<typeof captureNamedControls> | undefined>(undefined);
   const submittingChanged = (busy: boolean, element: HTMLFormElement) => {
-    controls.current = busy ? namedControls(element) : [];
+    controls.current = busy ? captureNamedControls(element) : undefined;
     setSaving(busy);
   };
 
@@ -213,7 +213,7 @@ function RecordDialog<T extends Record<string, unknown>>(
   ) => {
     const ready = entityValues(
       fields,
-      { ...draft, ...formValues(element, controls.current), ...handed },
+      { ...draft, ...formValues(element, controls.current?.()), ...handed },
       given,
     );
     setMissing(ready.missing);

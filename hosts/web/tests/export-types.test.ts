@@ -29,7 +29,8 @@ test("a server can use web/export declarations without installing React types", 
     app,
     `import { documentPdf, type Drawn, exportFile, tableSheet } from "./export.js";
 function barcodeWidth(item: Drawn): number {
-  return "barcode" in item ? item.width : 0;
+  if ("text" in item || "line" in item || "rect" in item) return 0;
+  return item.barcode ? item.width : 0;
 }
 const label = { barcode: "123", x: 8, y: 12, height: 20 };
 barcodeWidth({ ...label, width: 200 });

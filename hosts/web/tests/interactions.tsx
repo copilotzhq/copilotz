@@ -98,20 +98,62 @@ test("an entity reads the final values of controls enabled when Save was pressed
     assert.deepEqual(saved, [{ name: "normalized" }]);
   }));
 
+test("an entity reads a remounted control and skips controls removed during save", () =>
+  page(async (render) => {
+    const work = Promise.withResolvers<void>();
+    const saved: unknown[] = [];
+    function Part({ saving }: { saving: boolean }) {
+      useFormSubmit(async () => {
+        await work.promise;
+        document.querySelector<HTMLInputElement>("#edited")!.value = "normalized";
+      });
+      return (
+        <div key={String(saving)}>
+          {saving && <input id="ignored" name="name" defaultValue="other" />}
+          <input id="edited" name="name" defaultValue="original" disabled={saving} />
+          {!saving && <input name="removed" defaultValue="detached" />}
+        </div>
+      );
+    }
+    await render(
+      <EntityDialog title="Edit" onSubmit={(record) => saved.push(record)} onClose={() => {}}>
+        {({ saving }) => <Part saving={saving} />}
+      </EntityDialog>,
+    );
+    const original = document.querySelector("#edited")!;
+    await submit();
+    assert.equal(original.isConnected, false);
+    await act(async () => work.resolve());
+    assert.deepEqual(saved, [{ name: "normalized" }]);
+  }));
+
 test("a reconnected Activity form retries while its aborted part is still pending", () =>
   page(async (render) => {
     const first = Promise.withResolvers<void>();
     const retry = Promise.withResolvers<void>();
     const changes: boolean[] = [];
     const saves: string[] = [];
+    const signals: AbortSignal[] = [];
+    function Attachment({ wait }: { wait: Promise<void> }) {
+      useFormSubmit(async (form, signal) => {
+        signals.push(signal);
+        const file = form.querySelector<HTMLInputElement>('[name="file"]')!;
+        await wait;
+        if (wait === first.promise) file.value = "stale.pdf";
+        return { file: file.value };
+      });
+      return <input name="file" defaultValue="old.pdf" />;
+    }
     const show = (mode: "visible" | "hidden", wait: Promise<void>) =>
       render(
         <Activity mode={mode}>
           <Form
             onSubmittingChange={(busy) => changes.push(busy)}
-            onSubmit={() => saves.push("saved")}
+            onSubmit={(values, form) => {
+              saves.push(String(values.file), form.querySelector("input")!.value);
+            }}
           >
-            <Upload wait={wait} />
+            <Attachment wait={wait} />
           </Form>
         </Activity>,
       );
@@ -122,13 +164,17 @@ test("a reconnected Activity form retries while its aborted part is still pendin
     await show("hidden", first.promise);
     await show("visible", retry.promise);
     assert.equal(busy(), null);
+    const file = document.querySelector("input")!;
+    await typeInto(file, "new.pdf");
     await submit();
+    assert.deepEqual(signals.map((s) => s.aborted), [true, false]);
     await act(async () => first.resolve());
+    assert.equal(file.value, "new.pdf");
     assert.equal(busy(), "true");
     assert.deepEqual(saves, []);
     await act(async () => retry.resolve());
     assert.equal(busy(), null);
-    assert.deepEqual(saves, ["saved"]);
+    assert.deepEqual(saves, ["new.pdf", "new.pdf"]);
     assert.deepEqual(changes, [true, false, true, false]);
   }));
 

@@ -5,10 +5,11 @@
  * field says which, and goes under the field that holds it.
  */
 import { assertEquals } from "@std/assert";
+import { Window } from "happy-dom";
 import { test } from "../../../testing/mod.ts";
 import { fieldFor, fieldOf, submitAll, wordsOf } from "../toolkit/form-submit.ts";
 
-const form = {} as HTMLFormElement;
+const form = new Window().document.createElement("form") as unknown as HTMLFormElement;
 
 test("every part, in order, then the form's own with what they handed up", async () => {
   const ran: string[] = [];
@@ -27,6 +28,40 @@ test("every part, in order, then the form's own with what they handed up", async
   });
   assertEquals(ran, ["tab", "packages", "own packages,points"]);
   assertEquals(done, { ok: true, values: { packages: [{ name: "Gold" }], points: 10 } });
+});
+
+test("parts share staged control values and publish them only when every part agrees", async () => {
+  const doc = form.ownerDocument;
+  const live = doc.body.appendChild(doc.createElement("form"));
+  live.id = "settings";
+  live.innerHTML = '<select name="size"><option>S</option><option>L</option></select>';
+  const size = live.querySelector("select")!;
+  size.value = "L";
+  const enabled = doc.body.appendChild(doc.createElement("input"));
+  enabled.type = "checkbox";
+  enabled.name = "enabled";
+  enabled.setAttribute("form", live.id);
+  const prepare = (copy: HTMLFormElement) => {
+    const select = copy.querySelector("select")!;
+    assertEquals(select.value, "L");
+    select.value = "S";
+    (copy.elements.namedItem("enabled") as HTMLInputElement).checked = true;
+  };
+  try {
+    assertEquals(await submitAll(live, [prepare, () => false]), { ok: false });
+    assertEquals([size.value, enabled.checked], ["L", false]);
+    const done = await submitAll(live, [prepare, (copy) => {
+      assertEquals(copy.querySelector("select")!.value, "S");
+      assertEquals([size.value, enabled.checked], ["L", false]);
+    }], (_values, saved) => {
+      assertEquals(saved === live, true);
+      assertEquals([size.value, enabled.checked], ["S", true]);
+    });
+    assertEquals(done.ok, true);
+  } finally {
+    enabled.remove();
+    live.remove();
+  }
 });
 
 test("a part that says no stops the save: false says nothing, a throw fails, with its words", async () => {

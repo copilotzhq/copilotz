@@ -12,8 +12,9 @@
  *   it now, as opening its page does). `add` makes one in a space, beside
  *   connecting your own machine (its View, item `{ _id }`, the space): when
  *   the person can't now (its `available` query answers `create: false`),
- *   the choice shows why (`unavailable`, by its `why`) and can't be picked; and
- *   `remove` takes one away in place of forgetting it (an Action, input
+ *   the choice shows why (`unavailable`, by its `why`) and can't be picked;
+ *   its `quick` makes one in a click, for the connect flow. `remove` takes
+ *   one away in place of forgetting it (an Action, input
  *   `{ computer }`, and what to say first).
  * - `jobActions`: what else a job that serves a port can become (published
  *   as an app): a View drawn in the job's row (item: `JobServed`).
@@ -40,6 +41,12 @@ export type ComputerKind = {
     available?: string;
     /** What the choice says when they can't, by the query's `why` (`default` for any other). */
     unavailable?: Record<string, string>;
+    /**
+     * One click makes one, for the person's plans (the connect flow's "In the
+     * cloud"): this Action, with this input and `in` (their Personal space),
+     * answering `{ computer }`.
+     */
+    quick?: { action: string; input?: Record<string, unknown> };
   };
   remove?: {
     action: string;

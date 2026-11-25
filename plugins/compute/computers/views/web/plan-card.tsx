@@ -1,274 +1,184 @@
 /**
- * One plan on Connected accounts: what it does, whether it's signed in, and
- * each computer of the person's as it stands for it: signed in (as whom, its
- * CLI's version), installed but not signed in, its CLI missing (installed
- * and signed in on a tap, through the sign-in; on Windows, its official
- * install to run by hand), not checked yet, or shared with others' agents
- * (why it can't be used, on a tap). Signed in, its menu signs in again or out
- * (`computer.engine.logout`). Offline, a computer says when it last said
- * so; a cloud computer says its state its kind's way. The one thing to do
- * comes first: Sign in, until it is.
+ * One plan on Your AI: its name, how it stands in a sentence (`cardOf`:
+ * running on the server, or on a computer, with its backup; signed in only
+ * on computers that are off; needing the person; not connected), its limit
+ * when it's at it, a cloud computer's cost line (the `computer.cost` View),
+ * and its one action: Connect, Fix (both open the connect flow), or, ready,
+ * a menu to sign out of each place it's signed in, and its other ways in.
  */
-import { type ReactNode, useState } from "react";
+import type { ReactNode } from "react";
 import {
   Badge,
   Button,
   Card,
-  CodeBlock,
   Icon,
   LazyView,
   Menu,
+  sayText,
   Time,
 } from "../../../../../hosts/web/mod.ts";
-import type { IconName } from "../../../../../hosts/web/mod.ts";
-import { ComputerMark } from "./mark.tsx";
+import type { Account } from "../../../../access/accounts/contract.ts";
 import {
-  installable,
-  isShared,
+  type Card as Standing,
+  cardOf,
+  cliOf,
   listed,
   type Machine,
-  type Plan,
-  ranked,
-  reachable,
-  signedOn,
-  type Standing,
-  standingOf,
-  startable,
-  straightTo,
+  type PlanShown,
+  servingOn,
+  type Way,
 } from "./plan-states.ts";
 import { say } from "./words.ts";
 
+/** A place it's signed in, to sign out of: a computer, or the server (an account). */
+export type SignedIn = { way: Way; computer?: string; account?: string };
+
 export function PlanCard(
-  { plan, machines, check, checking, signIn, signOut }: {
-    plan: Plan;
+  { plan, machines, accounts, connect, signOut }: {
+    plan: PlanShown;
     machines: Machine[];
-    /** Asks the computers again. */
-    check(): Promise<void>;
-    checking: boolean;
-    /** Opens the sign-in: on this computer, or the one it picks. */
-    signIn(computer?: string): void;
-    /** Signs the plan out on this computer. */
-    signOut?(computer: string): void;
+    accounts: Account[];
+    /** Opens the connect flow for this plan, or one of its ways. */
+    connect(provider?: string): void;
+    signOut(where: SignedIn): void;
   },
 ): ReactNode {
-  const on = signedOn(machines, plan.engine);
-  const signed = on.length > 0;
-  // Signed in, but on no computer that's there now: until one is, agents use the app's models.
-  const away = signed && !on.some(reachable);
-  // Somewhere else to sign in: a computer that can start one, not signed in yet.
-  const elsewhere = machines.some((m) =>
-    startable(m, plan.engine) && standingOf(m, plan.engine).state !== "signedIn"
+  const card = cardOf(plan, machines, accounts);
+  const titleId = `plan-${plan.ways[0].provider}`;
+  const places: SignedIn[] = plan.ways.flatMap((way): SignedIn[] =>
+    way.engine
+      ? servingOn(machines, way.engine).map((m) => ({ way, computer: m.computer._id }))
+      : accounts.some((a) => a.provider === way.account)
+      ? [{ way, account: way.account! }]
+      : []
   );
-  // Where the card's own Sign in goes at once: that computer's line doesn't offer it again.
-  const straight = signed ? undefined : straightTo(machines, plan.engine);
-  const titleId = `plan-${plan.engine}`;
+  const others = plan.ways.filter((w) => !places.some((p) => p.way === w));
+  const nameOf = (id: string) => machines.find((m) => m.computer._id === id)?.name ?? id;
+  const ready = card.state === "ready" ? card : undefined;
   return (
-    <Card as="li" padding="none" className="plan" aria-labelledby={titleId}>
+    <Card as="li" padding="none" className="plan" data-state={card.state} aria-labelledby={titleId}>
       <div className="plan-head">
         <span className="plan-mark" aria-hidden="true">
           <Icon name="sparkles" size={20} />
         </span>
         <div className="plan-titles">
           <h3 className="plan-title" id={titleId}>
-            {plan.title}
-            {signed ? <Badge tone="success">{say("signedIn")}</Badge> : null}
+            {sayText(plan.plan)}
+            {ready ? <Badge tone="success">{say("flowConnected")}</Badge> : null}
           </h3>
-          <p className="plan-about">{plan.about}</p>
+          <p className="plan-about" data-tone={toneOf(card)}>{sentence(card)}</p>
+          {ready?.also
+            ? (
+              <p className="plan-about">
+                {say("cardAlso", {
+                  cli: ready.also.way.engine ? cliOf(ready.also.way.engine) : ready.also.way.title,
+                  computer: ready.also.on.name,
+                })}
+              </p>
+            )
+            : null}
+          {ready?.limited
+            ? (
+              <p className="plan-about" data-tone="warning">
+                {say.nodes("cardLimited", { time: <Time at={ready.limited} /> })}
+              </p>
+            )
+            : null}
+          {ready?.on?.kind
+            ? (
+              <LazyView
+                kind="computer.cost"
+                item={{ computer: ready.on.computer._id }}
+                hints={{ mode: "cost" }}
+                fallback={null}
+              />
+            )
+            : null}
         </div>
         <div className="plan-actions">
-          {!signed
+          {card.state === "off"
             ? (
-              <Button variant="primary" onClick={() => signIn()}>
-                {say("signIn")}
+              <Button
+                variant="primary"
+                onClick={() => connect()}
+              >
+                {say("connect")}
               </Button>
             )
-            : elsewhere
+            : !ready
             ? (
-              <Button variant="ghost" size="sm" icon="plus" onClick={() => signIn()}>
-                {say("signInOther")}
+              <Button
+                variant="primary"
+                onClick={() => connect(card.way.provider)}
+              >
+                {say("fix")}
               </Button>
+            )
+            : null}
+          {places.length
+            ? (
+              <Menu
+                label={say("moreFor", { plan: sayText(plan.plan) })}
+                items={[
+                  ...places.map((p) => ({
+                    label: p.computer
+                      ? say("signOutOn", { computer: nameOf(p.computer) })
+                      : say("signOutServer", { plan: sayText(p.way.title) }),
+                    icon: "signout" as const,
+                    onSelect: () => signOut(p),
+                  })),
+                  ...(ready
+                    ? others.map((w) => ({
+                      label: w.engine
+                        ? say("alsoThrough", { cli: cliOf(w.engine) })
+                        : sayText(w.title),
+                      icon: "plus" as const,
+                      onSelect: () =>
+                        connect(w.provider),
+                    }))
+                    : []),
+                ]}
+              />
             )
             : null}
         </div>
       </div>
-      <ul className="plan-computers">
-        {ranked(machines.filter((m) => !isShared(m)), plan.engine).map((m) => (
-          <Row
-            key={m.computer._id}
-            plan={plan}
-            machine={m}
-            check={check}
-            checking={checking}
-            signIn={() => signIn(m.computer._id)}
-            {...(signOut ? { signOut: () => signOut(m.computer._id) } : {})}
-            offer={m !== straight}
-          />
-        ))}
-      </ul>
-      {away
-        ? (
-          <p className="plan-away">
-            <Icon name="info" size={14} />
-            <span>{say("runsWhileOn", { computer: listed(on.map((m) => m.name)) })}</span>
-          </p>
-        )
-        : null}
     </Card>
   );
 }
 
-/** What a computer's line says of the plan there, with its glyph and tone. */
-function said(
-  plan: Plan,
-  m: Machine,
-  standing: Standing,
-): { icon?: IconName; tone: string; text: string } {
-  switch (standing.state) {
-    case "shared":
-      return { icon: "users", tone: "warning", text: say("rowSharedSomewhere") };
-    case "signedIn":
-      return {
-        icon: "check-circle",
-        tone: "success",
-        text: standing.account
-          ? say("rowSignedInAs", { account: standing.account })
-          : say("rowSignedIn"),
-      };
-    case "installed":
-      return { tone: "neutral", text: say("rowInstalled") };
-    case "missing":
-      return { tone: "muted", text: say("rowMissing", { cli: plan.cli }) };
-    case "unchecked":
-      return {
-        tone: "muted",
-        text: m.computer.online ? say("rowOld") : say("rowUnchecked"),
-      };
+/** Who an account is, with its plan: "ana@example.com (Plus)". */
+const whoOf = (account: Account) =>
+  account.plan ? `${account.label} (${account.plan})` : account.label;
+
+/** A card's sentence: how the plan stands, in a line. */
+export function sentence(card: Standing): string {
+  switch (card.state) {
+    case "ready":
+      if (card.account) return say("cardReadyServer", { account: whoOf(card.account) });
+      return card.backup
+        ? say("cardReadyBackup", {
+          computer: card.on!.name,
+          state: stateOf(card.on!),
+          backup: card.backup.name,
+        })
+        : say("cardReady", { computer: card.on!.name, state: stateOf(card.on!) });
+    case "away":
+      return say("cardAway", {
+        computers: listed(card.on.map((m) => m.name)),
+        count: card.on.length,
+      });
+    case "broken":
+      return card.why === "reconnect"
+        ? say("cardReconnect", { plan: sayText(card.way.title) })
+        : say("cardShared", { computers: listed(card.on.map((m) => m.name)) });
+    case "off":
+      return say("cardOff");
   }
 }
 
-function Row(
-  { plan, machine: m, check, checking, signIn, signOut, offer }: {
-    plan: Plan;
-    machine: Machine;
-    check(): Promise<void>;
-    checking: boolean;
-    signIn(): void;
-    signOut?(): void;
-    /** Whether it offers its own Sign in (not when the card's goes straight to it). */
-    offer: boolean;
-  },
-): ReactNode {
-  const [installing, setInstalling] = useState(false);
-  const standing = standingOf(m, plan.engine);
-  const line = said(plan, m, standing);
-  const at = "at" in standing ? standing.at : undefined;
-  const version = "version" in standing ? standing.version : undefined;
-  const can = startable(m, plan.engine);
-  const action = standing.state === "missing" && installable(m, plan.engine)
-    ? (
-      <Button size="sm" onClick={signIn}>
-        {say("installAndSignIn", { cli: plan.cli })}
-      </Button>
-    )
-    : standing.state === "missing"
-    ? (
-      <Button
-        size="sm"
-        variant="ghost"
-        iconEnd={installing ? "chevron-down" : "chevron"}
-        aria-expanded={installing}
-        onClick={() => setInstalling(!installing)}
-      >
-        {installing ? say("hideInstall") : say("howToInstall")}
-      </Button>
-    )
-    : standing.state === "installed" && can && offer
-    ? <Button size="sm" onClick={signIn}>{say("signIn")}</Button>
-    : standing.state === "signedIn" && (can || signOut)
-    ? (
-      <Menu
-        label={say("moreOn", { computer: m.name })}
-        items={[
-          ...(can
-            ? [{ label: say("signInAgain"), icon: "refresh" as const, onSelect: signIn }]
-            : []),
-          ...(signOut
-            ? [{ label: say("signOut"), icon: "signout" as const, onSelect: signOut }]
-            : []),
-        ]}
-      />
-    )
-    : null;
-  return (
-    <li className="plan-computer" data-state={standing.state}>
-      <ComputerMark
-        online={m.computer.online}
-        {...(m.kind?.icon ? { icon: m.kind.icon as IconName } : {})}
-      />
-      <div className="plan-computer-text">
-        <span className="plan-computer-name">{m.name}</span>
-        <span className="plan-computer-state" data-tone={line.tone}>
-          {line.icon ? <Icon name={line.icon} size={13} /> : null}
-          <span>{line.text}</span>
-          {version && standing.state === "signedIn"
-            ? <span className="plan-computer-quiet">· {say("version", { version })}</span>
-            : null}
-          {m.kind
-            ? (
-              <span className="plan-computer-kind">
-                <LazyView
-                  kind={m.kind.view}
-                  item={{ _id: m.computer._id }}
-                  hints={{ mode: "badge" }}
-                  fallback={null}
-                />
-              </span>
-            )
-            : !m.computer.online
-            ? (
-              <span className="plan-computer-quiet">
-                · {say("offline")}
-                {at ? <>{" · "}{say.nodes("checkedAt", { time: <Time at={at} /> })}</> : null}
-              </span>
-            )
-            : null}
-        </span>
-      </div>
-      {action ? <div className="plan-computer-action">{action}</div> : null}
-      {installing && standing.state === "missing"
-        ? <Install plan={plan} computer={m.name} check={check} checking={checking} />
-        : null}
-    </li>
-  );
-}
+/** A computer that serves a plan now: online, or asleep (it wakes). */
+const stateOf = (m: Machine) => m.computer.online ? say("cardOnline") : say("cardAsleep");
 
-/** Installing a plan's CLI on a computer: its official command, then checking again. */
-export function Install(
-  { plan, computer, lead, check, checking }: {
-    plan: Plan;
-    /** The computer's name, when it's one in particular. */
-    computer?: string;
-    /** What it says first, in place of where to run it. */
-    lead?: string;
-    check(): Promise<void>;
-    checking: boolean;
-  },
-): ReactNode {
-  return (
-    <div className="plan-install">
-      <p>{lead ?? (computer ? say("installIn", { computer }) : say("installAnywhere"))}</p>
-      <CodeBlock
-        className="plan-install-command"
-        label={say("installCommand", { cli: plan.cli })}
-        code={[{ text: "$ ", tone: "muted" }, { text: plan.install }]}
-        copy={plan.install}
-      />
-      <div className="plan-install-then">
-        <span>{say("installThen", { cli: plan.cli })}</span>
-        <Button size="sm" icon="refresh" loading={checking} onClick={() => void check()}>
-          {say("checkAgain")}
-        </Button>
-      </div>
-    </div>
-  );
-}
+const toneOf = (card: Standing) =>
+  card.state === "ready" ? "success" : card.state === "off" ? undefined : "warning";

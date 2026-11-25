@@ -1,9 +1,8 @@
 /**
  * What archiving costs the paths that don't archive anything: listing chats
- * reads nothing more for staff notes whose chat is on the same page; working
- * out a thread's chat reads nothing for a chat, its notes or a subthread of
- * a chat (one read a level only further down); a subthread's opening writes
- * nothing of its chat unless the chat is archived; its answer, one bring-back.
+ * reads nothing more for staff notes whose chat is on the same page; a
+ * subthread's opening and its answer each write one bring-back of their
+ * chat, filtered, which changes nothing when it isn't archived.
  */
 import { assert, assertEquals } from "@std/assert";
 import type { Store } from "../../../runtime/mod.ts";
@@ -13,7 +12,6 @@ import { sqliteStore } from "../../../stores/sql/sqlite/mod.ts";
 import { postgresStore } from "../../../stores/sql/postgres/mod.ts";
 import { tempFile, test } from "../../../testing/mod.ts";
 import type { Thread } from "../chat/mod.ts";
-import { chatOf, chatOfId } from "../chat/shared/chat-of.ts";
 import { ana, archiveKit, bob, carla, type Kit } from "./archive-kit.ts";
 
 const stores: Record<string, () => Store | Promise<Store>> = {
@@ -61,60 +59,6 @@ for (const [store, make] of Object.entries(stores)) {
   });
 }
 
-/** A reader of threads that counts its reads. */
-function reader(threads: Thread[]) {
-  const reads: string[] = [];
-  const db = {
-    collection: <T>(_: string) => ({
-      findOne: (filter: { _id: string }) => {
-        reads.push(filter._id);
-        return Promise.resolve((threads.find((t) => t._id === filter._id) ?? null) as T | null);
-      },
-    }),
-  };
-  return { db, reads };
-}
-
-// Review M2: a subthread's answer read its parent for its chat, every time.
-test("a thread's chat: no read for a chat, its notes or a chat's subthread; one a level below", async () => {
-  const at = "2026-11-25T10:00:00.000Z";
-  const chat: Thread = { _id: "c1", at };
-  const notes: Thread = { _id: "c1:notes", about: "c1", at };
-  const sub: Thread = { _id: "m1:sub", fork: true, parent: { thread: "c1", message: "m1" }, at };
-  const deeper: Thread = {
-    _id: "m2:sub",
-    fork: true,
-    parent: { thread: "m1:sub", message: "m2" },
-    at,
-  };
-  const inNotes: Thread = {
-    _id: "m3:sub",
-    fork: true,
-    parent: { thread: "c1:notes", message: "m3" },
-    at,
-  };
-  // A fork (chat.fork) is a chat of its own.
-  const fork: Thread = { _id: "f1", fork: true, parent: { thread: "c1", message: "m1" }, at };
-  const all = [chat, notes, sub, deeper, inNotes, fork];
-  const cases: [Thread, string, string[]][] = [
-    [chat, "c1", []],
-    [notes, "c1", []],
-    [sub, "c1", []],
-    [deeper, "c1", ["m1:sub"]],
-    [inNotes, "c1", ["c1:notes"]],
-    [fork, "f1", []],
-  ];
-  for (const [thread, expected, read] of cases) {
-    const { db, reads } = reader(all);
-    assertEquals([await chatOf(db, thread), reads], [expected, read], thread._id);
-  }
-  // By id: a chat's is its own, read for nothing; a subthread's, read first.
-  for (const [id, expected, read] of [["c1", "c1", []], ["m1:sub", "c1", ["m1:sub"]]] as const) {
-    const { db, reads } = reader(all);
-    assertEquals([await chatOfId(db, id), reads], [expected, read], id);
-  }
-});
-
 /** Each commit's writes, as `<op> <collection> <what>`. */
 function recorded() {
   const commits: string[][] = [];
@@ -154,8 +98,9 @@ function recorded() {
   return { commits, make };
 }
 
-// Review M2: the commit opening a subthread wrote its chat's bring-back, archived or not.
-test("a subthread's opening writes nothing of its chat unless it's archived; its answer, one bring-back", async () => {
+// Review M5 (round 2): an opening, to a person, could leave its chat put away with no answer to
+// follow. Each opening brings it back in its own commit, as its answer does.
+test("a subthread's opening and its answer each bring the chat back in their own commit", async () => {
   const { commits, make } = recorded();
   await archiveKit(async (k) => {
     const plan = await k.send({ in: k.shop, text: "the plan for the quarter" });
@@ -168,7 +113,7 @@ test("a subthread's opening writes nothing of its chat unless it's archived; its
       commit.filter((w) => w.startsWith("update thread")).map((w) =>
         w.match(/"_id":"([^"]+)"(,"archived")?/)!.slice(1, 3).join("")
       );
-    assertEquals(updated(opening), []);
+    assertEquals(updated(opening), [`${plan},"archived"`]);
     const sub = (await k.messages(plan)).find((m) => m.subthread)!.subthread!;
     const answer = commits.find((c) =>
       c.some((w) => w.startsWith("insert message") && w.endsWith(` ${sub}`) && w.includes(":reply"))

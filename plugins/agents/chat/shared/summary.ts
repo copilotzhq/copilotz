@@ -13,9 +13,6 @@
  * (`chat.archive`), in the same commit: a chat's own message in the update
  * of its summary, one in its notes or a subthread with a write on the chat
  * they belong to (`chatOf`), which changes nothing when it isn't archived.
- * A subthread's opening, which moves no summary, writes it only when the
- * turn finds the chat archived (processors/turn.ts): the turn's answer
- * brings it back otherwise.
  */
 import type { Message } from "../collections/message.ts";
 import { NO_ANSWER } from "./agents.ts";

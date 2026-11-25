@@ -85,8 +85,7 @@ for (const [store, make] of Object.entries(stores)) {
       assertEquals((await k.thread(notes))?.archived, undefined);
       for (const who of [ana, bob]) {
         assertEquals(await ids(k, who, { in: k.shop }), []);
-        // Listed apart with the chat, its notes too (review L3: found where it is).
-        assertEquals(await ids(k, who, { in: k.shop, archived: true }), [notes, k.carlas]);
+        assertEquals(await ids(k, who, { in: k.shop, archived: true }), [k.carlas]);
       }
       // Restored from the chat, both are listed again.
       await archive(k, ana, { thread: k.carlas, archived: false });

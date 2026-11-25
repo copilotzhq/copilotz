@@ -1,7 +1,7 @@
 /** Threads: conversations, which may fork from another at a message. */
 import type { Message } from "./message.ts";
 import { teamOf } from "../shared/agents.ts";
-import { conversationOf, notesOf } from "../shared/notes.ts";
+import { conversationOf } from "../shared/notes.ts";
 import { said } from "../shared/summary.ts";
 import { type Collection, defineCollection, type Infer, people } from "../../../../runtime/mod.ts";
 
@@ -132,9 +132,8 @@ export const thread = defineCollection({
      * (subthreads) show under the message they start at instead. Archived
      * chats (`chat.archive`) are left out, with their staff notes (one more
      * read only for notes whose chat isn't on the same page). `archived:
-     * true` answers the archived chats instead (`limit` of them), each with
-     * its staff notes beside it (one more read); their subthreads go with
-     * them, unlisted.
+     * true` answers the archived chats instead (their notes and subthreads
+     * go with them, unlisted).
      */
     recent: {
       allow: people,
@@ -152,7 +151,7 @@ export const thread = defineCollection({
           },
           { sort: { at: -1 }, limit: params.limit ?? 20 },
         );
-        const recent = shelved ? await withNotes(threads, found) : await notesOut(threads, found);
+        const recent = shelved ? found : await notesOut(threads, found);
         // What they open and end with, read as whoever asks: what they may read, nothing more.
         const ids = [...new Set(recent.flatMap((t) => [t.opened, t.latest]))]
           .filter((id): id is string => !!id);
@@ -191,18 +190,6 @@ async function notesOut(threads: Finds, found: Thread[]): Promise<Thread[]> {
     })).map((t) => t._id),
   );
   return found.filter((t) => !t.about || !away.has(t.about));
-}
-
-/**
- * Archived chats as listed, each with its staff notes (by their ids, those
- * the asker reads): put away with it, found with it. Newest first.
- */
-async function withNotes(threads: Finds, found: Thread[]): Promise<Thread[]> {
-  if (!found.length) return found;
-  const notes = await threads.find({ _id: { $in: found.map((t) => notesOf(t._id)) } });
-  return [...found, ...notes.filter((n) => n.about)].sort((a, b) =>
-    a.at < b.at ? 1 : a.at > b.at ? -1 : 0
-  );
 }
 
 /** A space as `thread.moving` names it: a Personal one by its person (`owner`). */

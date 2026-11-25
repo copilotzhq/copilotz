@@ -11,6 +11,7 @@
  * - `sub <words>`: asks Scout in a subthread, and waits for the answer;
  * - `deep <words>`: asks Scout in a subthread, who asks Deep in one of its own;
  * - `ask ana`: asks Ana, in the chat, and waits for her answer;
+ * - `aside <person>`: asks that person in a subthread of its own, and waits;
  * - `tell <thread>`: tells Scout in another chat that's there already;
  * - `hand <space>: <words>`: hands the work to who answers in another space;
  * - `note`: takes a note (a private step), then answers;
@@ -23,6 +24,7 @@ import {
   defineAction,
   definePlugin,
   type Event,
+  type Plugin,
   type Runtime,
   type Store,
 } from "../../../runtime/mod.ts";
@@ -62,6 +64,7 @@ const moves: Record<string, (last: LlmMessage) => Move> = {
     if (verb === "sub") return { send: [{ to: "scout", text: arg, in: "subthread" }] };
     if (verb === "deep") return { send: [{ to: "scout", text: `deeper ${arg}`, in: "subthread" }] };
     if (said === "ask ana") return { send: [{ to: "ana", text: "Which one?" }] };
+    if (verb === "aside") return { send: [{ to: arg, text: "Can you check?", in: "subthread" }] };
     if (verb === "tell") {
       return { send: [{ to: "scout", text: "For you.", thread: arg, expectReply: false }] };
     }
@@ -111,13 +114,15 @@ export type Kit = {
   recent(actor: Actor, params?: Record<string, unknown>): Promise<(Thread & Listed)[]>;
   /** A conversation's messages, as the system keeps them. */
   messages(thread: string): Promise<Message[]>;
+  /** Every thread, as the system keeps them. */
+  threads(): Promise<Thread[]>;
 };
 
 type Listed = { messages: number; first?: string; last?: string };
 
 export async function archiveKit(
   fn: (k: Kit) => Promise<void>,
-  options: { store?: () => Store | Promise<Store> } = {},
+  options: { store?: () => Store | Promise<Store>; plugins?: Plugin[] } = {},
 ) {
   const holds: Holds = {};
   const outputs: string[] = [];
@@ -174,6 +179,20 @@ export async function archiveKit(
         input: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
         run: (ctx, input) => ctx.as().db.collection<Thread>("thread").findOne({ _id: input.id }),
       }),
+      "test.threads": defineAction({
+        input: { type: "object" },
+        run: (ctx) => ctx.as().db.collection<Thread>("thread").find({}),
+      }),
+      // A message as it's kept, written as it is (no summary moves): for a test's exact times.
+      "test.message": defineAction({
+        input: {
+          type: "object",
+          properties: { message: { type: "object" } },
+          required: ["message"],
+        },
+        run: (ctx, input: { message: Message }) =>
+          ctx.as().db.collection<Message>("message").insertOne(input.message),
+      }),
       "test.messages": defineAction({
         input: { type: "object", properties: { thread: { type: "string" } } },
         run: (ctx, input: { thread: string }) =>
@@ -185,7 +204,7 @@ export async function archiveKit(
   });
   const runtime = await createRuntime({
     store: await (options.store ?? memoryStore)(),
-    plugins: [models, chat, ...access, app],
+    plugins: [models, chat, ...access, app, ...(options.plugins ?? [])],
   });
   const events: Event[] = [];
   const stop = runtime.subscribe((item) => {
@@ -230,6 +249,7 @@ export async function archiveKit(
       thread: (id) => runtime.call<Thread | null>("test.thread", { id }),
       recent: (actor, params = {}) => runtime.query("thread.recent", params, { actor }),
       messages: (thread) => runtime.call<Message[]>("test.messages", { thread }),
+      threads: () => runtime.call<Thread[]>("test.threads", {}),
     });
   } finally {
     stop();

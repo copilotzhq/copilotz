@@ -336,3 +336,14 @@ test("an Action makes invoice attachments through the server export entry point"
     await runtime.close();
   }
 });
+
+test("minimal CSV quotes preserve a single empty field as a record", () => {
+  assertEquals(
+    toCsv({ headers: ["Value"], rows: [[""]] }, { csv: { quote: "needed" } }),
+    'Value\n""',
+  );
+  assertEquals(
+    toCsv({ headers: ["A", "B"], rows: [["", ""]] }, { csv: { quote: "needed" } }),
+    "A,B\n,",
+  );
+});

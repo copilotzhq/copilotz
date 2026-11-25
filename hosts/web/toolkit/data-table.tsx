@@ -341,9 +341,9 @@ export function DataTable<R>(props: {
       props.exportOptions?.values,
     );
     const pdf = props.exportOptions?.pdf;
-    const columns = visibleTitled.map((c) => ({
+    const columns = visibleTitled.map((c, i) => ({
       align: c.align,
-      ...pdf?.columns?.[titled.indexOf(c)],
+      ...pdf?.columns?.[i],
     }));
     download(format, sheet, props.exportName ?? "export", {
       ...props.exportOptions,

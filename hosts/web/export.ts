@@ -41,4 +41,4 @@ export { code39, ean13, ean8, eanDigits } from "./toolkit/retail-barcodes.ts";
 export { type PdfImage, pdfImage } from "./toolkit/pdf-image.ts";
 export { type BarcodeOptions, bars, code128 } from "./toolkit/code128.ts";
 
-export { tableSheet } from "./toolkit/table.ts";
+export { tableSheet } from "./toolkit/table-sheet.ts";

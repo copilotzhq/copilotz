@@ -174,3 +174,32 @@ test("Adam7 interlacing restores packed palette and RGBA pixels before embedding
   assertEquals([...await inflate(image.data)], samples.filter((i) => i % 4 !== 3));
   assertEquals([...await inflate(image.alpha!)], samples.filter((i) => i % 4 === 3));
 });
+
+test("an EAN-13 and its quiet margins must fit inside the requested PNG", async () => {
+  await assertRejects(
+    () => barcodePng("590123412345", { format: "ean13", width: 100 }),
+    RangeError,
+    "113",
+  );
+  assertEquals(
+    readPng(await barcodePng("590123412345", { format: "ean13", width: 113 })).width,
+    113,
+  );
+});
+
+test("an EAN-13 and its quiet margins must fit inside the requested PDF label", () => {
+  assertThrows(
+    () =>
+      documentPdf([[{
+        barcode: "590123412345",
+        format: "ean13",
+        quiet: true,
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 20,
+      }]], { size: [100, 20] }),
+    RangeError,
+    "113",
+  );
+});

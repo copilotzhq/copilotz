@@ -6,16 +6,7 @@
 import { createWorker, type WorkerOptions } from "@oxian/oxian-js";
 import { collection, type Query, type Run } from "./collection.ts";
 import type { ActionDef, Context, Plugins, ReadContext, TransactionScope } from "./define.ts";
-import {
-  type Attempt,
-  isRead,
-  type LegacyCall,
-  nextAttempt,
-  type Op,
-  type Outcome,
-  RESULTS,
-  type TimerOp,
-} from "./ops.ts";
+import { isRead, type Op, type Outcome, RESULTS, type TimerOp } from "./ops.ts";
 import type { Scheduled, ScheduleOptions } from "./schedules.ts";
 import {
   canonical,
@@ -82,45 +73,9 @@ type Reach = {
   signal: AbortSignal;
   /** This job may repeat earlier work: a retried call or delivery. */
   retry: boolean;
-  /** Receipt checks for a parent that started before calls were numbered at admission. */
-  replay?: ReturnType<typeof legacyReplay>;
-  /** The numbering used by the Action or Processor delivery whose code is running. */
-  callNumbering: Attempt["callNumbering"];
   /** Numbers the nested calls made under each cause, in call order. */
   next(cause: string): number;
 };
-
-/** An rc.63 receipt at a shifted position cannot safely identify the call being retried. */
-function legacyReplay(calls?: LegacyCall[]) {
-  if (!calls?.length) return;
-  let refusal: Error | undefined;
-  return {
-    match(scope: string, position: number, name: string, id: string) {
-      if (refusal) throw refusal;
-      for (const receipt of calls) {
-        const parts = /^(.*)\.(\d+)\.[^.]+$/s.exec(receipt.id);
-        if (parts) {
-          if (parts[1] !== scope) continue;
-          const samePosition = Number(parts[2]) === position;
-          if (samePosition && receipt.id === id && receipt.action === name) continue;
-          if (!samePosition && receipt.action !== name) continue;
-        }
-        refusal = Object.assign(
-          invalid(
-            `Cannot replay "${scope}" at position ${position} ("${name}"). ` +
-              `The rc.63 receipt "${receipt.id}" records "${receipt.action}". Run the parent again by hand.`,
-          ),
-          { final: true },
-        );
-        throw refusal;
-      }
-    },
-    // A parent can catch a child's ordinary admission error. An ambiguous replay still fails.
-    ensure() {
-      if (refusal) throw refusal;
-    },
-  };
-}
 
 /** For whom ops in a held transaction go: what their writes answer to, as whom, in whose code. */
 type Who = { cause?: string; actor?: Actor; action?: string; outside?: true };
@@ -129,18 +84,10 @@ type Who = { cause?: string; actor?: Actor; action?: string; outside?: true };
 type Sent = { op: Op; who: Who };
 
 /** The owner's id and retry information when it dispatches a call. */
-type CallJob = Extract<Job, { kind: "call" }>;
+type Attempt = { id: string; attempt: number; after?: "failed" | "lost"; scheduled?: Scheduled };
 
 /** An atomic Action asked for in a transaction, checked: its declaration and its input. */
 type Asked = { name: string; def: ActionDef; input: unknown };
-
-/** An unrecorded call keeps its caller as the cause. Its own position, when it has one,
- * numbers its children apart so they can't move a later call in the caller. */
-const unrecordedScope = (
-  parent: string | undefined,
-  numbering: string | undefined,
-  position: number,
-) => position ? `${numbering}.${position}` : parent;
 
 /** A transaction a job holds open on the owner (see `holding`). */
 type Held = {
@@ -243,7 +190,6 @@ export function createExecutor(
     const held = holding(job, opener);
     try {
       const result = await work(scoped(job, held, opener, numbering));
-      job.replay?.ensure();
       await held.commit();
       return result;
     } catch (error) {
@@ -336,7 +282,7 @@ export function createExecutor(
     };
   };
 
-  /** Check permission synchronously when the rule can answer immediately. */
+  /** A synchronous refusal has no place in the call sequence, as in rc.63. */
   const admit = (
     { name, def, input }: Asked,
     actor: Actor | undefined,
@@ -348,36 +294,6 @@ export function createExecutor(
     };
     const ok = allows(def.allow, actor, input, reads);
     return typeof ok === "boolean" ? check(ok) : ok.then(check);
-  };
-
-  /** Reserve in invocation order. Unmarked starts used rc.63's sequence of admitted, recorded calls. */
-  const prepareCall = (
-    job: Reach,
-    numbering: string | undefined,
-    name: string,
-    input: unknown,
-    actor: Actor | undefined,
-    reads: (as: Actor) => ReadContext,
-    atomicOnly = false,
-  ) => {
-    let position = numbering && job.callNumbering === 2 ? job.next(numbering) : 0;
-    const def = registry.actions[name];
-    if (!def) throw unknown("action", name, Object.keys(registry.actions));
-    if (atomicOnly && !def.atomic && !def.transaction) {
-      throw invalid(
-        `"${name}" isn't atomic: a transaction calls only Actions declared \`atomic: true\` or \`transaction: true\`. ` +
-          "Call it once the transaction has committed, or have it hear an event the transaction emits.",
-      );
-    }
-    const normalized = json(actionInput(def, input));
-    inputs[name]?.(normalized);
-    refuseBlobKeys(normalized);
-    const asked = { name, def, input: normalized };
-    const admission = admit(asked, actor, reads);
-    if (numbering && job.callNumbering !== 2 && def.record !== false) {
-      position = job.next(numbering);
-    }
-    return { asked, admission, position };
   };
 
   /**
@@ -429,15 +345,15 @@ export function createExecutor(
       },
       unschedule: (timer) => held.queue({ op: "unschedule", timer }, who),
       call: <R>(action: string, input?: unknown): Promise<R> => {
+        let asked: Asked;
+        let admission: void | Promise<void>;
         try {
           held.ensure();
+          asked = atomicOf(action, input);
           // Permission reads see the effects of earlier calls on this scope.
           const before = turn;
-          const { asked, admission, position } = prepareCall(
-            job,
-            numbering,
-            action,
-            input,
+          admission = admit(
+            asked,
             who.actor,
             (as) =>
               reading(
@@ -445,18 +361,37 @@ export function createExecutor(
                 job.record,
                 as,
               ),
-            true,
           );
-          const result = Promise.all([turn, admission]).then(() =>
-            atomic<R>(job, held, asked, who, numbering, position)
-          );
-          turn = Promise.allSettled([turn, result]);
-          return result;
         } catch (error) {
           return Promise.reject(error);
         }
+        const position = asked.def.record !== false && numbering ? job.next(numbering) : 0;
+        const result = Promise.all([turn, admission]).then(() =>
+          atomic<R>(job, held, asked, who, numbering, position)
+        );
+        turn = Promise.allSettled([turn, result]);
+        return result;
       },
     };
+  };
+
+  /**
+   * An atomic Action a transaction may call, checked before anything of it runs.
+   * Its allow is checked on its turn, over reads in the transaction.
+   */
+  const atomicOf = (name: string, input: unknown): Asked => {
+    const def = registry.actions[name];
+    if (!def) throw unknown("action", name, Object.keys(registry.actions));
+    if (!def.atomic && !def.transaction) {
+      throw invalid(
+        `"${name}" isn't atomic: a transaction calls only Actions declared \`atomic: true\` or \`transaction: true\`. ` +
+          "Call it once the transaction has committed, or have it hear an event the transaction emits.",
+      );
+    }
+    const normalized = json(actionInput(def, input));
+    inputs[name]?.(normalized);
+    refuseBlobKeys(normalized);
+    return { name, def, input: normalized };
   };
 
   /**
@@ -474,13 +409,13 @@ export function createExecutor(
     who: Who,
     numbering: string | undefined,
     position: number,
-    own?: { given?: CallJob },
+    own?: { given?: Attempt },
   ): Promise<R> => {
     const { actor } = who;
     // Closed before its turn came (a call before it failed): it never ran.
     held.ensure();
-    const run = (reach: Reach, its: Who, count?: string) => {
-      const ctx = joined(reach, held, { ...its, action: name }, count, own?.given?.scheduled);
+    const run = (its: Who, count?: string) => {
+      const ctx = joined(job, held, { ...its, action: name }, count, own?.given?.scheduled);
       return runAction<R>(
         registry,
         name,
@@ -492,7 +427,7 @@ export function createExecutor(
     if (def.record === false) {
       const its: Who = { ...who, action: name };
       return await held.join(async () => {
-        const result = await run(job, its, unrecordedScope(who.cause, numbering, position));
+        const result = await run(its, who.cause);
         if (own) await held.commit();
         return result;
       });
@@ -500,16 +435,17 @@ export function createExecutor(
     const inputHash = await fingerprint(name, input);
     const id = own?.given?.id ??
       (numbering ? `${numbering}.${position}.${inputHash}` : crypto.randomUUID());
-    let prior: Outcome | undefined;
+    let attempt = own?.given?.attempt ?? 1;
+    let after = own?.given?.after;
     if (!own?.given && who.cause && job.retry) {
-      if (numbering) job.replay?.match(numbering, position, name, id);
-      prior = await held.run({ op: "outcome", call: id }, who) as Outcome;
+      const prior = await held.run({ op: "outcome", call: id }, who) as Outcome;
       if (prior.completed) {
         if (own) await held.commit();
         return prior.result as R;
       }
+      attempt = prior.attempts + 1;
+      if (prior.attempts) after = prior.lost ? "lost" : "failed";
     }
-    const { attempt, after, callNumbering, legacyCalls } = own?.given ?? nextAttempt(prior);
     // Its own: what it writes answers to its call.
     const its: Who = { cause: id, ...(actor ? { actor } : {}) };
     const hidden = def.private ?? [];
@@ -524,7 +460,6 @@ export function createExecutor(
           inputHash,
           startedAt: new Date().toISOString(),
           attempt,
-          callNumbering,
         },
         cause: who.cause,
       },
@@ -545,9 +480,7 @@ export function createExecutor(
     job.frame("action", { type: "started", id, action: name, attempt });
     try {
       for (const mark of marks) held.queue(mark, its);
-      const replay = legacyReplay(legacyCalls);
-      const result = await run({ ...job, callNumbering, replay }, its, id);
-      replay?.ensure();
+      const result = await run(its, id);
       const whole = json(result) ?? null;
       refuseBlobKeys(whole);
       const logged = unprivate(whole, hidden);
@@ -819,20 +752,24 @@ export function createExecutor(
     name: string,
     input?: unknown,
     parent?: string,
-    given?: CallJob,
+    given?: Attempt,
     numbering = parent,
     actor?: Actor,
   ): Promise<R> => {
+    const action = registry.actions[name];
+    if (!action) throw unknown("action", name, Object.keys(registry.actions));
+    const normalized = json(actionInput(action, input));
+    inputs[name]?.(normalized);
+    // An Action's input may hold no `$blob` key (see blobs.ts), as the owner checks outside calls'.
+    refuseBlobKeys(normalized);
     // Code acting for someone calls what lets them, as they would from outside (an agent, for
     // whom it works for too); what has no `allow` is internal, code's to call. Going on where
     // they couldn't is a grant of the system's (`ctx.as`), on record as one.
+    const asked = { name, def: action, input: normalized };
     const who: Who = { cause: parent, actor };
-    const held = registry.actions[name]?.transaction ? holding(job, who) : undefined;
-    const { asked, admission, position } = prepareCall(
-      job,
-      given ? undefined : numbering,
-      name,
-      input,
+    const held = action.transaction ? holding(job, who) : undefined;
+    const admission = admit(
+      asked,
       actor,
       (as) =>
         reading(
@@ -844,7 +781,8 @@ export function createExecutor(
           as,
         ),
     );
-    const { def: action, input: normalized } = asked;
+    // Reserve before waiting on a database-backed rule, even for concurrent calls.
+    const position = !given && numbering && action.record !== false ? job.next(numbering) : 0;
     if (held) {
       try {
         if (admission) await admission;
@@ -866,8 +804,7 @@ export function createExecutor(
     const checkGrant = (actor: Actor, action: string) =>
       job.send({ ops: [{ op: "elevate" }], actor, action });
     if (action.record === false) {
-      const count = unrecordedScope(parent, numbering, position);
-      const ctx = context(job, parent, undefined, given?.scheduled, count, actor, name);
+      const ctx = context(job, parent, undefined, given?.scheduled, parent, actor, name);
       return await runAction<R>(registry, name, ctx, normalized, checkGrant);
     }
 
@@ -877,19 +814,21 @@ export function createExecutor(
     // It hashes the whole input, private fields too, though the log never holds them.
     const inputHash = await fingerprint(name, normalized);
     const hidden = action.private ?? [];
-    const id = given?.id ??
-      (numbering ? `${numbering}.${position}.${inputHash}` : crypto.randomUUID());
-    let prior: Outcome | undefined;
+    let { id, attempt, after } = given ?? {
+      id: numbering ? `${numbering}.${position}.${inputHash}` : crypto.randomUUID(),
+      attempt: 1,
+      after: undefined,
+    };
     if (!given && parent && job.retry) {
-      if (numbering) job.replay?.match(numbering, position, name, id);
       // Asked as whom it works for: in someone's job, an op that names nobody is refused.
-      prior = await job.send({
+      const prior = await job.send({
         ops: [{ op: "outcome", call: id }],
         ...(actor ? { actor } : {}),
       }) as Outcome;
       if (prior.completed) return prior.result as R;
+      attempt = prior.attempts + 1;
+      if (prior.attempts) after = prior.lost ? "lost" : "failed";
     }
-    const { attempt, after, callNumbering, legacyCalls } = given ?? nextAttempt(prior);
 
     const begun = performance.now();
     // Marks the call's start (once per call) and, on a retry, this attempt.
@@ -904,7 +843,6 @@ export function createExecutor(
           inputHash,
           startedAt: new Date().toISOString(),
           attempt,
-          callNumbering,
         },
         cause: parent,
       },
@@ -925,8 +863,6 @@ export function createExecutor(
     const carrying = new Set<string>();
     const reach: Reach = {
       ...job,
-      callNumbering,
-      replay: legacyReplay(legacyCalls),
       async send(request) {
         const tx = "tx" in request ? request.tx : undefined;
         const end = "end" in request ? request.end : undefined;
@@ -965,7 +901,6 @@ export function createExecutor(
         pending = false;
       }
       const result = await runAction<R>(registry, name, ctx, normalized, checkGrant);
-      reach.replay?.ensure();
       // What it answers goes on record: one the owner would refuse fails the call, on record.
       const whole = json(result) ?? null;
       refuseBlobKeys(whole);
@@ -1022,7 +957,12 @@ export function createExecutor(
           request.action,
           request.input,
           undefined,
-          request,
+          {
+            id: request.id,
+            attempt: request.attempt,
+            after: request.after,
+            scheduled: request.scheduled,
+          },
           undefined,
           request.actor,
         );
@@ -1177,8 +1117,6 @@ export function createExecutor(
           },
           frame: (channel, data) => out.write({ frame: { channel, data } }),
           signal,
-          callNumbering: "callNumbering" in request ? request.callNumbering : 2,
-          replay: request.kind === "process" ? legacyReplay(request.legacyCalls) : undefined,
           retry: request.kind === "call"
             ? request.attempt > 1
             : request.kind === "process" && request.retry,
@@ -1191,7 +1129,6 @@ export function createExecutor(
         Promise.resolve().then(() => execute(job, request)).then(
           async (result) => {
             await flush();
-            job.replay?.ensure();
             out.end({ result: json(result) });
           },
           async (error) => {

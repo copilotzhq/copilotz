@@ -56,11 +56,8 @@ import { checkHttp, createFetch, SOCKET } from "./fetch.ts";
 import { createTickets } from "./tickets.ts";
 import { memoryStore } from "./memory.ts";
 import {
-  type Attempt,
   type Hooks,
   isRead,
-  legacyCalls,
-  nextAttempt,
   type Op,
   type Outcome,
   perform,
@@ -2095,18 +2092,19 @@ export async function createOwner(
     signal?: AbortSignal,
     actor?: Actor,
   ) => {
-    let prior: Outcome | undefined;
+    let attempt = 1;
+    let after: "failed" | "lost" | undefined;
     if (known) {
       // The log is the receipt: a completed call answers again without running.
-      prior = await answer(store, { op: "outcome", call: id }) as Outcome;
+      const prior = await answer(store, { op: "outcome", call: id }) as Outcome;
       if (
         prior.attempts &&
         (prior.action !== action || prior.inputHash !== await fingerprint(action, input))
       ) throw conflict(id);
       if (prior.completed) return prior.result;
+      attempt = prior.attempts + 1;
+      if (prior.attempts) after = prior.lost ? "lost" : "failed";
     }
-    const retry = nextAttempt(prior);
-    const { attempt, after, callNumbering } = retry;
     const begun = performance.now();
     const startedAt = new Date().toISOString();
     try {
@@ -2115,7 +2113,8 @@ export async function createOwner(
         action,
         input,
         id,
-        ...retry,
+        attempt,
+        ...(after ? { after } : {}),
         ...(scheduled ? { scheduled } : {}),
         ...(actor ? { actor } : {}),
       }, signal);
@@ -2146,7 +2145,6 @@ export async function createOwner(
               inputHash,
               startedAt,
               attempt,
-              callNumbering,
             },
           }),
           ...(after
@@ -2227,34 +2225,12 @@ export async function createOwner(
   };
 
   const attempts = async (name: string, event: Event, recovered: boolean, stop: AbortSignal) => {
-    let callNumbering: Attempt["callNumbering"] | undefined;
     for (let attempt = 1;; attempt++) {
       try {
-        // Save the version before dispatch. An unmarked event awaiting redelivery may
-        // already have effects from rc.63, even when its Processor never recorded a failure.
-        callNumbering ??= await commit(async (tx) => {
-          const key = { _id: JSON.stringify([name, event.id]) };
-          const previous = recovered ? await tx.findOne("sys.deliveries", key) : null;
-          const callNumbering = previous ? previous.callNumbering : recovered ? 1 : 2;
-          if (callNumbering !== 1 && callNumbering !== 2) {
-            throw invalid(
-              `Unknown call numbering for Processor "${name}" delivering "${event.id}".`,
-            );
-          }
-          if (!previous) {
-            await tx.insert("sys.deliveries", [{ ...key, callNumbering }], { ifAbsent: true });
-          }
-          return callNumbering;
-        });
-        const children = callNumbering === 1
-          ? legacyCalls(await store.related(event.id, ["action.started"]), event.id)
-          : undefined;
         const full = await whole(event);
         await run({
           kind: "process",
           processor: name,
-          callNumbering,
-          legacyCalls: children,
           event: full,
           retry: recovered || attempt > 1,
         }, stop);
@@ -2315,7 +2291,7 @@ export async function createOwner(
    * can be past an event that commits after it.
    */
   function route(event: Event, live = false) {
-    const retry = recovering && !live;
+    const retry = recovering;
     head = Math.max(head, event.seq);
     for (const [name, processor] of Object.entries(registry.processors)) {
       if (!live && event.seq <= (saved.get(name) ?? 0)) continue;

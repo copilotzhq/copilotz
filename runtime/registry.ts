@@ -2,6 +2,7 @@
  * Merges plugins into one registry of primitives. The owner and every
  * executor build the same registry from the same plugins.
  */
+import { missingCollectionSchema } from "./collection.ts";
 import { Validator } from "@cfworker/json-schema";
 import type {
   ActionDef,
@@ -301,6 +302,11 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
   for (const plugin of plugins) {
     for (const [name, def] of Object.entries(plugin.collections ?? {})) {
       if ("schema" in def) {
+        if (def.schema === missingCollectionSchema) {
+          throw invalid(
+            `Collection "${name}" has no schema: run \`copilotz gen\` or write \`schema\`.`,
+          );
+        }
         const allow = plugin.defaults?.allow;
         const queries = allow && def.queries && Object.fromEntries(
           Object.entries(def.queries).map(([key, q]) => [

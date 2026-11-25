@@ -7,6 +7,9 @@ import type { Pipeline } from "./aggregate.ts";
 import type { Op } from "./ops.ts";
 import type { Doc, Filter, FindOptions, Update } from "./store.ts";
 
+/** A type-only declaration before gen supplies its collection schema. */
+export const missingCollectionSchema = { not: {} } as const;
+
 export type WithId<T> = T & { _id: string };
 
 export type Cursor<T> = PromiseLike<WithId<T>[]> & {

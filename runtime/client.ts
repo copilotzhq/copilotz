@@ -41,7 +41,7 @@
  * It loads front ends only (their Views, and their resources): the plugins
  * they build on live with the owner.
  */
-import type { AppName, LocalQuery } from "./names.ts";
+import type { AppDocument, AppName, LocalQuery } from "./names.ts";
 import { createWorker } from "@oxian/oxian-js";
 import {
   type Answer,
@@ -138,9 +138,9 @@ export type Client = {
   /** Collections, as the person reads and writes them (see the module's header). */
   db: {
     collection<
-      T = Record<string, unknown>,
+      T = unknown,
       C extends AppName<"collections"> = AppName<"collections">,
-    >(name: C): ClientCollection<T, C>;
+    >(name: C): ClientCollection<AppDocument<C, T>, C>;
   };
   /**
    * Calls an Action on the owner, as the person. With `id` (theirs alone),

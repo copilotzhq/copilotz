@@ -1,4 +1,4 @@
-import type { AppNames } from "./mod.ts";
+import type { AppDocuments, AppNames } from "./mod.ts";
 
 /** A registry name from the app's generated declaration, or any string in a hand-written app. */
 export type AppName<K extends "actions" | "collections" | "queries" | "views"> = AppNames extends
@@ -12,3 +12,11 @@ export type LocalQuery<C extends string = AppName<"collections">> = string exten
   AppName<"queries"> ? string : QuerySuffix<AppName<"queries">, C>;
 
 type QuerySuffix<Q, C extends string> = Q extends `${C}.${infer Name}` ? Name : never;
+
+/** The document behind a collection name, or the open document used without an app declaration. */
+export type AppDocument<C extends string, T> = T & (unknown extends T ? NamedDocument<C> : unknown);
+
+type NamedDocument<C extends string> = AppNames extends {
+  collectionOwners: Record<C, infer P extends keyof AppDocuments>;
+} ? AppDocuments[P] extends Record<C, infer Document> ? Document : Record<string, unknown>
+  : Record<string, unknown>;

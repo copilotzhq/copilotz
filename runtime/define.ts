@@ -2,9 +2,10 @@
  * What a plugin declares. Everything here is plain data; the runtime gives it
  * meaning only as primitives. It never knows what a plugin is for.
  */
-import type { AppName, LocalQuery, ViewName } from "./names.ts";
+import type { AppDocument, AppName, LocalQuery, ViewName } from "./names.ts";
 import type { FromSchema, JSONSchema } from "json-schema-to-ts";
 import { emptyInput } from "./action-input.ts";
+import { missingCollectionSchema } from "./collection.ts";
 import type { Pipeline } from "./aggregate.ts";
 import type { Metrics } from "./metrics.ts";
 import type { Scheduled, ScheduleDef, ScheduleOptions, SchedulePatch } from "./schedules.ts";
@@ -55,9 +56,9 @@ export type Graph = {
 export type TransactionScope = {
   db: {
     collection<
-      T = Record<string, unknown>,
+      T = unknown,
       C extends AppName<"collections"> = AppName<"collections">,
-    >(name: C): Collection<T, C>;
+    >(name: C): Collection<AppDocument<C, T>, C>;
   };
   graph: Omit<Graph, "edges">;
   emit(type: string, data?: Record<string, unknown>, options?: { id?: string }): void;
@@ -84,9 +85,9 @@ export type Context = {
   /** MongoDB-style collections. Each write commits on its own. */
   db: {
     collection<
-      T = Record<string, unknown>,
+      T = unknown,
       C extends AppName<"collections"> = AppName<"collections">,
-    >(name: C): Collection<T, C>;
+    >(name: C): Collection<AppDocument<C, T>, C>;
   };
   graph: Graph;
   /** Commits an event. Inside `transaction`, events commit with the writes. */
@@ -196,9 +197,9 @@ export type Context = {
 export type ReadContext = {
   db: {
     collection<
-      T = Record<string, unknown>,
+      T = unknown,
       C extends AppName<"collections"> = AppName<"collections">,
-    >(name: C): ReadCollection<T, C>;
+    >(name: C): ReadCollection<AppDocument<C, T>, C>;
   };
   /** What the app's plugins declare (as `Context.describe`): its Actions' inputs, its Views. */
   describe(): Description;
@@ -328,9 +329,9 @@ export type ViewCollection<T, C extends string = AppName<"collections">> = {
 export type ViewContext<Shown = unknown> = {
   db: {
     collection<
-      T = Record<string, unknown>,
+      T = unknown,
       C extends AppName<"collections"> = AppName<"collections">,
-    >(name: C): ViewCollection<T, C>;
+    >(name: C): ViewCollection<AppDocument<C, T>, C>;
   };
   resources: Resources;
   /** What the app's plugins declare (as `Context.describe`); a View the runtime runs has it. */
@@ -773,29 +774,45 @@ export const byCollection = (rules: Record<string, Guard>): Guard => (actor, ope
     ? rules[operation.collection](actor, operation, ctx)
     : undefined;
 
-/** A collection whose documents (and queries' collection) are typed from its JSON Schema. */
-export const defineCollection = <const S extends JSONSchema>(
-  def: {
-    schema: S;
-    events?: boolean;
-    records?: boolean;
-    durable?: false;
-    indexes?: string[][];
-    private?: string[];
-    queries?: Record<string, QueryDef<Infer<S> & { _id: string }>>;
-    vectors?: string[];
-  },
-) => def;
+/** The document type of a type-first collection declaration, for the app's generated names. */
+export type DocumentOf<D> = D extends CollectionOptions<infer T> ? DocumentFields<T> : never;
 
-/** Declare an Action. Its JSON Schema types run's input. Omit input for a call with no parameters. */
-export const defineAction = <const S extends JSONSchema = typeof emptyInput, R = unknown>(
-  def: Omit<ActionDef, "input" | "run" | "allow"> & {
-    input?: S;
-    allow?(actor: Actor, input: Infer<S>, ctx: AllowContext): boolean | Promise<boolean>;
-    run(ctx: Context, input: Infer<S>): R | Promise<R>;
-  },
-): ActionDef =>
-  def.input === undefined ? { ...def, input: emptyInput } as ActionDef : def as ActionDef;
+// _id belongs to the runtime. Reads add it, inserts may supply it, even when a
+// shared document type includes it. Distribute over unions to keep variant fields.
+type DocumentFields<T> = T extends unknown ? "_id" extends keyof T ? Omit<T, "_id"> : T : never;
+
+type CollectionOptions<T> = Omit<CollectionDef, "schema" | "queries"> & {
+  queries?: Record<string, QueryDef<T>>;
+};
+
+/** A collection whose query documents are typed from its JSON Schema. */
+export function defineCollection<const S extends JSONSchema>(
+  def: CollectionOptions<WithId<Infer<S>>> & { schema: S },
+): CollectionOptions<WithId<Infer<S>>> & { schema: S };
+/** Declare a document type for copilotz gen to turn into the collection's schema. */
+export function defineCollection<T extends object>(
+  def: CollectionOptions<T> & { schema?: JSONSchema },
+): CollectionOptions<T> & { schema: JSONSchema };
+export function defineCollection(def: Omit<CollectionDef, "schema"> & { schema?: JSONSchema }) {
+  return def.schema === undefined ? { ...def, schema: missingCollectionSchema } : def;
+}
+
+type ActionOptions<I, R> = Omit<ActionDef, "input" | "run" | "allow"> & {
+  allow?(actor: Actor, input: NoInfer<I>, ctx: AllowContext): boolean | Promise<boolean>;
+  run(ctx: Context, input: I): R | Promise<R>;
+};
+
+/** Declare an Action whose JSON Schema types its run and permission check. */
+export function defineAction<const S extends JSONSchema, R = unknown>(
+  def: ActionOptions<Infer<S>, R> & { input: S },
+): ActionDef;
+/** Omit input for a parameterless Action, or type run's second parameter for copilotz gen. */
+export function defineAction<I = Record<string, never>, R = unknown>(
+  def: ActionOptions<I, R> & { input?: never },
+): ActionDef;
+export function defineAction(def: ActionDef): ActionDef {
+  return def.input === undefined ? { ...def, input: emptyInput } : def;
+}
 
 export const defineProcessor = (def: ProcessorDef): ProcessorDef => def;
 

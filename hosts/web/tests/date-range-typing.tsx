@@ -172,10 +172,11 @@ test("rc.64 apps at the edge of the change: empty, the field's own text, and wro
             assert.ok(!invalid(field), at("left empty"));
             await press("Apply");
             assert.deepEqual(applied.splice(0), [START], at("empty, applied"));
-            // The field's own text, typed again, is its end, though parseDay can't read it.
+            // The field's own text, typed again a key at a time, is its end, though parseDay can't
+            // read it.
             await draw({ format, value: START });
             await click(".copilotz-date-field");
-            await type(ENDS, field, shown[field]);
+            for (const text of fromEmpty(shown[field])) await type(ENDS, field, text);
             assert.ok(!invalid(field) && !applyOff(), at("own text"));
             await blur(ENDS, field);
             assert.deepEqual(ends(), shown, at("own text, left"));

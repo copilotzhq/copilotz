@@ -1,6 +1,6 @@
 ---
 title: "Agents on people's own plans"
-description: "An agent's model calls can run on the plan of the person it works for (Claude, ChatGPT through Codex, Google AI through Antigravity), through the plan's CLI on a computer of theirs: the providers, signing in once (installing a missing CLI), signing out, what a cloud computer keeps, and what runs where."
+description: "An agent's model calls can run on the plan of the person it works for (Claude, ChatGPT through Codex, Google AI through Antigravity), through the plan's CLI on a computer of theirs: the providers, signing in once (installing a missing CLI), signing out, what a cloud computer keeps, what runs where, waking a computer that sleeps, and what a plan costs."
 section: Guides
 order: 6
 ---
@@ -128,6 +128,70 @@ The computer program speaks the Agent Client Protocol to the CLIs: Antigravity s
 the program's own adapters speak it for Claude Code and Codex. None of them is shipped with the
 program: people install the CLI they use, or Sign in installs it.
 
+## Waking a computer
+
+A cloud computer sleeps when it isn't used, and a plan's call wakes it. The computers plugin asks
+the app that keeps it, through the `computerWake` resource:
+
+```ts
+resources: {
+  computerWake: {
+    wake: "cloud.wake", // wakes one: { computer }
+    touch: "cloud.touch", // told of every use: { computer }
+    estimate: "cloud.estimate", // how long a wake takes now: { seconds, slower? }
+    prices: "cloudComputer.sizes", // what they cost (see below)
+  },
+}
+```
+
+- **It says so.** Before it waits, the call sends a `waking` chunk with the app's estimate. Chat
+  shows "Waking the computer… (about 5 seconds)", or "…(about 40 seconds: it takes longer at this
+  hour)" when the estimate says it's `slower`. Past that time, it says "Still waking the computer…".
+  It says "the computer", not "yours": everyone in the conversation sees it.
+- **It checks, after.** Once awake, the computer is asked what the plan's CLI is now
+  (`computer.agents.status`), and what it says is kept. A CLI that isn't signed in any more (it
+  went, or its sign-in lapsed while the computer slept) is passed over for the next computer at
+  once. With none left, the model list moves on.
+- **Off isn't asleep.** A person's laptop that's off isn't woken, and nothing says it's waking.
+- **A running step is use.** The computer is told it's used as a step starts, every minute while it
+  runs, and once more when it ends. So the app's idle check never puts it to sleep mid-step, and it
+  stays warm after.
+
+## What a plan costs
+
+**The model.** Tiers price a typical message for the person looking, at the first model their turn
+would try: their plans first (`modelChoice.offered`).
+
+- On one of their plans, a kind of work costs them nothing (`ModelShown.plan`).
+- A tier says what it comes to for them (`TierShown.yours`) where a plan of theirs answers. The
+  composer then reads "Everyday · on your plans · model $0", or "Everyday · 2¢" with no plan
+  connected.
+- `price` stays what it costs on the app's models. The org's and a space's pages, which choose for
+  others, show it.
+
+**The computer.** A computer the app keeps is charged while it's awake. `computer.cost` (a query,
+`{ computer? }`; none means a new one) says what it costs the person asking:
+
+- an hour awake, at its size's price;
+- how long it stays awake after its last use;
+- its disk, a month;
+- how far the org plan's credits go at that, after a month's disk (`planCredits`);
+- for one of theirs, this month so far, from the usage ledger.
+
+The app says the prices: `computerWake.prices` names a query answering `ComputerPrices` (each size's
+hour, the disk's GB and its price a GB-month, `warmMinutes`). Nothing is priced in Copilotz. The
+`computer.cost` View says it in a line, by `hints.mode`:
+
+| Mode    | It says                                                                                                                       |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `price` | "About 16¢ per hour of work, and it sleeps 10 minutes after. Your $5 covers about 18 hours of work, after this month's disk." |
+| `cost`  | "About 16¢ per hour of work, and it sleeps 10 minutes after."                                                                 |
+| `month` | "This month: 2h 40m awake · $0.43 · disk $2.00"                                                                               |
+
+It draws nothing for a person's own machine, or where the app prices none. Connected accounts says
+"Your plan pays for the AI.", and, where the app keeps computers, "A cloud computer you use for it
+is charged while it's awake."
+
 ## Known limits
 
 - A shared computer is shared whole: agents in its spaces can read everything on it, sign-ins kept
@@ -138,3 +202,12 @@ program: people install the CLI they use, or Sign in installs it.
   not on the program's `PATH`) isn't found: the page then shows the command to run by hand.
 - A computer program older than 1.0.0-rc.65 neither installs a CLI nor signs one out: Sign in says
   it's missing, and Sign out fails, until it updates.
+- The estimate takes a plan as it last said: a plan at its limit still shows $0.
+- A wake's time is an estimate. Past it, the notice says "Still waking…".
+- A tool run on the server for longer than a cloud computer stays warm lets it sleep between steps:
+  the next step starts a fresh session, given the whole conversation.
+- A CLI removed while its computer is awake still shows as signed in until the computer is asked
+  again.
+- "This month" is the calendar month in UTC. The disk shows at its monthly price, at the app's disk
+  size now.
+- "Covers about N hours" counts the plan's credits, not what's left of them.

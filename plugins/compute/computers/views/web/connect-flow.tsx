@@ -6,7 +6,7 @@
  * a plan runs through an app on a computer and the person has none that
  * can: in the cloud, made in a click, or on this computer), then one
  * checklist for everything picked, each line ticking itself off
- * (connect-flow.ts): the computer readied (`computer.prepare`: woken,
+ * (connect-lines.ts): the computer readied (`computer.prepare`: woken,
  * updated, asked), each missing CLI installed as part of its sign-in, each
  * sign-in in turn (a link and a code field; on the server, the account's own
  * steps: the `accounts.connect` View), and a test answered on each plan
@@ -47,7 +47,7 @@ import {
   type Line,
   linesOf,
   nextOf,
-} from "./connect-flow.ts";
+} from "./connect-lines.ts";
 import type { Kind } from "./kinds.ts";
 import { SharedDialog } from "./plan-shared.tsx";
 import {

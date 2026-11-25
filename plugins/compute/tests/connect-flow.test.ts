@@ -1,5 +1,5 @@
 /**
- * The connect flow as a state machine (views/web/connect-flow.ts): from what
+ * The connect flow as a state machine (views/web/connect-lines.ts): from what
  * its calls answered, the checklist (each line waiting, active, done, or
  * failed with the one thing that fixes it) and the calls to make next. The
  * founder's test, step by step; every failure, and what's offered for it;
@@ -17,7 +17,7 @@ import {
   type Line,
   linesOf,
   nextOf,
-} from "../computers/views/web/connect-flow.ts";
+} from "../computers/views/web/connect-lines.ts";
 import type { Way } from "../computers/views/web/plan-states.ts";
 import { test } from "../../../testing/mod.ts";
 

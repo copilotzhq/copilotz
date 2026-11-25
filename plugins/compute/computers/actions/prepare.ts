@@ -1,6 +1,6 @@
 /**
  * `computer.prepare` `{ computer }`: one of the person's computers, ready
- * for plans, as it is now, for the connect flow (views/web/connect-flow.ts)
+ * for plans, as it is now, for the connect flow (views/web/connect-lines.ts)
  * before it installs or signs anything in there. Each call checks again; it
  * never answers from what the record remembers:
  *

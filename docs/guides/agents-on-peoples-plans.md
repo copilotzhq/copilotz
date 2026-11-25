@@ -62,7 +62,7 @@ yours alone, sign in again), or in one plain sentence. A command shows only when
 couldn't run (it failed, or the computer runs Windows): with what it said, and the computer's
 Terminal a click away.
 
-The checklist is plain functions (`linesOf`, `nextOf` in `views/web/connect-flow.ts`) over what the
+The checklist is plain functions (`linesOf`, `nextOf` in `views/web/connect-lines.ts`) over what the
 flow's calls answered: never over what a record remembers.
 
 The sign-in stays on the computer, in a folder the computer program keeps for each CLI, apart from

@@ -321,7 +321,10 @@ test("custom serializers get the projected sheet, totals, base name and options"
     type: "application/octet-stream",
     content: Uint8Array.of(4, 2),
   });
-  const sql = exportTableFile("sql", raw, "invoices", { tableName: "invoice_lines" });
+  const sql = exportTableFile("sql", raw, "invoices", {
+    tableName: "invoice_lines",
+    values: "raw",
+  });
   assertEquals(sql.file, "invoices.sql");
   assertStringIncludes(
     String(sql.content),

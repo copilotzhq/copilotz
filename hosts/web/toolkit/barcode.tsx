@@ -68,6 +68,9 @@ export function ProductBarcode(
     & BarcodeProps
     & BarcodeOptions,
 ): ReactNode {
+  if (!Number.isFinite(height) || height < 1) {
+    throw new RangeError("Barcode height must be at least one pixel.");
+  }
   const label = format === "ean13"
     ? eanDigits(value, 13)
     : format === "ean8"

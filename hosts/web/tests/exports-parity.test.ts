@@ -115,6 +115,8 @@ cases.set("json/records", api.toJson(stock));
 cases.set("json/table", api.toJson(ledger, { json: "table" }));
 cases.set("xml/stock", api.toXml(stock));
 cases.set("sql/identifier", api.toSql(stock, "warehouse`stock"));
+const jsLedger = { headers: ["Memo", "Paid", "Due", "Missing"], rows: [[null, true, false]] };
+cases.set("sql/javascript-scalars", Reflect.apply(api.toSql, undefined, [jsLedger, "ledger"]));
 cases.set("pdf/empty", api.toPdf({ headers: sales.headers, rows: [] }));
 for (const orientation of ["landscape", "portrait"] as const) {
   const bytes = api.tablePdf(purchase, { orientation });
@@ -178,6 +180,20 @@ test("rc.63 exports match the recorded bytes for every call", () => {
   for (const [name, output] of cases) {
     assert.equal(createHash("sha256").update(output).digest("hex"), expected[name], name);
   }
+});
+
+test("SQL file exports use native null and booleans only with raw table values", () => {
+  const legacy = cases.get("sql/javascript-scalars");
+  const raw = { values: "raw" } as const;
+  assert.equal(
+    Reflect.apply(api.exportFile, undefined, ["sql", jsLedger, "ledger", raw]).content,
+    legacy,
+  );
+  assert.equal(api.exportTableFile("sql", jsLedger, "ledger").content, legacy);
+  assert.equal(
+    api.exportTableFile("sql", jsLedger, "ledger", raw).content,
+    "INSERT INTO `ledger` (`Memo`,`Paid`,`Due`,`Missing`) VALUES (NULL,TRUE,FALSE,'');",
+  );
 });
 
 test("rc.63 JavaScript callers can attach their own sheet, options and barcode metadata", () => {

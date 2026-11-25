@@ -268,6 +268,22 @@ type DataTableProps<R> = {
   className?: string;
 };
 
+let warnedFooterRows = false;
+
+function isFooterRows(value: unknown): value is Record<string, ExportCell>[] {
+  if (!Array.isArray(value)) return false;
+  for (const row of value) {
+    if (Object.prototype.toString.call(row) !== "[object Object]") return false;
+    if (
+      !Object.values(row).every((cell) =>
+        cell === null || typeof cell === "number" || typeof cell === "string" ||
+        typeof cell === "boolean"
+      )
+    ) return false;
+  }
+  return true;
+}
+
 /** Lists, searches and exports the visible columns of a page or a client-side list. */
 export function DataTable<R>(props: DataTableProps<R>): ReactNode {
   const {
@@ -281,6 +297,14 @@ export function DataTable<R>(props: DataTableProps<R>): ReactNode {
     toolbar = true,
     pagination = true,
   } = props;
+  let { footerRows } = props;
+  if (footerRows !== undefined && !isFooterRows(footerRows)) {
+    footerRows = undefined;
+    if (!warnedFooterRows) {
+      warnedFooterRows = true;
+      console.warn("DataTable: footerRows isn't an array of rows; ignored");
+    }
+  }
   const selectable = props.selectable ?? actions !== undefined;
   const server = props.total !== undefined;
   const base = useId();
@@ -362,7 +386,7 @@ export function DataTable<R>(props: DataTableProps<R>): ReactNode {
     const sheet = tableSheet(
       visibleTitled,
       props.exportAll ? matching : page,
-      props.footerRows,
+      footerRows,
       options.values,
     );
     const pdf = options.pdf;
@@ -373,7 +397,7 @@ export function DataTable<R>(props: DataTableProps<R>): ReactNode {
     downloadTableFile(format, sheet, props.exportName ?? "export", {
       ...options,
       formats: definitions,
-      pdf: usesTableLayout(pdf, props.footerRows) ? { ...pdf, columns } : pdf,
+      pdf: usesTableLayout(pdf, footerRows) ? { ...pdf, columns } : pdf,
     });
   };
   const always = props.detailOpen === true;
@@ -627,10 +651,10 @@ export function DataTable<R>(props: DataTableProps<R>): ReactNode {
                 );
               })}
           </tbody>
-          {props.footer || props.footerRows?.length
+          {props.footer || footerRows?.length
             ? (
               <tfoot>
-                {props.footerRows?.map((row, i) => (
+                {footerRows?.map((row, i) => (
                   <tr key={i}>
                     {toggles && <td />}
                     {selectable && <td />}

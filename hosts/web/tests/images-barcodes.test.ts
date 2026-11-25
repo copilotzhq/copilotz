@@ -1,10 +1,14 @@
 import { assertEquals, assertRejects, assertStringIncludes, assertThrows } from "@std/assert";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { loadTsx } from "./load-tsx.ts";
 import { test } from "../../../testing/mod.ts";
 import {
   barcodeBars,
   barcodePng,
   bars,
   code39,
+  documentPdf,
   drawDocumentPdf,
   ean13,
   ean8,
@@ -296,5 +300,25 @@ test("drawDocumentPdf requires positive barcode dimensions", () => {
   for (const length of [0, -1]) {
     assertThrows(() => drawDocumentPdf([[{ ...label, height: length }]]), RangeError);
     assertThrows(() => drawDocumentPdf([[{ ...label, width: length }]]), RangeError);
+  }
+});
+
+test("barcode heights must span one pixel on screen or in PNG, or 0.01 points in PDF", async () => {
+  const { ProductBarcode } = await loadTsx(() => import("../toolkit/barcode.tsx"));
+  const svg = (height: number) =>
+    renderToStaticMarkup(createElement(ProductBarcode, { value: "A", height }));
+  for (const height of [0, -1, 0.1, 0.99, NaN, Infinity]) {
+    assertThrows(() => svg(height), RangeError);
+    await assertRejects(() => barcodePng("A", { height }), RangeError);
+  }
+  assertStringIncludes(svg(1), 'height="1"');
+  assertEquals(readPng(await barcodePng("A", { height: 1 })).height, 1);
+
+  for (const render of [documentPdf, drawDocumentPdf]) {
+    const pdf = (height: number) => render([[{ barcode: "A", x: 0, y: 0, width: 180, height }]]);
+    for (const height of [0, -1, 0.001, 0.009, NaN, Infinity]) {
+      assertThrows(() => pdf(height), RangeError);
+    }
+    assertStringIncludes(new TextDecoder().decode(pdf(0.01)), " 0.01 re f");
   }
 });

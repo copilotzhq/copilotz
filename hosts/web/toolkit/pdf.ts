@@ -736,8 +736,11 @@ function draw(
       );
     } else if ("barcode" in item) {
       const barWidth = item.width ?? width - item.x;
-      if (checkBounds && !(barWidth > 0 && item.height > 0)) {
-        throw new RangeError("Barcode width and height must be positive.");
+      if (!Number.isFinite(item.height) || item.height < 0.01) {
+        throw new RangeError("Barcode height must be at least 0.01 points.");
+      }
+      if (checkBounds && !(barWidth > 0)) {
+        throw new RangeError("Barcode width must be positive.");
       }
       const drawn = checkBounds
         ? barcodeBars(item.barcode, barWidth, item)

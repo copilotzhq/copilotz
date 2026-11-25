@@ -1,33 +1,10 @@
 import assert from "node:assert/strict";
-import { Window } from "happy-dom";
-import { act, type ReactNode, useState } from "react";
+import { page } from "./page.ts";
+import { act, useState } from "react";
 import { test } from "../../../testing/mod.ts";
 import { tablePdf } from "../export.ts";
 import { Form, useFormSubmit } from "../toolkit/form.tsx";
 import { DataTable } from "../toolkit/data-table.tsx";
-
-async function page(run: (render: (node: ReactNode) => Promise<void>) => Promise<void>) {
-  const window = new Window();
-  const globals = { window, document: window.document, IS_REACT_ACT_ENVIRONMENT: true };
-  const previous = Object.getOwnPropertyDescriptors(globalThis);
-  for (const [key, value] of Object.entries(globals)) {
-    Object.defineProperty(globalThis, key, { configurable: true, value, writable: true });
-  }
-  const { createRoot } = await import("react-dom/client");
-  const root = createRoot(document.body.appendChild(document.createElement("main")));
-  try {
-    await run(async (node) => {
-      await act(() => root.render(node));
-    });
-  } finally {
-    await act(() => root.unmount());
-    await window.happyDOM.close();
-    for (const key of Object.keys(globals)) {
-      if (previous[key]) Object.defineProperty(globalThis, key, previous[key]);
-      else Reflect.deleteProperty(globalThis, key);
-    }
-  }
-}
 
 const submit = () => act(async () => document.querySelector("form")!.requestSubmit());
 

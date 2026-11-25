@@ -438,7 +438,8 @@ const formats = {
   file without the byte-order mark.
 - **JSON and SQL.** `json: "records"` gives objects by header. `json: "table"` gives
   `{ header, data }` with cells keyed by position. Its default is text and `values: "raw"` preserves
-  their scalar types. `tableName` sets the SQL table independently of the file name.
+  their scalar types. `tableName` sets the SQL table independently of the file name. SQL quotes null
+  and booleans by default. Use `values: "raw"` for `NULL`, `TRUE` and `FALSE`.
 - **In an Action.** Use `exportFile` for a built-in format with string and number cells. For custom
   format names or raw cells use `exportTableFile` from `copilotz/web/export`. Give it a sheet with
   `{ headers, rows, footerRows }`, in column order, or use
@@ -766,7 +767,8 @@ margins. For example, Code 128 with `SKU-12345` and quiet margins grows from a r
 to 143. EAN-13 with quiet margins requires 113 pixels for PNG or 113 points for PDF. In
 `drawDocumentPdf`, omitting the barcode's `width` uses the space from its `x` position to the page
 edge. A width or height of zero or less raises a `RangeError`, as do printed bars extending beyond
-the page. The blank quiet margins can extend beyond its edges.
+the page. Barcode heights must be at least one pixel in SVG and PNG, or 0.01 points in either PDF
+renderer. The blank quiet margins can extend beyond the page edges.
 
 ## A route's own page
 

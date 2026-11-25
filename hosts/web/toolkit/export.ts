@@ -182,18 +182,23 @@ function serializeXml(sheet: TableExportSheet): string {
 }
 
 /** SQL: an insert into `table` per row. */
-function serializeSql(sheet: TableExportSheet, table: string): string {
+function serializeSql(
+  sheet: TableExportSheet,
+  table: string,
+  values?: TableExportOptions["values"],
+): string {
   const { headers } = sheet;
   const rows = dataRows(sheet);
   const name = (id: string) => `\`${id.replace(/`/g, "``")}\``;
-  const value = (cell: ExportCell | undefined) =>
-    cell === null
-      ? "NULL"
-      : typeof cell === "boolean"
-      ? (cell ? "TRUE" : "FALSE")
-      : typeof cell === "number" && Number.isFinite(cell)
-      ? String(cell)
-      : `'${text(cell).replace(/\\/g, "\\\\").replace(/'/g, "''")}'`;
+  const value = (cell: ExportCell | undefined) => {
+    if (values === "raw") {
+      if (cell === null) return "NULL";
+      if (typeof cell === "boolean") return cell ? "TRUE" : "FALSE";
+    }
+    if (typeof cell === "number" && Number.isFinite(cell)) return String(cell);
+    const plain = cell === undefined ? "" : String(cell);
+    return `'${plain.replace(/\\/g, "\\\\").replace(/'/g, "''")}'`;
+  };
   const columns = headers.map(name).join(",");
   return rows.map((row) =>
     `INSERT INTO ${name(table)} (${columns}) VALUES (${
@@ -359,7 +364,8 @@ const builtins: Record<ExportFormat, TableExportFormat> = {
     label: "SQL",
     extension: "sql",
     type: "application/sql",
-    serialize: (sheet, name, options) => serializeSql(sheet, options.tableName ?? name),
+    serialize: (sheet, name, options) =>
+      serializeSql(sheet, options.tableName ?? name, options.values),
   },
   excel: {
     label: "MS-Excel",

@@ -97,6 +97,9 @@ A coming release will fix both issues with nested-call IDs that name their calle
   the viewer, under the collection's rules, as the call's other writes are (rc.63 wrote it as the
   system). One the rules refuse isn't kept, and the process logs it. An atomic Action's records now
   commit or roll back with the transaction it joined.
+- CSV, TXT and XLS exports write numeric text (`-12.5`, `-1e-7`, `+1`) as it is; rc.63 put an
+  apostrophe before a leading `+` or `-`. Text that looks like a formula (`=SUM(…)`, `@cmd`) is
+  still guarded.
 
 ## 1.0.0-rc.63 — 2026-11-24
 

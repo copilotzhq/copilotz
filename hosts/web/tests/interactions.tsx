@@ -111,3 +111,55 @@ test("table PDF settings follow the visible export columns", () =>
     await act(() => document.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
     assert.deepEqual(options, [{ align: undefined, width: 110 }, { align: "right" }]);
   }));
+
+test("hiding sales columns keeps PDF widths and alignment with their fields", () =>
+  page(async (render) => {
+    await render(
+      <DataTable
+        columns={[
+          { key: "id", title: "ID" },
+          { key: "qty", title: "Qty" },
+          { key: "product", title: "Product" },
+        ]}
+        rows={[{ id: "7", qty: "2", product: "Coffee" }]}
+        rowKey={(row) => row.id}
+        footerRows={[{ product: "Total" }]}
+        exports={["pdf"]}
+        exportOptions={{
+          pdf: { columns: [{ width: 14 }, { width: 45, align: "right" }, { width: 120 }] },
+        }}
+      />,
+    );
+    let url = "";
+    document.addEventListener("click", (event) => {
+      if (event.target instanceof window.HTMLAnchorElement) {
+        event.preventDefault();
+        url = event.target.href;
+      }
+    });
+    document.querySelector<HTMLElement>('[role="menu"]')!.hidePopover = () => {};
+    const toggle = (index: number) =>
+      act(() =>
+        document.querySelectorAll<HTMLInputElement>(".copilotz-table-columns input")[index].click()
+      );
+    const check = async (showId: boolean, showQty: boolean) => {
+      await act(() => document.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
+      const pdf = await (await fetch(url)).text();
+      assert.ok(pdf.includes("(Coffee) Tj"));
+      assert.ok(pdf.includes("(Total) Tj"));
+      assert.equal(pdf.includes("(7) Tj"), showId);
+      assert.equal(pdf.includes("(2) Tj"), showQty);
+      // 36-point margin, the visible preceding widths, and 3 points of cell padding.
+      const productX = 36 + (showId ? 14 : 0) + (showQty ? 45 : 0) + 3;
+      assert.match(pdf, new RegExp(productX + " [\\d.]+ Td \\(Coffee\\)"));
+      if (showQty) assert.match(pdf, /Tf 73 [\d.]+ Td \(2\)/); // right-aligned in 45 points
+      url = "";
+    };
+    await toggle(0);
+    await check(false, true);
+    await toggle(0);
+    await toggle(1);
+    await check(true, false);
+    await toggle(0);
+    await check(false, false);
+  }));

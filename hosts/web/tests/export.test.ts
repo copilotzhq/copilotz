@@ -130,11 +130,43 @@ test("CSV quotes every cell and guards formulas, but not plain numbers", () => {
     [
       '"Name","Total","Code"',
       '"Ann ""the"" <boss> & co","12.50","007"',
-      `"'=HYPERLINK(1)","-3.5","'+1"`,
+      `"'=HYPERLINK(1)","-3.5","+1"`,
       `"'@sum","-12.5","'-x"`,
     ].join("\n"),
   );
   assertStringIncludes(toCsv(sheet, { formulas: true }), '"=HYPERLINK(1)"');
+});
+
+test("CSV and TXT preserve raw and written numbers and guard formula-like text", () => {
+  const values = [-1e-7, 1e-7, "-1e-7", "-12.5", "+1", "=1", "+x", "-1e-7+1", "@x", "\tx", "\rx"];
+  const sheet = tableSheet(
+    [{ key: "value", title: "Value" }],
+    values.map((value) => ({ value })),
+    [],
+    "raw",
+  );
+  const expected = [
+    "Value",
+    "-1e-7",
+    "1e-7",
+    "-1e-7",
+    "-12.5",
+    "+1",
+    "'=1",
+    "'+x",
+    "'-1e-7+1",
+    "'@x",
+    "'\tx",
+    "'\rx",
+  ];
+  for (const format of ["csv", "txt"]) {
+    assertEquals(
+      exportFile(format, sheet, "values", { bom: false, values: "raw" }).content,
+      expected.map((value) => `"${value}"`).join("\n"),
+    );
+  }
+  const excel = toExcel(sheet, "values");
+  for (const value of expected.slice(1)) assertStringIncludes(excel, `<td>${value}</td>`);
 });
 
 test("JSON records keep sparse and missing cells as empty strings and explicit null as null", () => {

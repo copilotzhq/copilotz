@@ -45,11 +45,11 @@ export type TableExportFormat = {
   label: string;
   extension: string;
   type: string;
-  serialize(sheet: Sheet<ExportCell>, name: string, options: ExportOptions): string | Uint8Array;
+  serialize(sheet: Sheet<ExportCell>, name: string, options: FileOptions): string | Uint8Array;
 };
 
 /** How the files are made. */
-export type ExportOptions = {
+export type ExportOptions<Title extends string | string[] = string> = {
   /** CSV, text and `.xls`: let cells start as formulas (`=SUM(…)`), unguarded. */
   formulas?: boolean;
   /** CSV and text: a byte-order mark first (yes, by default). */
@@ -71,8 +71,10 @@ export type ExportOptions = {
   /** Add or replace named formats for this export. */
   formats?: Record<string, TableExportFormat>;
   /** The PDF's page layout, title, logo and colours. */
-  pdf?: PdfOptions;
+  pdf?: PdfOptions<Title>;
 };
+
+type FileOptions = ExportOptions<string | string[]>;
 
 function dataRows({ rows, footerRows }: Sheet<ExportCell>) {
   return footerRows?.length ? [...rows, ...footerRows] : rows;
@@ -84,8 +86,9 @@ const text = (cell: ExportCell | undefined) => cell == null ? "" : String(cell);
 const NUMBER = /^-?(?:0|[1-9]\d{0,14})(?:\.\d+)?$/;
 
 /** A cell a spreadsheet would read as a formula, made plain text with a leading `'`. */
-export function guard(cell: string): string {
-  if (NUMBER.test(cell)) return cell;
+export function guard(cell: ExportCell | undefined): string {
+  if (typeof cell !== "string") return text(cell);
+  if (/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(cell)) return cell;
   return /^[=+\-@\t\r]/.test(cell) ? `'${cell}` : cell;
 }
 
@@ -103,14 +106,14 @@ const markup = (value: string) =>
 /** CSV, quoted and formula-guarded by default. Set csv to match a file's dialect. */
 export function toCsv(
   sheet: Sheet<ExportCell>,
-  { formulas, csv = {} }: ExportOptions = {},
+  { formulas, csv = {} }: FileOptions = {},
 ): string {
   const { delimiter = ",", lineEnding = "\n", quote = "always" } = csv;
   if ([...delimiter].length !== 1 || /["\r\n]/.test(delimiter)) {
     throw new RangeError("Invalid CSV delimiter.");
   }
   const cell = (value: ExportCell) => {
-    const plain = formulas ? text(value) : guard(text(value));
+    const plain = formulas ? text(value) : guard(value);
     if (quote === "needed" && !plain.includes(delimiter) && !/["\r\n]/.test(plain)) return plain;
     return `"${plain.replace(/"/g, '""')}"`;
   };
@@ -124,7 +127,7 @@ export function toCsv(
 /** JSON: the rows as objects by header, or the table export's shape. */
 export function toJson(
   sheet: Sheet<ExportCell>,
-  { json = "records", values }: ExportOptions = {},
+  { json = "records", values }: FileOptions = {},
 ): string {
   const { headers } = sheet;
   const rows = dataRows(sheet);
@@ -178,12 +181,12 @@ export function toSql(sheet: Sheet<ExportCell>, table: string): string {
 export function toExcel(
   sheet: Sheet<ExportCell>,
   name: string,
-  options: ExportOptions = {},
+  options: FileOptions = {},
 ): string {
   const { headers } = sheet;
   const rows = dataRows(sheet);
   const cell = (value: ExportCell | undefined) =>
-    markup(options.formulas ? text(value) : guard(text(value)));
+    markup(options.formulas ? text(value) : guard(value));
   const tr = (cells: ExportCell[], tag: string) =>
     `<tr>${cells.map((c) => `<${tag}>${cell(c)}</${tag}>`).join("")}</tr>`;
   return `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">` +
@@ -206,7 +209,7 @@ const column = (index: number): string =>
 export function toXlsx(
   input: Sheet<ExportCell>,
   name: string,
-  { values }: ExportOptions = {},
+  { values }: FileOptions = {},
 ): Uint8Array {
   const { headers } = input;
   const rows = dataRows(input);
@@ -262,8 +265,10 @@ export function toXlsx(
 }
 
 /** A PDF of the table (see `pdf.ts`). */
-export const toPdf = (sheet: Sheet<ExportCell>, options?: PdfOptions): Uint8Array =>
-  tablePdf(sheet, options);
+export const toPdf = (
+  sheet: Sheet<ExportCell>,
+  options?: PdfOptions<string | string[]>,
+): Uint8Array => tablePdf(sheet, options);
 
 const csvFile: TableExportFormat["serialize"] = (sheet, _name, options) =>
   (options.bom === false ? "" : "﻿") + toCsv(sheet, options);
@@ -316,7 +321,7 @@ export function exportFile(
   format: string,
   sheet: Sheet<ExportCell>,
   name: string,
-  options: ExportOptions = {},
+  options: FileOptions = {},
 ): { file: string; type: string; content: string | Uint8Array } {
   const custom = options.formats;
   const def = custom && Object.hasOwn(custom, format)
@@ -337,7 +342,7 @@ export function download(
   format: string,
   sheet: Sheet<ExportCell>,
   name: string,
-  options?: ExportOptions,
+  options?: FileOptions,
 ): void {
   const { file, type, content } = exportFile(format, sheet, name, options);
   const url = URL.createObjectURL(new Blob([content as BlobPart], { type }));

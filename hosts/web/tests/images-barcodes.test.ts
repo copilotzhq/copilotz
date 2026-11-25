@@ -90,6 +90,19 @@ const inflate = async (data: Uint8Array) =>
     ).arrayBuffer(),
   );
 
+test("pdfImage rejects a JPEG ending after its frame or with an empty scan", async () => {
+  const jpeg = bytes(images.jpeg);
+  const endOfHeader = (marker: number) => {
+    const at = jpeg.findIndex((b, i) => b === 0xff && jpeg[i + 1] === marker) + 2;
+    return at + new DataView(jpeg.buffer).getUint16(at);
+  };
+  const frame = jpeg.slice(0, endOfHeader(0xc0));
+  const scan = jpeg.slice(0, endOfHeader(0xda));
+  for (const truncated of [frame, scan, Uint8Array.of(...scan, 0xff, 0xd9)]) {
+    await assertRejects(() => pdfImage(truncated), Error, "scan data");
+  }
+});
+
 test("PNG filters reconstruct their neighboring samples", async () => {
   assertEquals([...await pngPixels(readPng(bytes(images.filters)))], [
     3,
@@ -214,6 +227,13 @@ test("an omitted barcode width uses the room from x to the receipt edge", () => 
     documentPdf([[small]], { size: "receipt" }),
     documentPdf([[{ ...small, width: 219 }]], { size: "receipt" }),
   );
+});
+
+test("a Code 128 label fits flush with a fractional page edge", () => {
+  const label = { barcode: "POS 12", x: 0, y: 30.1, width: 121, height: 40.2 };
+  const pdf = String.fromCharCode(...documentPdf([[label]], { size: [200, 70.3] }));
+  assertStringIncludes(pdf, " 0 2 40.2 re f");
+  assertThrows(() => documentPdf([[label]], { size: [200, 70.299] }), RangeError, "on the page");
 });
 
 test("PDF barcode bounds use the first and last bars, including bars flush with the page", () => {

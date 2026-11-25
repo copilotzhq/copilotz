@@ -17,12 +17,23 @@ export type PdfImage = {
 function jpeg(data: Uint8Array): PdfImage {
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
   let adobe = false;
+  let frame: PdfImage | undefined;
   for (let at = 2; at + 4 <= data.length && data[at] === 255;) {
     while (data[at] === 255) at++;
     const marker = data[at++];
-    if (marker === 0xda || marker === 0xd9) break;
+    if (marker === 0xd9 || at + 2 > data.length) break;
     const length = view.getUint16(at);
     if (length < 2 || at + length > data.length) break;
+    if (marker === 0xda) {
+      const scan = at + length;
+      const components = data[at + 2];
+      // Entropy data begins with a byte or a byte-stuffed FF 00, never a marker.
+      if (
+        frame && components >= 1 && components <= frame.colors && length === 6 + 2 * components &&
+        scan < data.length && (data[scan] !== 0xff || data[scan + 1] === 0)
+      ) return { ...frame, inverted: adobe && frame.colors === 4 };
+      break;
+    }
     if (marker === 0xee && String.fromCharCode(...data.subarray(at + 2, at + 7)) === "Adobe") {
       adobe = true;
     }
@@ -35,18 +46,18 @@ function jpeg(data: Uint8Array): PdfImage {
         !width || !height || bits !== 8 || (colors !== 1 && colors !== 3 && colors !== 4) ||
         length !== 8 + 3 * colors
       ) break;
-      return {
+      frame = {
         width,
         height,
         bits,
         colors,
         filter: "DCTDecode",
         data,
-        inverted: adobe && colors === 4,
       };
     }
     at += length;
   }
+  if (frame) throw new Error("JPEG is missing valid scan data.");
   throw new Error("Invalid or unsupported JPEG frame.");
 }
 

@@ -30,9 +30,9 @@ import type { PdfImage } from "./pdf-image.ts";
 import { type BarcodeOptions, bars } from "./code128.ts";
 
 /** How the PDF looks: its page, its title, and its colours (`#rrggbb`). */
-export type PdfOptions = {
+export type PdfOptions<Title extends string | string[] = string> = {
   /** Title lines over the table, on the first page. */
-  title?: string | string[];
+  title?: Title;
   /** Smaller lines under the title, on the first page. */
   subtitle?: string | string[];
   /** Paper in points. Named paper defaults to landscape, a pair keeps its given orientation. */
@@ -107,7 +107,7 @@ function rgb(colour: string): string {
 /** A printable table, with repeated column headings and totals after its final row. */
 export function tablePdf(
   { headers, rows, footerRows = [] }: Sheet<ExportCell>,
-  options: PdfOptions = {},
+  options: PdfOptions<string | string[]> = {},
 ): Uint8Array {
   const paper = options.size ?? "a4";
   const [a, b] = Array.isArray(paper) ? paper : [SIZES[paper].width, Number(SIZES[paper].height)];
@@ -644,9 +644,10 @@ function draw(
       const drawn = bars(item.barcode, item.width ?? width - item.x, item);
       const first = drawn.bars[0];
       const last = drawn.bars[drawn.bars.length - 1];
+      const tolerance = 1e-6; // points
       if (
-        !(item.x + first.x >= 0 && item.x + last.x + last.w <= width &&
-          item.y >= 0 && item.height >= 0 && item.y + item.height <= height)
+        !(item.x + first.x >= -tolerance && item.x + last.x + last.w <= width + tolerance &&
+          item.y >= -tolerance && item.height >= 0 && item.y + item.height <= height + tolerance)
       ) {
         throw new RangeError("Barcode bars must fit on the page.");
       }
@@ -662,14 +663,19 @@ function draw(
   return ops.join("\n");
 }
 
+type DocumentOptions = {
+  size?: PageSize;
+  /** Under what's drawn, on a page whose height fits it. */
+  margin?: number;
+};
+
 /** A document as PDF bytes: each page's drawing, on pages of one `size` (A4 by default). */
+export function documentPdf(pages: DocumentItem[][], options?: DocumentOptions): Uint8Array;
+// Keep the rc.63 page type for callers deriving it with Parameters.
+export function documentPdf(pages: Drawn[][], options?: DocumentOptions): Uint8Array;
 export function documentPdf(
   pages: DocumentItem[][],
-  { size = "a4", margin = 12 }: {
-    size?: PageSize;
-    /** Under what's drawn, on a page whose height fits it. */
-    margin?: number;
-  } = {},
+  { size = "a4", margin = 12 }: DocumentOptions = {},
 ): Uint8Array {
   const page = Array.isArray(size)
     ? { width: size[0], height: size[1] }

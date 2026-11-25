@@ -53,6 +53,7 @@ import {
   download,
   EXPORT_FORMATS,
   type ExportCell,
+  type ExportFormat,
   type ExportOptions,
   type TableExportFormat,
 } from "./export.ts";
@@ -80,7 +81,7 @@ import { say } from "./words.ts";
 export { type Column, type Key, PAGE_SIZES, type TableState };
 
 /** A format in the export menu: by name, or with the menu's own words for it. */
-export type ExportChoice = string | { format: string; label: string };
+export type ExportChoice<F extends string = ExportFormat> = F | { format: F; label: string };
 
 /** Provide named formats around the app's screens. A table may add or replace them locally. */
 export const TableExportFormats: Context<Record<string, TableExportFormat>> = createContext<
@@ -195,8 +196,7 @@ const ownClick = (event: MouseEvent) => !!(event.target as Element).closest?.(OW
 
 const ALIGN = { left: undefined, right: "copilotz-table-right", center: "copilotz-table-center" };
 
-/** Lists, searches and exports the visible columns of a page or a client-side list. */
-export function DataTable<R>(props: {
+type DataTableProps<R, Toolbar, Format extends string> = {
   columns: Column<R>[];
   rows: R[];
   rowKey(row: R): Key;
@@ -222,13 +222,13 @@ export function DataTable<R>(props: {
   /** The column chooser (yes). */
   chooseColumns?: boolean;
   /** The export menu's formats (CSV, Excel, PDF); `false`: none. */
-  exports?: ExportChoice[] | false;
+  exports?: ExportChoice<Format>[] | false;
   /** An export's file name, without its extension ("export"). */
   exportName?: string;
   /** Export every row that matches (searched and sorted), not only the page shown. */
   exportAll?: boolean;
   /** How the files are made (see `export.ts`). */
-  exportOptions?: ExportOptions;
+  exportOptions?: ExportOptions<string | string[]>;
   /** Additional or replacement formats for this table, keyed by name. */
   formats?: Record<string, TableExportFormat>;
   /** Totals by column key, shown below the body and included in each file. */
@@ -251,12 +251,18 @@ export function DataTable<R>(props: {
    */
   layout?: "auto" | "fixed";
   /** A button or filter beside the built-in tools. False hides the entire toolbar. */
-  toolbar?: ReactNode;
+  toolbar?: Toolbar;
   pagination?: boolean;
   /** The table element's id. */
   id?: string;
   className?: string;
-}): ReactNode {
+};
+
+/** Lists, searches and exports the visible columns of a page or a client-side list. */
+export function DataTable<R>(props: DataTableProps<R, ReactNode, string>): ReactNode;
+// Keep the rc.63 signature last for callers deriving props with Parameters or ComponentProps.
+export function DataTable<R>(props: DataTableProps<R, boolean, ExportFormat>): ReactNode;
+export function DataTable<R>(props: DataTableProps<R, ReactNode, string>): ReactNode {
   const {
     columns,
     rows,
@@ -341,9 +347,13 @@ export function DataTable<R>(props: {
       props.exportOptions?.values,
     );
     const pdf = props.exportOptions?.pdf;
-    const columns = visibleTitled.map((c, i) => ({
+    // Positional settings describe the initially visible columns, before chooser edits.
+    const byKey = new Map(
+      titled.filter((c) => !c.hidden).map((c, i) => [c.key, pdf?.columns?.[i]]),
+    );
+    const columns = visibleTitled.map((c) => ({
       align: c.align,
-      ...pdf?.columns?.[i],
+      ...byKey.get(c.key),
     }));
     download(format, sheet, props.exportName ?? "export", {
       ...props.exportOptions,

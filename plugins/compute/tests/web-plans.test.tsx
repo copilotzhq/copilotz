@@ -65,7 +65,8 @@ function ctxOf(
         find: () => ({ status: "ready", value: reads[`${name}.find`] }),
       }),
     },
-    resources,
+    // The accounts' front end is there: it links Your AI.
+    resources: { userMenu: { accounts: { href: "/accounts" } }, ...resources },
     name: "test",
     viewer: { name: "ana" },
     hints: { query, mode: "full" },

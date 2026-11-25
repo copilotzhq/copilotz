@@ -3,7 +3,8 @@
  * View reads: the person's computers (what each last said of its CLIs),
  * where each is shared (its desks, and the spaces they reach), the kinds of
  * computer the app keeps (cloud computers) and whether they can make one,
- * the accounts that pay for models and the person's own, and the plans the
+ * the accounts that pay for models and the person's own (when the app has
+ * the accounts plugin, whose front end links Your AI), and the plans the
  * app uses (the `planList` resource's query, in the person's order; without
  * it, every plan the app has). Undefined until it's all there.
  */
@@ -55,8 +56,12 @@ export function plansData(ctx: ViewContext<ReactNode>): PlansData | undefined {
     const named = k.add?.available ? queryOf(k.add.available) : undefined;
     return named ? ctx.db.collection(named[0]).query<unknown>(named[1], {}).value : undefined;
   });
-  const providers = ctx.db.collection("account").query<ProviderShown[]>("providers", {}).value;
-  const accounts = ctx.db.collection<Account>("account").find({}).value;
+  // The accounts (ChatGPT, on the server) when the app has them: its front end links Your AI.
+  const withAccounts = !!(ctx.resources.userMenu as Record<string, unknown> | undefined)?.accounts;
+  const providers = withAccounts
+    ? ctx.db.collection("account").query<ProviderShown[]>("providers", {}).value
+    : [];
+  const accounts = withAccounts ? ctx.db.collection<Account>("account").find({}).value : [];
   const list = ctx.resources.planList as PlanList | undefined;
   const named = list ? queryOf(list.query) : undefined;
   const listed = named ? ctx.db.collection(named[0]).query<Listed[]>(named[1], {}).value : null;

@@ -47,8 +47,9 @@ type Machine = {
   versions: string[];
   /** What its plans' CLIs say. */
   clis: Record<string, Cli>;
-  /** It takes the app's release, updating itself (a laptop's built program). */
+  /** It takes the app's release, updating itself (a laptop's built program), once at a time. */
   updates?: boolean;
+  updating?: boolean;
   /** Its plan is at its limit: calls on it fail so. */
   limit?: boolean;
   credential: string;
@@ -200,11 +201,16 @@ async function setup(fn: (s: Setup) => Promise<void>) {
       ? {
         [UPDATE]: async ({ input }: { input: ReadableStream<Uint8Array> }) => {
           const offer = await read<{ version: string }>(input);
-          setTimeout(async () => {
-            await disconnect(m);
-            m.versions = [offer.version];
-            await connect(m);
-          }, 50);
+          // Offered as it came (computer.ready) and again (computer.prepare): it updates once.
+          if (m.versions[0] !== offer.version && !m.updating) {
+            m.updating = true;
+            setTimeout(async () => {
+              await disconnect(m);
+              m.versions = [offer.version];
+              await connect(m);
+              m.updating = false;
+            }, 50);
+          }
           return json({ updating: true });
         },
       }

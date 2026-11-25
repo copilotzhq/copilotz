@@ -13,7 +13,7 @@ plugin Copilotz ships has [a page of its own](reference/plugins.md), read from t
 
 ## Install
 
-Start a new app with `npx copilotz@1.0.0-rc.66 init orders`. The starter includes the compiler, a
+Start a new app with `npx copilotz@1.0.0-rc.67 init orders`. The starter includes the compiler, a
 plugin, a web page and tests. [Start an app](guides/the-compiler.md#start-an-app).
 
 To add the runtime to an existing project:
@@ -21,19 +21,19 @@ To add the runtime to an existing project:
 ```sh
 npm install copilotz@next                      # Node 24+ (npm, pnpm, yarn)
 bun add copilotz@next                          # Bun
-deno add jsr:@copilotz/copilotz@^1.0.0-rc.66   # Deno 2.9+ (or `deno add npm:copilotz@next`)
+deno add jsr:@copilotz/copilotz@^1.0.0-rc.67   # Deno 2.9+ (or `deno add npm:copilotz@next`)
 ```
 
 Until 1.0, the release candidates are on npm's `next` tag, and a plain `npm install copilotz` or
 `deno add jsr:@copilotz/copilotz` gets an older version. At 1.0, stable installs drop `@next` and
 the version.
 
-On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.66"`), and the
+On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.67"`), and the
 imports read the same everywhere. 3 pieces need a package of their own, installed beside it:
 `esbuild` to bundle the page's code on Node (`bundle`), `@electric-sql/pglite` for PostgreSQL in the
 process, and `@types/react` for the front ends' types. A product's plugins are packages of their own
 too, at Copilotz's version (`npm install @copilotz/work@next`,
-`deno add jsr:@copilotz/work@^1.0.0-rc.66`): see [Product packages](#product-packages).
+`deno add jsr:@copilotz/work@^1.0.0-rc.67`): see [Product packages](#product-packages).
 
 ## Entry points
 
@@ -95,7 +95,7 @@ same plugin, with less code in the server's memory.
 ## Product packages
 
 What a product does its own way, rather than what every app needs, is a package of its own, released
-with Copilotz at its version: `@copilotz/work@1.0.0-rc.66` goes with `copilotz@1.0.0-rc.66`. Each
+with Copilotz at its version: `@copilotz/work@1.0.0-rc.67` goes with `copilotz@1.0.0-rc.67`. Each
 has the same entry points, its plugins (`@copilotz/work`), their front ends (`@copilotz/work/web`)
 and their shapes, for plugins built on them (`@copilotz/work/contract`), with the same names on npm
 and JSR.

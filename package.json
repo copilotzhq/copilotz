@@ -1,6 +1,6 @@
 {
   "name": "copilotz",
-  "version": "1.0.0-rc.66",
+  "version": "1.0.0-rc.67",
   "private": true,
   "type": "module",
   "description": "The open-source runtime that makes your app usable by people, your own agents and their assistants.",

@@ -209,7 +209,7 @@ export function code128(text: string, options?: { set?: "auto" | "B" }): number[
  * The bars of `text`, drawn `width` pixels wide at most with whole pixels per
  * module (so they stay sharp; at least one): each bar's `x` and `w`, the
  * module's size and the barcode's whole width, in pixels. `quiet` adds the
- * blank margin scanners need at each end (ten modules).
+ * blank margins scanners need (ten modules for Code 128 and Code 39).
  */
 export function bars(
   text: string,

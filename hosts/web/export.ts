@@ -1,9 +1,8 @@
 /**
  * The web toolkit's files, without React or a page: on a server too. A table
  * as CSV, a workbook (`.xlsx`), a PDF, JSON, XML, TXT or SQL (`exportFile`);
- * a document drawn as a PDF (`documentPdf`: a receipt, an invoice); and Code
- * 128's bars (`bars`), for an e-mailed invoice or a receipt made where no
- * browser is. In a page, `copilotz/web` has the same, and `download` saves a
+ * a document with a logo (`pdfImage`) drawn as a PDF (`documentPdf`); and
+ * Code 128, Code 39 and EAN barcodes as vector bars or PNG bytes. In a page, `copilotz/web` has the same, and `download` saves a
  * file.
  *
  * ```ts

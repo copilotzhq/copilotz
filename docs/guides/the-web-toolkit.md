@@ -1,6 +1,6 @@
 ---
 title: "The web toolkit"
-description: "The pieces web front ends are made of, laid out and themed without CSS: layout, forms, tables and their files, dates, bars, toasts, shortcuts, printing, PDFs, barcodes, a route's own page and a sign-in (`Screen`), and every token a theme sets."
+description: "The pieces web front ends are made of, laid out and themed without CSS: layout, forms, table exports and totals, dates, bars, toasts, shortcuts, printing, PDF logos, Code 39, Code 128 and EAN barcodes, a route's own page and a sign-in (`Screen`), and every token a theme sets."
 section: Guides
 order: 8
 ---
@@ -364,9 +364,10 @@ const field = (key: "cost" | "quantity", label: string) => (l: Line) => (
 `tableView(rows, columns, state)` searches, sorts and pages a list as the table does (for a query
 that pages one in memory). `Pagination` is the pages on their own.
 
-**Files.** The export menu saves the visible columns of the rows shown (every matching row, with
-`exportAll`) as `<exportName>.<ext>`; `exports` picks the formats (`["csv", "xlsx", "pdf"]` by
-default):
+## Exporting a table
+
+The export menu saves the visible columns of the rows shown (every matching row, with `exportAll`)
+as `<exportName>.<ext>`; `exports` picks the formats (`["csv", "xlsx", "pdf"]` by default):
 
 | Format              | File                                                                                                                                                                       |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -381,6 +382,115 @@ CSV, TXT and `.xls` guard against formula injection: a cell starting `=`, `+`, `
 leading `'` (plain numbers such as `-12.5` don't; `formulas: true` turns it off).
 `exportFile(format, sheet, name, options)` gives `{ file, type, content }`, on a server too (an
 e-mailed PDF); `download(…)` saves it in the browser.
+
+A format has a label, extension, MIME type and serializer. The serializer receives a sheet of
+visible headers, keys, rows and footer rows, followed by the base name and the export options.
+Return text or bytes. Use a built-in name such as `csv` to replace its format. Put `formats` on a
+table, or put `<TableExportFormats value={formats}>` around the screens in the app's shell. A
+table's definitions win. The default menu adds the supplied formats to CSV, Excel and PDF. An
+explicit `exports` list sets the exact menu and order.
+
+```tsx
+import { DataTable, type TableExportFormat } from "copilotz/web";
+
+const products = [{ name: "Coffee", units: 12 }];
+const columns = [{ key: "name", title: "Product" }, { key: "units", title: "Units" }];
+const formats = {
+  jsonl: {
+    label: "JSON Lines",
+    extension: "jsonl",
+    type: "application/x-ndjson",
+    serialize: ({ headers, rows, footerRows = [] }) =>
+      [...rows, ...footerRows].map((row) =>
+        JSON.stringify(Object.fromEntries(headers.map((h, i) => [h, row[i]])))
+      ).join("\n"),
+  },
+} satisfies Record<string, TableExportFormat>;
+
+<DataTable
+  rows={products}
+  columns={columns}
+  rowKey={(p) => p.name}
+  footerRows={[{ name: "Total", units: 12 }]}
+  formats={formats}
+  exports={["csv", "json", "sql", "pdf", "jsonl"]}
+  exportName="stock"
+  exportOptions={{
+    values: "raw",
+    json: "records",
+    tableName: "products",
+    csv: { quote: "needed", delimiter: ";", lineEnding: "\r\n", finalNewline: true, header: true },
+  }}
+/>;
+```
+
+- **Values.** Files use each column's `text(row)` by default. Give a rendered cell a `text` function
+  for its words. `values: "raw"` reads the fields by column key and preserves scalar values for
+  typed formats. Untitled button columns stay on screen.
+- **Totals.** Give `footerRows` as records keyed by column. The same totals appear under the table
+  and in every built-in file, even when someone hides a column. The app supplies totals for the
+  desired range. The older `footer` slot draws any extra markup on screen.
+- **CSV and TXT.** The defaults are `quote: "always"`, a comma (use any single delimiter character
+  except a quote or line break), `lineEnding: "\n"`, a header and no final newline. With
+  `quote: "needed"`, a quote, delimiter or line break in a field makes it quoted. Set
+  `header: false` to start with the first data row. Set `bom: false` on `exportOptions` for a file
+  without the byte-order mark.
+- **JSON and SQL.** `json: "records"` gives objects by header. `json: "table"` gives
+  `{ header, data }` with cells keyed by position. Its default is text and `values: "raw"` preserves
+  their scalar types. `tableName` sets the SQL table independently of the file name.
+- **In an Action.** Import `exportFile` from `copilotz/web/export`. Give it a sheet with
+  `{ headers, rows, footerRows }`, in column order, or use
+  `tableSheet(chosenColumns, rows, totalsByKey, "raw")` to make one. A server-paged table can export
+  the rows it has. For the whole list, the Action reads the matching rows as its caller.
+
+## A toolbar of your own
+
+Give `toolbar` a button or filter to put it beside the built-in controls. Use `actions` for buttons
+that take selected rows. `showSinglePageSize` keeps the page-size menu visible when one size fits.
+
+```tsx
+<DataTable
+  rows={products}
+  columns={columns}
+  rowKey={(p) => p.name}
+  toolbar={<Button href="/products/new">New product</Button>}
+  pageSize={25}
+  pageSizes={[25]}
+  showSinglePageSize
+/>;
+```
+
+## Printing a table
+
+Use `tablePdf` from `copilotz/web/export` in an Action to make attachment bytes, or give `DataTable`
+the same layout in `exportOptions.pdf`. Named paper (`"a4"` or `"letter"`) defaults to landscape. A
+`[width, height]` pair uses points (72 per inch). The first page holds the logo and title lines,
+every page repeats the column headings, and totals print in bold after the last row.
+
+```ts
+import { pdfImage, tablePdf } from "copilotz/web/export";
+
+export async function invoicePdf(logoBytes: Uint8Array) {
+  const logo = await pdfImage(logoBytes);
+  return tablePdf({
+    headers: ["Product", "Amount"],
+    rows: [["Coffee", "12.50"]],
+    footerRows: [["Total", "12.50"]],
+  }, {
+    size: "letter",
+    orientation: "portrait",
+    fontSize: 10,
+    title: "Invoice 1042",
+    subtitle: ["Customer 27", "November orders"],
+    headerImage: { image: logo, width: 60, height: 60 * logo.height / logo.width },
+    columns: [{}, { width: 90, align: "right" }],
+  });
+}
+```
+
+Each fixed column width is in points. The other columns share the remaining width. Alignment is
+`"left"`, `"center"` or `"right"`. On a `DataTable`, list PDF columns in the order of its titled
+columns. The table keeps widths and alignment with their fields when the chooser hides one.
 
 ## Dates
 
@@ -528,10 +638,10 @@ layout (a receipt's width, an invoice's margins) is the one place an app writes 
 `documentPdf(pages, { size })` draws a document as a PDF with no dependency and no React, so it runs
 on a server (an e-mailed invoice): pages of things placed in points from each page's top left, text
 (a font of Helvetica's four, a size, a colour, wrapped and aligned within a `width`), lines,
-rectangles, and Code 128 barcodes. Sizes are `a4`, `a4-landscape`, `letter`, `receipt` (80 mm wide,
-as tall as what's on it), or given. `textWidth` and `wrapText` measure with Helvetica's widths, to
-lay out flowing text. Text outside Windows-1252 prints as "?". `copilotz/web/export` has it, the
-table files and the barcodes' bars, without React.
+rectangles, images and vector barcodes. Sizes are `a4`, `a4-landscape`, `letter`, `receipt` (80 mm
+wide, as tall as what's on it), or given. `textWidth` and `wrapText` measure with Helvetica's
+widths, to lay out flowing text. Text outside Windows-1252 prints as "?". `copilotz/web/export` has
+it, the table files and the barcodes' bars, without React.
 
 ```ts
 import { documentPdf } from "copilotz/web/export";
@@ -546,11 +656,45 @@ const receipt = documentPdf([[
 
 ## Barcodes
 
-`Barcode` draws Code 128 as an SVG of whole-pixel bars, named by its value: at most `width` wide,
-`height` tall, `caption` under it, the quiet zone scanners need (`quiet`, on by default). Digits go
-two to a symbol; `set="B"` encodes as text only. Bars are black on white unless the theme says
-otherwise (scanners read that best). `code128()` and `bars()` give the same, without React, for a
-document made on a server.
+`Barcode` draws an SVG of whole-pixel bars. `width` sets the space available, `height` the bars'
+height, and `caption` shows the value beneath. Its quiet margins are on by default. Code 128 packs
+digit pairs where they fit (`set="B"` uses text throughout). Choose `format="code39"`,
+`format="ean8"` or `format="ean13"` for the other symbols.
+
+## Images and barcodes in a document
+
+Prepare a logo once with `await pdfImage(bytesOrDataUrl)` and reuse it on any page. JPEG stays JPEG.
+PNG supports 8-bit RGB, RGBA, grayscale, grayscale with alpha and indexed colours, including
+interlaced images and packed 1-, 2- and 4-bit grayscale or palette samples. Transparency becomes a
+PDF soft mask. The dimensions of the prepared image are pixels. The position and size on the page
+are points.
+
+```ts
+import { barcodePng, documentPdf, pdfImage } from "copilotz/web/export";
+
+export async function invoiceFiles(logoBytes: Uint8Array) {
+  const logo = await pdfImage(logoBytes);
+  const product = "5901234123457";
+  const pdf = documentPdf([[
+    { image: logo, x: 36, y: 36, width: 40, height: 40 * logo.height / logo.width },
+    { text: "Invoice 1042", x: 92, y: 42, size: 16, font: "bold" },
+    { barcode: product, format: "ean13", x: 36, y: 120, width: 240, height: 54, quiet: true },
+  ]]);
+  const label = await barcodePng(product, { format: "ean13", width: 300, height: 60 });
+  return { pdf, label }; // application/pdf and image/png
+}
+```
+
+EAN-8 takes seven digits and EAN-13 takes twelve, or give the complete number and its check digit is
+verified. Keep leading zeros by passing a string. Code 39 accepts uppercase letters, digits, space
+and `-.$/+%`. Set `check: true` for its Mod 43 character. `bars()` gives the same vector geometry
+for other renderers. A product screen can print the complete EAN under its SVG:
+
+```tsx
+import { Barcode } from "copilotz/web";
+
+<Barcode format="ean13" value="590123412345" width={300} height={60} caption />;
+```
 
 ## A route's own page
 

@@ -8,8 +8,8 @@
  *   the width by how much they hold, and a cell too long for its column ends
  *   in "…".
  * - **`documentPdf`**: a document drawn at places, page by page: text (left,
- *   centred or right in a width, wrapped to it), lines, rectangles, and Code
- *   128 barcodes. Places are points (1/72 in) from the page's top left. A
+ *   centred or right in a width, wrapped to it), lines, rectangles, images
+ *   and vector barcodes. Places are points (1/72 in) from the page's top left. A
  *   page is A4, letter, or a receipt's 80 mm roll, as long as what's on it
  *   (`height: "fit"`). `textWidth` and `wrapText` measure with Helvetica's
  *   own widths, for laying a document out (a receipt's lines, one under
@@ -31,7 +31,7 @@ import { type BarcodeOptions, bars } from "./code128.ts";
 
 /** How the PDF looks: its page, its title, and its colours (`#rrggbb`). */
 export type PdfOptions = {
-  /** A line over the table, on the first page. */
+  /** Title lines over the table, on the first page. */
   title?: string | string[];
   /** Smaller lines under the title, on the first page. */
   subtitle?: string | string[];
@@ -41,7 +41,7 @@ export type PdfOptions = {
   columns?: { width?: number; align?: "left" | "center" | "right" }[];
   /** A prepared logo beside the first page's title. Width and height are in points. */
   headerImage?: { image: PdfImage; width: number; height: number };
-  /** Landscape (the default: tables are wide) or portrait, on A4. */
+  /** Rotates the paper to landscape or portrait. Named paper defaults to landscape. */
   orientation?: "landscape" | "portrait";
   /** The header band's colour, and its text's. */
   headerColor?: string;

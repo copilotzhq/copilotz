@@ -72,7 +72,7 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 | `copilotz/web/server`                  | the page's server half: `webPage` (the page, as a plugin), `widgetsOf`, `routePage` (a route's own page in the app's look)                                |
 | `copilotz/web/widget`                  | the widget host: an app's web Views inside an outside assistant (MCP Apps, ChatGPT)                                                                       |
 | `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                                                                           |
-| `copilotz/web/export`                  | the toolkit's files without React, on a server too: `exportFile` (CSV, `.xlsx`, PDF…), `documentPdf`, Code 128's `bars`                                   |
+| `copilotz/web/export`                  | table and document files on a server or in a browser: `exportFile`, `tablePdf`, `documentPdf`, `pdfImage`, `bars`, `barcodePng`                           |
 | `copilotz/web/node`                    | `listen` (serves `runtime.fetch` on Node and Bun, sockets included), `bundle` (the browser's code, with esbuild)                                          |
 | `copilotz/terminal`                    | the terminal host, `terminal({ runtime, me })`, and its toolkit                                                                                           |
 | `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                                                                  |
@@ -706,6 +706,42 @@ resources: {
 Action inputs name models and never carry keys, because inputs are recorded. A plugin adds an
 adapter under `adapters.llm`, `adapters.embeddings`, `adapters.transcription` or `adapters.image`,
 named by the protocol it speaks. The [models page](reference/plugins/models.md) lists its Actions.
+
+## Table exports, PDF images and barcodes
+
+| API                                                                       | What an app gives it                                                                                                                                                                                                                                |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DataTable` from `copilotz/web`                                           | `formats` adds or replaces named serializers. `exports` chooses the menu, `exportName` the file's base name, and `exportAll` all matching rows available to the table. `footerRows` holds totals by column key.                                     |
+| `TableExportFormats` from `copilotz/web`                                  | A React context. Its `value` is the app's record of named formats. A table's `formats` takes precedence.                                                                                                                                            |
+| `DataTable.toolbar`, `showSinglePageSize`                                 | A React node places controls beside the built-ins. `false` hides the toolbar. The page-size flag also works on `Pagination`.                                                                                                                        |
+| `exportFile(format, sheet, name, options?)`                               | Gives `{ file, type, content }`. A `TableExportFormat` supplies `label`, `extension`, MIME `type` and `serialize(sheet, name, options)` returning text or bytes. Pass them by name in `options.formats`.                                            |
+| `ExportOptions`                                                           | `csv` sets `quote`, `delimiter`, `lineEnding`, `finalNewline` and `header`. `json` takes `"records"` or `"table"`. `tableName` names the SQL table. `values: "raw"` reads a table's field values in place of column text. `pdf` holds `PdfOptions`. |
+| `tableSheet(columns, rows, footerRows?, values?)`                         | Pass the chosen columns in order. Gives `{ headers, keys, rows, footerRows }` for the serializers, with untitled columns omitted. Sheets made by hand need only `headers` and `rows`.                                                               |
+| `tablePdf(sheet, options?)`                                               | Returns PDF bytes. Set `size`, `orientation`, `title`, `subtitle`, `headerImage`, `columns` (width in points and alignment), `fontSize`, `headerColor`, `headerText` and `stripeColor`. Totals come from the sheet.                                 |
+| `pdfImage(bytesOrDataUrl)`                                                | Resolves to a reusable `PdfImage`. In `documentPdf` draw `{ image, x, y, width, height }`. In a table header use `{ image, width, height }`.                                                                                                        |
+| `Barcode`, `bars(value, width?, options?)`, `barcodePng(value, options?)` | SVG, vector bars or PNG bytes. Each takes `format` of `"code128"` (default), `"code39"`, `"ean8"` or `"ean13"`. The same options work on a `documentPdf` barcode. `barcodePng` is async.                                                            |
+| `code128`, `code39`, `ean8`, `ean13`, `eanDigits`                         | The first four give alternating bar and space widths in modules. `code39(value, { check: true })` includes Mod 43. `eanDigits(value, length)` (8 or 13) completes or verifies an EAN.                                                               |
+
+An Action can make the same product file as the screen. The file functions live in
+`copilotz/web/export`, with no React or browser setup.
+
+```ts
+import { exportFile } from "copilotz/web/export";
+
+const stock = {
+  headers: ["Product", "Units"],
+  rows: [["Coffee", 12]],
+  footerRows: [["Total", 12]],
+};
+const file = exportFile("sql", stock, "stock-count", { tableName: "products" });
+// stock-count.sql, with one INSERT into products per row, including the total.
+```
+
+The toolkit guide has examples of a custom file format, toolbar buttons, an invoice with a logo, and
+product labels. [Exporting a table](guides/the-web-toolkit.md#exporting-a-table) ·
+[A toolbar of your own](guides/the-web-toolkit.md#a-toolbar-of-your-own) ·
+[Printing a table](guides/the-web-toolkit.md#printing-a-table) ·
+[Images and barcodes in a document](guides/the-web-toolkit.md#images-and-barcodes-in-a-document).
 
 ## The web's look and words
 

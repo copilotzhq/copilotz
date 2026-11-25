@@ -244,6 +244,11 @@ test("custom serializers get the projected sheet, totals, base name and options"
     "INSERT INTO `invoice_lines` (`Price`,`Paid`,`Note`) VALUES (2.5,FALSE,NULL);",
   );
   assertEquals(JSON.parse(toJson(raw))[0], { Price: 2.5, Paid: false, Note: null });
+  assertEquals(JSON.parse(toJson(raw, { json: "table", values: "raw" })).data[0], {
+    0: 2.5,
+    1: false,
+    2: null,
+  });
   assertThrows(() => exportFile("toString", raw, "orders"), RangeError);
 });
 

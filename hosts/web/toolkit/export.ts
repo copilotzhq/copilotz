@@ -105,7 +105,9 @@ export function toCsv(
   { formulas, csv = {} }: ExportOptions = {},
 ): string {
   const { delimiter = ",", lineEnding = "\n", quote = "always" } = csv;
-  if (!delimiter || /["\r\n]/.test(delimiter)) throw new RangeError("Invalid CSV delimiter.");
+  if ([...delimiter].length !== 1 || /["\r\n]/.test(delimiter)) {
+    throw new RangeError("Invalid CSV delimiter.");
+  }
   const cell = (value: ExportCell) => {
     const plain = formulas ? text(value) : guard(text(value));
     if (quote === "needed" && !plain.includes(delimiter) && !/["\r\n]/.test(plain)) return plain;
@@ -119,12 +121,15 @@ export function toCsv(
 }
 
 /** JSON: the rows as objects by header, or the table export's shape. */
-export function toJson(sheet: Sheet<ExportCell>, { json = "records" }: ExportOptions = {}): string {
+export function toJson(
+  sheet: Sheet<ExportCell>,
+  { json = "records", values }: ExportOptions = {},
+): string {
   const { headers } = sheet;
   const rows = dataRows(sheet);
   if (json === "table") {
     const byIndex = (cells: ExportCell[]) =>
-      Object.fromEntries(cells.map((cell, i) => [String(i), text(cell)]));
+      Object.fromEntries(cells.map((cell, i) => [String(i), values === "raw" ? cell : text(cell)]));
     return JSON.stringify({ header: [byIndex(headers)], data: rows.map(byIndex) });
   }
   return JSON.stringify(

@@ -99,11 +99,16 @@ export function confirm(options: ConfirmOptions): Promise<boolean> {
       new Error("confirm() shows its dialog where <Toasts /> is: draw it once in the app's frame."),
     );
   }
+  // What had focus as it asked (the button pressed) has it back once it's answered, if it's there.
+  const from = globalThis.document?.activeElement as
+    | { focus?(): void; isConnected?: boolean }
+    | null;
   return new Promise((resolve) => {
     const id = nextId++;
     const answer = (yes: boolean) => {
       if (!asked.some((a) => a.id === id)) return;
       emit(asked.filter((a) => a.id !== id));
+      if (from?.isConnected) from.focus?.();
       resolve(yes);
     };
     emit([...asked, { id, options, answer }]);

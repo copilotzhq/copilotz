@@ -124,8 +124,11 @@ export type EntityDialogProps<T extends Record<string, unknown>> = {
   title: ReactNode;
   /** Words under the title. */
   description?: ReactNode;
-  /** The record (or a new one's defaults): where the form starts. */
-  values?: Partial<T>;
+  /**
+   * The record (or a new one's defaults): where the form starts. It doesn't decide the record's
+   * type, which is `Record<string, unknown>` unless given (`<EntityDialog<Customer> …>`).
+   */
+  values?: NoInfer<Partial<T>>;
   /** Its fields, as data, drawn first. */
   fields?: EntityField[];
   /** More of the form: `Field`s, a View shown in it, or a function of the record as it is. */

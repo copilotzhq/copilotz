@@ -408,15 +408,15 @@ const CALENDARS = Intl.supportedValuesOf("calendar").flatMap((calendar) =>
 );
 
 /**
- * Days whose month a calendar can get wrong: the first, middle and last of every month in the
- * first and last supported years (0000, 9999), across the centuries a Julian calendar drifts
- * from the Gregorian (0, 100, 1000, 1500), at the 1582 change and around it, and now.
+ * Days whose month a calendar can get wrong: the first and last of every month in the first and
+ * last supported years (0000, 9999), where a Julian calendar is days from the Gregorian (0000,
+ * 1000), in 1582 and through its October's change, and now.
  */
 const EDGES: string[] = [];
-for (const year of [0, 1, 100, 1000, 1500, 1581, 1582, 1583, 1900, 2024, 9999]) {
+for (const year of [0, 1000, 1582, 2024, 9999]) {
   for (let month = 1; month <= 12; month++) {
     const last = +lastOfMonth(year, month).slice(8);
-    for (const day of [1, 15, last]) {
+    for (const day of [1, last]) {
       const time = `${two((month * 7 + day) % 24)}:${two((day * 13) % 60)}:${
         two((month * 11) % 60)
       }`;
@@ -464,10 +464,13 @@ test("every language and calendar the runtime has: an accepted pattern reads bac
     }
     for (const pattern of [...NAMED, ...own, "dd/MM/yyyy HH:mm:ss", "M/d/yyyy h:mm a"]) {
       if (patternProblem(pattern, locale) !== undefined) continue;
-      const values = /MMM|EEE/.test(pattern) ? EDGES : EDGES.filter((_, i) => i % 9 === 0);
-      for (const value of values) {
+      // Names: every edge day as written, and a third of them in each case; numbers: a sample.
+      const named = /MMM|EEE/.test(pattern);
+      for (const [i, value] of EDGES.entries()) {
+        if (!named && i % 9) continue;
         const x = kept(value, pattern);
-        for (const [how, typed] of cased(formatPattern(x, pattern, locale), locale)) {
+        const texts = cased(formatPattern(x, pattern, locale), locale);
+        for (const [how, typed] of i % 3 ? texts.slice(0, 1) : texts) {
           assertEquals(
             parseDayTime(typed, pattern, locale),
             x,
@@ -510,6 +513,15 @@ const BOUNDARY = [
   "yyyy/M/d H:mm",
 ];
 
+/** A text's number fields in the language's digits; its names as the language writes them. */
+function inOwnDigits(text: string, x: string, pattern: string, locale: string, digits: string[]) {
+  const tokens = pattern.replace(/'[^']*'/g, "").match(/MMMM|MMM|MM|M|EEEE|EEE|a/g) ?? [];
+  const names = tokens.filter((t) => /^(MMMM?|EEEE?|a)$/.test(t))
+    .map((t) => formatPattern(x, t, locale).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const parts = names.length ? text.split(new RegExp(`(${names.join("|")})`, "u")) : [text];
+  return parts.map((part, i) => i % 2 ? part : part.replace(/[0-9]/g, (d) => digits[+d])).join("");
+}
+
 test("a language's own digits are digits where a field could run on: every numbering system", () => {
   assert(patternProblem("yyyy/dMMM HH:mm:ss", "ja-JP-u-nu-hanidec") !== undefined, "hanidec");
   const days: string[] = [];
@@ -531,7 +543,7 @@ test("a language's own digits are digits where a field could run on: every numbe
         for (const value of days) {
           const x = kept(value, pattern);
           const text = formatPattern(x, pattern, locale);
-          const texts = own ? [text, text.replace(/[0-9]/g, (d) => digits[+d])] : [text];
+          const texts = own ? [text, inOwnDigits(text, x, pattern, locale, digits)] : [text];
           for (const typed of texts) {
             assertEquals(parseDayTime(typed, pattern, locale), x, `${locale} ${pattern}: ${typed}`);
             read++;

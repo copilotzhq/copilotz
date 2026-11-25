@@ -20,18 +20,34 @@ Under `## Unreleased`, in **New:**
   `form.value` and `form.list`. Save gives `onSave` a `RecordChange`: a new record's `values`, or a
   stored one's `set`, `unset` and MongoDB `update`, for `insertOne` or `updateOne`. An untouched
   field is never in it. A text, number or choice emptied is an `unset`, and a list emptied is `[]`.
-  The draft takes no edits while the save runs, with nothing disabled, so `FormData` keeps every
-  field; a correction typed while a part works wins over the part's value; and a save runs to its
-  end on the record it started on. rc.64's planned `EntityDialog` shipped as `RecordDialog`.
+  A save runs to its end on the record it started on. rc.64's planned `EntityDialog` shipped as
+  `RecordDialog`.
 - **Refused fields.** A save refused by its field (`detail.field`) shows under the `Field` whose
   `error` is `form.error(name)`, in the words `errors` gives for it. `refusedField(error)` reads the
   field for a plain `Form`.
 - **Busy dialogs.** `Dialog` takes `busy` (Escape, the backdrop and its × wait), `isolated` (it
   answers only its own close and Escape, not a dialog's shown inside it), `role` (an `alertdialog`)
-  and `aria-describedby`. `Drawer` takes `isolated` too. The confirmations and record dialogs are
-  isolated always: dismissing one never closes the `Dialog` or `Drawer` it's shown in.
+  and `aria-describedby`. The confirmations and record dialogs are isolated always: dismissing one
+  never closes the `Dialog` or `Drawer` it's shown in.
 - **Words:** `toolkit.confirm`, `toolkit.delete` and `toolkit.notDone`, in English and Brazilian
   Portuguese.
+- **Known limits** of the confirmations and the record dialog
+  ([the toolkit guide](docs/guides/the-web-toolkit.md#known-limits)):
+  - What's typed while the save runs isn't in it; on success the dialog closes.
+  - A part's value wins over an edit of the same field, even one typed while the part runs.
+  - A field made invalid while a part runs isn't checked again; the schema refuses it.
+  - A path through a list or a map that isn't there yet (`lines.0.qty`) makes an object: give it a
+    value in `defaults` or the record, or set it whole with `form.set`.
+  - Don't put a `RecordDialog` inside a form, or a form in its fields: a submit goes to every form
+    around it.
+  - Questions show one at a time: don't await another `confirm()` inside `onConfirm`.
+  - Draw `useConfirm`'s `{dialog}` once.
+  - If a browser closes a busy confirmation anyway, its answer comes when the operation ends. If it
+    closes a dialog just as its operation ends, the outcome may show in the closed dialog.
+  - A `ConfirmDialog` given a new `key` while open gives the focus back to the page, not to the
+    first opener.
+  - An app's own `Dialog` closing still closes an app's own dialog or `Drawer` around it, as in
+    rc.64, unless the outer one is an `isolated` `Dialog`.
 ```
 
 ## (b) AGENTS.md text

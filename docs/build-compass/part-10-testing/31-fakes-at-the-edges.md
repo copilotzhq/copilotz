@@ -308,6 +308,10 @@ have their own memory. They can write to the same mail folder. Clearing a mailbo
 on disk. To build the MIME source in your own adapter, use the exported `mime(message, from)`. See
 the [email plugin](../../reference/plugins/email.md).
 
+Capture never sends. An app whose `links` origin is public refuses to start with it, so sign-in
+codes can't vanish in production; a test that needs a public-looking origin sets
+`email.capture.allowPublicOrigin: true`.
+
 ## Run it
 
 ```text

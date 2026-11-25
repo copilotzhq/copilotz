@@ -541,6 +541,12 @@ Nested `ctx.transaction` joins it. Inside it, `ctx.call` can call Actions declar
 `atomic: true` alone to let an Action join a caller's transaction while keeping ordinary calls as
 they were. A read-only query or View can't start a transactional Action.
 
+A transaction also holds writes to collections declared `durable: false`: its reads see them, and
+they take effect only when the durable commit does, so a failed write rolls back both kinds (with
+`transaction: true` and `ctx.transaction` alike). A declared grant's reads are checked for the
+conversation's audience on every path (a direct call, a named query, a watched query), and a
+`ctx.record` append is kept as the identity that made it, the grant included.
+
 ### Processors
 
 What happens when events happen: ordered per key, at least once, from a durable cursor.

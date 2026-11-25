@@ -11330,7 +11330,7 @@
         {
           "kind": "setting",
           "path": "email.capture",
-          "summary": "With the capture adapter, also write each delivered message as an .eml file in this directory.",
+          "summary": "Set `directory` to save captured messages as .eml files and `allowPublicOrigin: true` to capture mail in a test with a public `links.origin`.",
           "required": false,
           "type": "object"
         },
@@ -11435,7 +11435,7 @@
               "name": "capture",
               "type": "object",
               "optional": true,
-              "doc": "With the capture adapter, also write each delivered message as an .eml file in this directory.",
+              "doc": "Set `directory` to save captured messages as .eml files and `allowPublicOrigin: true` to capture mail in a test with a public `links.origin`.",
               "secret": false
             },
             {

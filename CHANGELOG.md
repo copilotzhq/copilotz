@@ -64,6 +64,22 @@ guides ship with the runtime.
   one empty field (`""`). A barcode too narrow for whole modules refuses with its minimum width
   (`RangeError`) instead of clipping. `copilotz/web/export`'s types need no React.
 
+**Fixed, here since rc.63 or before:**
+
+- **Security: a declared grant's reads are checked for the conversation's audience on every path.**
+  An unrecorded Action reading as a grant, called from a named query or a watched query, skipped the
+  check a direct call makes, so a staff grant could read into a conversation shared with a contact.
+- **A transaction holds its `durable: false` writes until the durable commit,** so a failed write no
+  longer leaves durable data committed behind an error (`ctx.transaction` and `transaction: true`).
+- **A `ctx.record` append is kept as the identity that made it,** a declared grant included; one the
+  owner refuses at completion fails the Action on the record.
+
+**Fixed in this release's own work:** a retried Action keeps rc.63's nested call positions (an async
+`allow` reserves its position before it waits), so an upgrade never runs a completed nested call
+again; an Action input embedding `Infer<typeof schema>` keeps its `$ref`s; `gen` resolves Deno
+import-map aliases; the `copilotz` command runs on Node 24.0 and 24.1; and the capture mail adapter
+refuses a public `links` origin unless a test sets `email.capture.allowPublicOrigin: true`.
+
 **Docs:**
 
 - The “Find it” index in `AGENTS.md` links each job to an API and a guide. The npm and JSR packages

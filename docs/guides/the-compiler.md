@@ -157,6 +157,10 @@ need a hand-written schema too. The error names the Action and the path, such as
 cannot express, to share a schema, or in a plugin with a hand-written `mod.ts`. An explicit `input`
 always wins.
 
+A field or a list can embed a collection's type (`Infer<typeof schema>`); its `$defs` and `$ref`s
+carry over. On Deno, `gen` resolves type imports through the app's module graph, its import map
+included; an import it can't resolve is reported at the import.
+
 ## A collection from its type
 
 In `plugins/orders/collections/order.ts`, give `defineCollection` the type of one document. An

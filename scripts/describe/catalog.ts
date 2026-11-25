@@ -88,6 +88,8 @@ export const LAYERS: Record<string, Placed | "skip"> = {
       "",
       "Run the app with `[email, mail]`, then read `inbox.messages` or empty it with `inbox.clear()`.",
       "For MIME source, import `mime` from the same entry point and call `mime(message, from).source`.",
+      "Capture never sends, so an app whose `links` origin is public refuses to start with it, unless a test",
+      "sets `email.capture.allowPublicOrigin: true`.",
       "[A complete test and .eml files on disk](../../build-compass/part-10-testing/31-fakes-at-the-edges.md#mail-in-tests-the-capture-adapter).",
     ].join("\n"),
   },

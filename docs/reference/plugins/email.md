@@ -27,7 +27,9 @@ const mail = {
 ```
 
 Run the app with `[email, mail]`, then read `inbox.messages` or empty it with `inbox.clear()`. For
-MIME source, import `mime` from the same entry point and call `mime(message, from).source`.
+MIME source, import `mime` from the same entry point and call `mime(message, from).source`. Capture
+never sends, so an app whose `links` origin is public refuses to start with it, unless a test sets
+`email.capture.allowPublicOrigin: true`.
 [A complete test and .eml files on disk](../../build-compass/part-10-testing/31-fakes-at-the-edges.md#mail-in-tests-the-capture-adapter).
 
 ```ts
@@ -57,7 +59,7 @@ You set it in `resources.email`: 1 setting is required, and 1 is a secret, kept 
 | Setting          | Type               | Required | What it is                                                                                                                                                                                                                                                                                                                                 |
 | ---------------- | ------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `email.adapter`  | `string`           | yes      | Which adapter sends: `capture` (keeps messages for tests), `resend` (Resend's API), `smtp` (a mail server, on Node, Deno and Bun), `sendmail` (a sendmail program, on Node, Deno and Bun), or `console` on a laptop, which writes each message to the log (refused where the app's `links` origin is public: a code in a log is a way in). |
-| `email.capture`  | `object`           | no       | With the capture adapter, also write each delivered message as an .eml file in this directory.                                                                                                                                                                                                                                             |
+| `email.capture`  | `object`           | no       | Set `directory` to save captured messages as .eml files and `allowPublicOrigin: true` to capture mail in a test with a public `links.origin`.                                                                                                                                                                                              |
 | `email.from`     | `string`           | no       | Who messages are from: `"Example <noreply@example.com>"`.                                                                                                                                                                                                                                                                                  |
 | `email.senders`  | `string[]`         | no       | Who else a message may be from (its own `from`): addresses (`billing@example.com`), or every address at a domain (`@example.com`).                                                                                                                                                                                                         |
 | `email.replyTo`  | `string`           | no       | Where replies go, when not to `from`.                                                                                                                                                                                                                                                                                                      |

@@ -1,13 +1,12 @@
 /**
  * An end of a range to the second (`DateRangePicker` with `seconds`): one field holding the end's
- * day and time, written by the range's pattern and read back by it as it's typed. Text it can't
- * read, or an end outside the range's bounds, is marked and changes nothing; leaving the field
- * writes the end again. Its width is `--date-picker-end-time-width`.
+ * day and time as text. What's typed is only text until it's committed, on leaving the field or
+ * Enter (or the range's Apply): the range reads it then, and marks it while it can't be read.
+ * Its width is `--date-picker-end-time-width`.
  */
-import { type ReactNode, useEffect, useId, useState } from "react";
+import { type ReactNode, useId } from "react";
 import { lang } from "../words.ts";
-import { type DayTime, formatPattern } from "./dates.ts";
-import { rangeSecondsPattern, readEnd } from "./day-time-text.ts";
+import { rangeSecondsPattern } from "./day-time-text.ts";
 import { Input } from "./input.tsx";
 import { sheet } from "./sheet.tsx";
 
@@ -40,34 +39,23 @@ export function secondsPatternOf(format: unknown): string {
 }
 
 /**
- * A range's end to the second, typed: its day and time written by `pattern` in the page's
- * language, read back as it's typed (`readEnd`), and handed to `onEnd` when it's within `low` and
- * `high`. What `DateRangePicker` shows as From and To with `seconds`.
+ * A range's end to the second, typed: the end as the range's pattern writes it, or what's being
+ * typed (`onText`), marked `invalid` while it can't be read as an end. Leaving it, or Enter,
+ * commits it (`onCommit`). What `DateRangePicker` shows as From and To with `seconds`.
  */
 export function DayTimeField(
-  { label, value, pattern, low, high, onEnd }: {
+  { label, text, invalid, onText, onCommit }: {
     label: string;
-    /** The end, `YYYY-MM-DD HH:mm:ss`; none while the range's second end is being picked. */
-    value?: DayTime;
-    pattern: string;
-    /** The earliest and latest ends it takes, `YYYY-MM-DD HH:mm:ss`. */
-    low: string;
-    high: string;
-    onEnd(value: DayTime): void;
+    /** What the field holds: the end as the pattern writes it, or what's being typed. */
+    text: string;
+    /** Whether what's typed can't be read as an end within the range's bounds. */
+    invalid: boolean;
+    onText(text: string): void;
+    /** Leaving the field, or Enter: what's typed becomes the end, if it can be read. */
+    onCommit(): void;
   },
 ): ReactNode {
   const id = useId();
-  const locale = lang();
-  const written = value ? formatPattern(value, pattern, locale) : "";
-  const [text, setText] = useState(written);
-  const [bad, setBad] = useState(false);
-  // An end set elsewhere (the calendar, the other field) is written; one being typed stays as typed.
-  useEffect(() => {
-    if (!text || readEnd(text, pattern, locale) !== value) {
-      setText(written);
-      setBad(false);
-    }
-  }, [value, written]);
   return (
     <>
       {SHEET}
@@ -81,22 +69,14 @@ export function DayTimeField(
         autoComplete="off"
         spellCheck={false}
         value={text}
-        invalid={bad}
+        invalid={invalid}
         onFocus={(event) => event.currentTarget.select()}
-        onChange={(event) => {
-          const next = event.target.value;
-          const typed = readEnd(next, pattern, locale);
-          const fits = typed !== undefined && typed >= low && typed <= high;
-          setText(next);
-          setBad(!fits && next.trim() !== "");
-          if (fits) onEnd(typed);
-        }}
-        onBlur={() => {
-          setText(written);
-          setBad(false);
-        }}
+        onChange={(event) => onText(event.target.value)}
+        onBlur={onCommit}
         onKeyDown={(event) => {
-          if (event.key === "Enter") event.preventDefault();
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          onCommit();
         }}
       />
     </>

@@ -57,9 +57,11 @@ import {
   type DateRange,
   dayTimeOf,
   formatPattern,
+  isDay,
   isDayTime,
   monthOf,
   monthsBetween,
+  partsOf,
   partsOfDayTime,
   type Preset,
   presetRange,
@@ -67,6 +69,7 @@ import {
 } from "./dates.ts";
 import { type Clock, TimeFields } from "./date-time-picker.tsx";
 import { DayTimeField, secondsPatternOf } from "./day-time-field.tsx";
+import { FIRST_DAY_TIME, LAST_DAY_TIME, readEnd } from "./day-time-text.ts";
 import { Input } from "./input.tsx";
 import { Popover, type PopoverTrigger } from "./popover.tsx";
 import { sheet } from "./sheet.tsx";
@@ -304,8 +307,8 @@ const END: Clock = { hour: 23, minute: 59 };
 /** A whole day's ends, to the second. */
 const START_SECOND: Clock = { hour: 0, minute: 0, second: 0 };
 const END_SECOND: Clock = { hour: 23, minute: 59, second: 59 };
-/** How far from today a typed end may be, in months, where `min` and `max` don't bound it. */
-const REACH = 200 * 12;
+/** How far from today a typed end may be, in years, where `min` and `max` don't bound it. */
+const REACH = 200;
 
 /**
  * The time of day an end of a value has: its own, or the day's first (or last) minute. To the
@@ -322,6 +325,29 @@ const boundTo = (bound: string | undefined, end: "min" | "max") => {
   const at = boundOf(bound, end, true);
   return at && at.length === 16 ? `${at}:${end === "min" ? "00" : "59"}` : at;
 };
+
+/**
+ * The earliest and latest ends a range to the second takes: `min` and `max`, and on a side they
+ * don't bound, `REACH` years from today, within the years read (0000 to 9999).
+ */
+function windowOf(today: string, min?: string, max?: string): [low: string, high: string] {
+  const [year] = partsOf(today);
+  const before = year < REACH ? FIRST_DAY_TIME : `${addMonths(today, -REACH * 12)} 00:00:00`;
+  const after = year > 9999 - REACH ? LAST_DAY_TIME : `${addMonths(today, REACH * 12)} 23:59:59`;
+  return [boundTo(min, "min") ?? before, boundTo(max, "max") ?? after];
+}
+
+/** A range whose start is typed: its end moves to that day if it was before it. */
+const fromDay = (range: { start: string; end?: string }, day: string) => ({
+  start: day,
+  end: range.end !== undefined && range.end < day ? day : range.end,
+});
+
+/** A range whose end is typed: its start moves to that day if it was after it. */
+const toDay = (range: { start: string; end?: string }, day: string) => ({
+  start: day < range.start ? day : range.start,
+  end: day,
+});
 
 const two = (n: number) => String(n).padStart(2, "0");
 const clockText = (c: Clock): string =>
@@ -394,7 +420,14 @@ export function DateRangePicker(
   // To the second, the ends have times, and one pattern shows and reads them.
   const timed = time || seconds;
   const [first, last] = seconds ? [START_SECOND, END_SECOND] : [START, END];
+  const locale = lang();
   const pattern = seconds ? secondsPatternOf(format) : undefined;
+  // To the second, an end is within its window, typed or picked: the calendar's bounds are the
+  // window's days where `min` and `max` aren't given, so it shows no month past 0000 to 9999.
+  const [low, high] = pattern ? windowOf(today, min, max) : ["", ""];
+  const [dayMin, dayMax] = pattern
+    ? [min ?? low.slice(0, 10), max ?? high.slice(0, 10)]
+    : [min, max];
   const days = (v?: DateRange) => ({
     start: v?.start.slice(0, 10) ?? today,
     end: v?.end.slice(0, 10) ?? today,
@@ -406,11 +439,21 @@ export function DateRangePicker(
   const start = days(value);
   const [draft, setDraft] = useState<{ start: string; end?: string }>(start);
   const [times, setTimes] = useState(() => clocks(value));
-  const [month, setMonth] = useState(() => firstMonth(start, min, max));
-  const list = presets === true ? rangePresets(today, { min, max }) : presets || [];
+  const [month, setMonth] = useState(() => firstMonth(start, dayMin, dayMax));
+  // To the second, what's typed in From and To is text until it's left, or applied: only then
+  // is it read, and only then may it move either end. Text typed by one pattern (`by`) isn't
+  // read by another.
+  const by = `${pattern}\u0000${locale}`;
+  const [typed, setTyped] = useState<{ by?: string; from?: string; to?: string }>({});
+  const typing = typed.by === by ? typed : {};
+  const offered = presets === true ? rangePresets(today, { min, max }) : presets || [];
+  // To the second, a preset whose days aren't real ones (before 0000) isn't offered.
+  const list = pattern
+    ? offered.filter((p) => isDay(p.range.start) && isDay(p.range.end))
+    : offered;
   const written = (day: string, clock: Clock) =>
     pattern
-      ? formatPattern(out(day, clock), pattern, lang())
+      ? formatPattern(out(day, clock), pattern, locale)
       : time
       ? `${formatDay(day, format)} ${clockText(clock)}`
       : formatDay(day, format);
@@ -427,7 +470,9 @@ export function DateRangePicker(
     (!timed || whole)
   );
   function out(day: string, clock: Clock) {
-    return timed ? dayTimeOf(day, clock.hour, clock.minute, clock.second) : day;
+    // To the second, every end has its seconds, though its clock came from before `seconds` was.
+    const second = seconds ? clock.second ?? 0 : clock.second;
+    return timed ? dayTimeOf(day, clock.hour, clock.minute, second) : day;
   }
   const give = (start: string, end: string, from: Clock, to: Clock) => {
     // On one day the end can't come before the start.
@@ -437,24 +482,58 @@ export function DateRangePicker(
   const open = () => {
     setDraft(start);
     setTimes(clocks(value));
-    setMonth(firstMonth(start, min, max));
+    setMonth(firstMonth(start, dayMin, dayMax));
+    if (pattern) setTyped({});
   };
-  const typedFrom = (day: string, clock?: Clock) => {
-    const range = { start: day, end: draft.end !== undefined && draft.end < day ? day : draft.end };
+  const typedFrom = (day: string) => {
+    const range = fromDay(draft, day);
     setDraft(range);
-    if (clock) setTimes((now) => ({ ...now, from: clock }));
-    setMonth(firstMonth(range, min, max));
+    setMonth(firstMonth(range, dayMin, dayMax));
   };
-  const typedTo = (day: string, clock?: Clock) => {
-    const range = { start: day < draft.start ? day : draft.start, end: day };
+  const typedTo = (day: string) => {
+    const range = toDay(draft, day);
     setDraft(range);
-    if (clock) setTimes((now) => ({ ...now, to: clock }));
     const second = addMonth(month, 1);
     if (monthOf(day) < month || monthOf(day) > second) {
-      setMonth(firstMonth(range, min, max, "end"));
+      setMonth(firstMonth(range, dayMin, dayMax, "end"));
     }
   };
-  const pick = (day: string) =>
+  /** An end read from what's typed, within the bounds, or undefined. */
+  const endOf = (text: string) => {
+    const end = readEnd(text, pattern!, locale);
+    return end !== undefined && end >= low && end <= high ? end : undefined;
+  };
+  /** The draft with what's typed read as its ends, From first; undefined while some can't be. */
+  const withTyped = (texts: { from?: string; to?: string }) => {
+    let range: { start: string; end?: string } = draft;
+    let clock = times;
+    for (const which of ["from", "to"] as const) {
+      const text = texts[which];
+      if (text === undefined) continue;
+      const end = endOf(text);
+      if (!end) return undefined;
+      range = which === "from" ? fromDay(range, end.slice(0, 10)) : toDay(range, end.slice(0, 10));
+      clock = { ...clock, [which]: clockOf(end, which === "from" ? first : last, true) };
+    }
+    return { range, clock };
+  };
+  /** Leaving From or To: what's typed is that end, if it can be read; else it stays, marked. */
+  const commit = (which: "from" | "to") => {
+    const text = typing[which];
+    if (text === undefined) return;
+    const next = withTyped({ [which]: text });
+    if (!next) return;
+    setTyped({ ...typing, by, [which]: undefined });
+    setTimes(next.clock);
+    if (which === "from") typedFrom(next.range.start);
+    else typedTo(next.range.end!);
+  };
+  const typeIn = (which: "from" | "to") => (text: string) =>
+    setTyped((now) => ({ ...(now.by === by ? now : {}), by, [which]: text }));
+  // What Apply gives: the draft, and with seconds what's typed in From and To read as its ends.
+  const ready = pattern ? withTyped(typing) : { range: draft, clock: times };
+  const pick = (day: string) => {
+    if (pattern) setTyped({});
     setDraft((range) =>
       range.end !== undefined
         ? { start: day }
@@ -462,6 +541,7 @@ export function DateRangePicker(
         ? { start: day, end: range.start }
         : { start: range.start, end: day }
     );
+  };
   return (
     <>
       {SHEET}
@@ -532,21 +612,20 @@ export function DateRangePicker(
                         <span className="copilotz-date-end">
                           <DayTimeField
                             label={say("rangeFrom")}
-                            value={out(draft.start, times.from)}
-                            pattern={pattern}
-                            low={boundTo(min, "min") ?? `${addMonths(today, -REACH)} 00:00:00`}
-                            high={boundTo(max, "max") ?? `${addMonths(today, REACH)} 23:59:59`}
-                            onEnd={(end) => typedFrom(end.slice(0, 10), clockOf(end, first, true))}
+                            text={typing.from ?? written(draft.start, times.from)}
+                            invalid={typing.from !== undefined && !endOf(typing.from)}
+                            onText={typeIn("from")}
+                            onCommit={() => commit("from")}
                           />
                         </span>
                         <span className="copilotz-date-end">
                           <DayTimeField
                             label={say("rangeTo")}
-                            value={draft.end === undefined ? undefined : out(draft.end, times.to)}
-                            pattern={pattern}
-                            low={boundTo(min, "min") ?? `${addMonths(today, -REACH)} 00:00:00`}
-                            high={boundTo(max, "max") ?? `${addMonths(today, REACH)} 23:59:59`}
-                            onEnd={(end) => typedTo(end.slice(0, 10), clockOf(end, last, true))}
+                            text={typing.to ??
+                              (draft.end === undefined ? "" : written(draft.end, times.to))}
+                            invalid={typing.to !== undefined && !endOf(typing.to)}
+                            onText={typeIn("to")}
+                            onCommit={() => commit("to")}
                           />
                         </span>
                       </>
@@ -600,8 +679,8 @@ export function DateRangePicker(
                   onMonth={setMonth}
                   value={draft}
                   onPick={pick}
-                  min={min}
-                  max={max}
+                  min={dayMin}
+                  max={dayMax}
                   today={today}
                   weekStart={weekStart}
                   monthFormat={monthFormat}
@@ -615,10 +694,10 @@ export function DateRangePicker(
               <Button
                 size="sm"
                 variant="primary"
-                disabled={draft.end === undefined}
+                disabled={ready?.range.end === undefined}
                 onClick={() => {
-                  if (draft.end === undefined) return;
-                  give(draft.start, draft.end, times.from, times.to);
+                  if (ready?.range.end === undefined) return;
+                  give(ready.range.start, ready.range.end, ready.clock.from, ready.clock.to);
                   close();
                 }}
               >

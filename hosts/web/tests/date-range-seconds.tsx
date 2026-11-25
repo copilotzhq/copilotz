@@ -431,7 +431,7 @@ function shifted(value: string, seconds: number): string | undefined {
 }
 
 test("the window an end is typed in: 200 years either side of today, within 0000 to 9999", () =>
-  inPage("en-GB", async (draw) => {
+  inPage("en-GB", async (draw, applied) => {
     const todays = [
       "0000-01-01",
       "0001-06-15",
@@ -468,6 +468,17 @@ test("the window an end is typed in: 200 years either side of today, within 0000
         await type(ENDS, 0, end.replace(" ", "T"));
         const fits = isDayTime(end) && end >= low && end <= high;
         assert.equal(invalid(0), !fits, `today ${day}: ${end}`);
+      }
+      // Every preset offered gives real ends, within 0000 to 9999.
+      await draw({ today: day });
+      const count = document.querySelectorAll(".copilotz-date-preset").length - 1;
+      for (let i = 0; i < count; i++) {
+        await draw({ today: day });
+        await click(".copilotz-date-preset", i);
+      }
+      assert.equal(applied.length, count);
+      for (const range of applied.splice(0)) {
+        assert.ok(isDayTime(range.start) && isDayTime(range.end), `today ${day}: ${range.start}`);
       }
     }
   }));

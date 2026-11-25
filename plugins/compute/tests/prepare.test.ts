@@ -9,7 +9,7 @@
  * in. And a plan's call wakes an asleep cloud computer before it tries a
  * laptop that's off.
  */
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { type Actor, createRuntime, defineAction, definePlugin } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models from "../../models/mod.ts";
@@ -49,6 +49,8 @@ type Machine = {
   clis: Record<string, Cli>;
   /** It takes the app's release, updating itself (a laptop's built program). */
   updates?: boolean;
+  /** Its plan is at its limit: calls on it fail so. */
+  limit?: boolean;
   credential: string;
   worker?: ReturnType<typeof fakeComputer>;
 };
@@ -170,18 +172,20 @@ async function setup(fn: (s: Setup) => Promise<void>) {
     [WORK.agentsPrompt]: async ({ input }: { input: ReadableStream<Uint8Array> }) => {
       await read(input);
       prompts.push(m.id);
-      const events: PromptEvent[] = [
-        { i: 0, type: "session", session: "s-1" },
-        {
-          i: 1,
-          type: "update",
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: `On ${m.id}.` },
+      const events: PromptEvent[] = m.limit
+        ? [{ i: 0, type: "failed", code: "limit", message: "You've hit your usage limit" }]
+        : [
+          { i: 0, type: "session", session: "s-1" },
+          {
+            i: 1,
+            type: "update",
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: `On ${m.id}.` },
+            },
           },
-        },
-        { i: 2, type: "done", stopReason: "end_turn" },
-      ];
+          { i: 2, type: "done", stopReason: "end_turn" },
+        ];
       return new ReadableStream<Uint8Array>({
         start(controller) {
           for (const event of events) {
@@ -396,5 +400,41 @@ test("a plan's call wakes the asleep cloud computer before it tries a laptop tha
     assertEquals(said.at(-1)?.text, `On ${cloud.id}.`);
     assertEquals(s.prompts, [cloud.id]);
     assertEquals(s.woken, [cloud.id]);
+  });
+});
+
+test("a plan at its limit on a computer is kept as such, since it first was, until a call there answers", async () => {
+  await setup(async (s) => {
+    const signed = { claude: { installed: true, signedIn: true } };
+    const desk = await s.machine({ cloud: false, versions: [RELEASE], clis: signed }, "Desk");
+    await s.prepare(desk.id);
+    const { space } = await s.rt.call<{ space: string }>("space.personal", {}, { actor: ana });
+    const send = async () => {
+      const { thread } = await s.rt.call<{ thread: string }>("chat.send", {
+        text: "hello",
+        in: space,
+      }, { actor: ana });
+      await s.rt.idle();
+      return (await s.rt.query<Message[]>("message.history", { thread }, { actor: ana }))
+        .at(-1)?.text;
+    };
+    const limited = async () =>
+      ((await s.record(desk.id))!.engines as Record<string, { limited?: string }>).claude
+        .limited;
+
+    desk.limit = true;
+    // The next model answers meanwhile.
+    assertStringIncludes(await send() ?? "", "hello");
+    const since = await limited();
+    assert(since, "kept");
+    await send();
+    assertEquals(await limited(), since, "since it first was");
+    // Checked again (installed, signed in), it stays at its limit.
+    await s.prepare(desk.id);
+    assertEquals(await limited(), since);
+
+    desk.limit = false;
+    assertEquals(await send(), `On ${desk.id}.`);
+    assertEquals(await limited(), undefined);
   });
 });

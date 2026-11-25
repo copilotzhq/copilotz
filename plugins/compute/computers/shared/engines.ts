@@ -33,6 +33,12 @@ export type EngineSeen = {
   account?: string;
   /** When it said so. */
   at: string;
+  /**
+   * When the plan last reached its limit there (a call failed `limit`),
+   * until a call there next succeeds: calls move on meanwhile, and Your AI
+   * says since when.
+   */
+  limited?: string;
 };
 
 /** A failure an engine's call answers with: its `code` tells the model list to move on. */
@@ -116,6 +122,15 @@ export async function shareable(
     `${computer.name ?? "This computer"} is signed in to your ${PLAN[signed]}. Sign out of it ` +
       "first: a computer shared with others can't keep plan sign-ins.",
     { public: true, status: 409 },
+  );
+}
+
+/** Keeps that `engine`'s plan reached its limit on `computer` now (`at`), or no longer (none). */
+export async function limitOf(ctx: Context, computer: string, engine: EngineName, at?: string) {
+  const field = `engines.${engine}.limited`;
+  await ctx.as().db.collection<Computer>("computer").updateOne(
+    { _id: computer },
+    at ? { $set: { [field]: at } } : { $unset: { [field]: "" } },
   );
 }
 

@@ -16,6 +16,8 @@ import {
   engineFailure,
   type EngineName,
   ENGINES,
+  type EngineSeen,
+  limitOf,
   signedOut,
 } from "../shared/engines.ts";
 import { failed } from "../shared/failed.ts";
@@ -116,11 +118,19 @@ export const engineAction = defineAction({
         : error;
     });
     try {
+      const engine = input.engine as EngineName;
+      const limited = (computer.engines as Record<string, EngineSeen> | undefined)?.[engine]
+        ?.limited;
       for await (const event of lines(job.output)) {
         // Signed out there: calls stop going to it until it's signed in again.
         if (event.type === "failed" && event.code === "signed_out") {
-          await signedOut(ctx, computer._id, input.engine as EngineName);
+          await signedOut(ctx, computer._id, engine);
         }
+        // At its limit, since now; answering again, no longer (written only when that changes).
+        if (event.type === "failed" && event.code === "limit" && !limited) {
+          await limitOf(ctx, computer._id, engine, new Date().toISOString());
+        }
+        if (event.type === "done" && limited) await limitOf(ctx, computer._id, engine);
         yield event;
       }
       await job.done;

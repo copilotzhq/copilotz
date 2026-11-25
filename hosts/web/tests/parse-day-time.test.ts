@@ -169,3 +169,23 @@ test("Arabic short date and time including locale digits round trips", () => {
     assertEquals(parseDayTime(text, undefined, locale), "2026-11-16 14:30:05");
   }
 });
+
+test("French and Portuguese short months round trip with or without their dot", () => {
+  const day = "2026-11-16";
+  const pattern = "d MMM yyyy";
+  for (const locale of ["fr-FR", "pt-BR"]) {
+    const shown = formatPattern(day, pattern, locale);
+    assertEquals(parsePattern(shown, pattern, locale), day);
+    assertEquals(parsePattern("16 nov. 2026", pattern, locale), day);
+    assertEquals(parsePattern("16 nov 2026", pattern, locale), day);
+  }
+});
+
+test("Arabic digits in quoted words stay literal alongside numeric date and time fields", () => {
+  const pattern = "'الدفعة ١' d/M/yyyy HH:mm:ss";
+  const locale = "ar-EG-u-nu-arab";
+  const value = "2026-11-16 14:30:05";
+  assertEquals(parseDayTime(formatPattern(value, pattern, locale), pattern, locale), value);
+  assertEquals(parseDayTime("الدفعة ١ ١٦/١١/٢٠٢٦ ١٤:٣٠:٠٥", pattern, locale), value);
+  assertEquals(parseDayTime("الدفعة 1 ١٦/١١/٢٠٢٦ ١٤:٣٠:٠٥", pattern, locale), undefined);
+});

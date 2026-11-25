@@ -27,7 +27,17 @@ test("a server can use web/export declarations without installing React types", 
   const app = join(dir, "app.ts");
   writeFileSync(
     app,
-    'import { exportFile } from "./export.js";\nexportFile("csv", {headers: [], rows: []}, "items");',
+    `import { exportFile, tableSheet } from "./export.js";
+import { textOf } from "./toolkit/table-sheet.js";
+type Item = { price: number };
+const rows: Item[] = [{ price: 12 }];
+const sheet = tableSheet([{
+  key: "price", title: "Price", align: "right",
+  text: row => row.price.toFixed(2), render: row => row.price,
+}], rows);
+tableSheet<Item>([{ key: "price", title: "Price", align: "right", render: row => row.price }], rows);
+textOf({ key: "price", title: "Price", align: "right", render: row => row.price }, rows[0]);
+exportFile("csv", sheet, "items");`,
   );
   const consumer = ts.createProgram([app], {
     ...options,

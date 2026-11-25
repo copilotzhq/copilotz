@@ -91,7 +91,7 @@ export function Form(
         form: HTMLFormElement,
         signal: AbortSignal,
       ): unknown;
-      /** Busy from the first part through the form's own save. */
+      /** Busy from the first part until the save finishes or the form unmounts. */
       onSubmittingChange?(busy: boolean, form: HTMLFormElement): void;
       /**
        * People's words for a field a save refuses, by its name (`detail.field`): said instead of
@@ -144,12 +144,14 @@ export function Form(
     setRefused(NOTHING);
     const form = event.currentTarget;
     const handlers = [...parts.current].map((handler) => handler.current);
+    const { signal } = controller;
+    const finished = () => onSubmittingChange?.(false, form);
     if (onSubmittingChange) {
       handlers.unshift(() => {
+        signal.addEventListener("abort", finished, { once: true });
         onSubmittingChange(true, form);
       });
     }
-    const { signal } = controller;
     const done = await submitAll(
       form,
       handlers,
@@ -159,7 +161,8 @@ export function Form(
     if (signal.aborted) return;
     attempt.current = null;
     setSubmitting(false);
-    onSubmittingChange?.(false, form);
+    signal.removeEventListener("abort", finished);
+    finished();
     // A failure says its words, or that the form wasn't saved; a part that stopped it said why.
     if (!done.ok && done.failed) {
       const at = done.field === undefined ? undefined : fieldFor(done.field, names.current.keys());

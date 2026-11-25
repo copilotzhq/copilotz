@@ -210,10 +210,11 @@ export function code128(text: string, options?: { set?: "auto" | "B" }): number[
  * module (so they stay sharp; at least one): each bar's `x` and `w`, the
  * module's size and the barcode's whole width, in pixels. `quiet` adds the
  * blank margins scanners need (ten modules for Code 128 and Code 39).
+ * With no width, use 300 units or the minimum for one unit per module, whichever is wider.
  */
 export function bars(
   text: string,
-  width = 300,
+  width?: number,
   options: BarcodeOptions = {},
 ): { module: number; width: number; bars: { x: number; w: number }[] } {
   const widths = options.format === "code39"
@@ -227,10 +228,11 @@ export function bars(
   const left = !options.quiet ? 0 : options.format === "ean13" ? 11 : retail ? 7 : 10;
   const right = !options.quiet ? 0 : retail ? 7 : 10;
   const modules = widths.reduce((a, b) => a + b, 0) + left + right;
-  if (!Number.isFinite(width) || width < modules) {
+  const available = width === undefined ? Math.max(300, modules) : width;
+  if (!Number.isFinite(available) || available < modules) {
     throw new RangeError(`Barcode width must be finite and at least ${modules} units.`);
   }
-  const module = Math.floor(width / modules);
+  const module = Math.floor(available / modules);
   const out: { x: number; w: number }[] = [];
   let x = left;
   widths.forEach((w, i) => {

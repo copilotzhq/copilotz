@@ -55,14 +55,20 @@ guides ship with the runtime.
   another record mid-upload doesn't save one record's file onto the other. `EntityDialog` stays busy
   from its first part to the save (Cancel and Escape wait), starts fresh for each record, and passes
   cleared fields to `onSubmit(record, form, unset)` for an `$unset`.
+- `EntityDialog` reads named controls after its `useFormSubmit` parts finish, so a save includes
+  their edits. A `Form` that unmounts during a save calls `onSubmittingChange(false, form)` once.
 - An unanswered `confirm()` resolves `false` when the last `<Toasts />` leaves, instead of showing
   later with an old callback.
 - A timed `DateRangePicker` reads back the date and 24-hour time it shows. `parseDayTime` reads a
   locale's month names and digits; `dateOfDayTime` resolves a skipped time forward and a repeated
   one to its earlier instant, in the browser's zone and a named one alike.
+- Date patterns read short months such as `nov.` in French and Portuguese. Digits in quoted text
+  stay as written when the parser reads the surrounding date and time.
+- `tableSheet` accepts inline `DataTable` columns with `align` and `render` and infers the row type.
 - PDF column widths and alignments follow the visible columns. A minimal-quoted CSV keeps a row with
-  one empty field (`""`). A barcode too narrow for whole modules refuses with its minimum width
-  (`RangeError`) instead of clipping. `copilotz/web/export`'s types need no React.
+  one empty field (`""`). `copilotz/web/export`'s types need no React.
+- A barcode with no `width` grows to fit its whole modules and quiet margins on screen, in PNG and
+  in PDF. An explicit width below that minimum raises a `RangeError` with the width it needs.
 
 **Fixed, here since rc.63 or before:**
 

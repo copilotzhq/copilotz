@@ -55,8 +55,9 @@ Section **"Rules: do this, not that"**, after the bullet that starts `**Outside 
 - **Nested calls on a retry:** a retried Action or delivery (`ctx.retry`) gets each `ctx.call` that
   completed back from its record, wherever in the code it's made; identical calls are matched in the
   order they're made. Keep a nested call's input the same across attempts (no clock or random id
-  made inside it). Don't call a failed Action again in a loop of your own: let the failure fail the
-  caller, and retry the caller. Use `ctx.branch(key)` to keep identical calls of concurrent work
+  made inside it), and put who it's for in it when the same call is made for several people
+  (`ctx.as(person)`). Don't call a failed Action again in a loop of your own: let the failure fail
+  the caller, and retry the caller. Use `ctx.branch(key)` to keep identical calls of concurrent work
   apart.
 ```
 

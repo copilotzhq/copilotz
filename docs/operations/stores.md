@@ -147,9 +147,10 @@ starts. While the old one runs, `runtime.idle()` resolves when no delivery or ti
 pending, `runtime.stats().pending` counts them, and the `copilotz.processor.lag` gauge says how many
 events each Processor has yet to finish. `runtime.close({ drain })` starts nothing new, gives what's
 running `drain` ms to finish, and saves every Processor's position. Afterwards, in SQL: with
-`sqlite3` on the file, maintenance's `/maintenance/sql`, or `psql` after
-`SET search_path TO copilotz;` (the store's `schema`). On a PostgreSQL schema shared by tenants, add
-`tenant = '…'` to every `WHERE`, the subquery's too.
+`sqlite3` on the file (3.38 or later, for `->` and `->>`), maintenance's `/maintenance/sql`, or
+`psql` after `SET search_path TO copilotz;` (the store's `schema`). Maintenance refuses SQL on a
+PostgreSQL schema shared by tenants: there, use `psql`, and add `tenant = '…'` to every `WHERE`, the
+subquery's too.
 
 ```sql
 -- Processor deliveries not done: a Processor whose position is behind the log's last event.

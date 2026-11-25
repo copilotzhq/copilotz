@@ -475,7 +475,11 @@ export default defineAction({
   call made next (through a grant, `ctx.as(grant(…)).call(…)`) takes the number, and a retry finds
   it whichever way the permission went. A call an asynchronous `allow` refuses keeps the number it
   took before waiting, so the same call made after it as a fallback can run once more on a retry
-  whose permission went the other way.
+  whose permission went the other way. So can it under a rule that answers at once on one attempt
+  and after a wait on another (a cached answer), even with no change in permission. Who makes a call
+  isn't part of it: calls that differ only by who makes them (`ctx.as(person).call(…)` for each of
+  several people) must carry that difference in their input (`{ order, by: person.id }`), or a retry
+  can answer one person's call from another's record.
 - **A changed input is a new call:** the hash covers the whole input, private fields too. Keep a
   nested call's input the same across attempts: a time or a random id in it comes from the caller's
   input, not from the clock.
@@ -880,10 +884,10 @@ schedules: {
   commits with the rest. Scheduling an id again replaces its timer. Without an `id`, a timer is
   named by its place among the timers its caller set: `<call>:timer.<n>`, or
   `<event>:<processor>:timer.<n>` for a Processor's, apart from another Processor's. A retry that
-  sets the same timers in the same order replaces them rather than adding more; one that sets
-  another first, or skips one, adds a timer under a number the first attempt gave another. Give a
-  timer an `id` when a retry may set it in another order. A declared timer can't be changed from
-  code.
+  sets the same timers in the same order replaces them rather than adding more. One that sets
+  another first, or skips one, replaces the timer the first attempt set under that number, and the
+  first attempt's timer under the next number stays, so it can fire twice. Give a timer an `id` when
+  a retry may set it in another order. A declared timer can't be changed from code.
 - **As whom:** a timer set by an actor runs as them, where they were, and its call asks `allow`.
 - **Once:** the owner claims what's due in one commit and calls each occurrence as
   `<timer>@<due time>`, so an occurrence called twice runs once. A recurring timer that missed

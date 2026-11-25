@@ -6,6 +6,11 @@ export const say = defineWords("toolkit", {
   close: "Close",
   save: "Save",
   cancel: "Cancel",
+  // Asking before going on (ConfirmDialog), and a record's form (EntityDialog)
+  confirm: "Confirm",
+  delete: "Delete",
+  notDone: "It wasn't done. Try again.",
+  fillIn: "Fill this in.",
   // Copying
   copy: "Copy",
   copied: "Copied",

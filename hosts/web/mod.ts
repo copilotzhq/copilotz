@@ -104,6 +104,19 @@ export { Logo } from "./toolkit/logo.tsx";
 export { Menu, type MenuItem, type MenuTrigger } from "./toolkit/menu.tsx";
 export { Popover, type PopoverTrigger } from "./toolkit/popover.tsx";
 export { Dialog } from "./toolkit/dialog.tsx";
+// Asking before going on (a delete), and a record in a dialog, to add or change.
+export {
+  confirm,
+  ConfirmDialog,
+  type ConfirmDialogProps,
+  type ConfirmOptions,
+} from "./toolkit/confirm-dialog.tsx";
+export {
+  EntityDialog,
+  type EntityDialogProps,
+  type EntityField,
+  type EntityForm,
+} from "./toolkit/entity-dialog.tsx";
 export { Drawer } from "./toolkit/drawer.tsx";
 export { type Tab, Tabs } from "./toolkit/tabs.tsx";
 export { NavItem } from "./toolkit/nav-item.tsx";

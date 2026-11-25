@@ -780,10 +780,10 @@ of `formatPattern`: day and month in the pattern's order, hours on a 24-hour clo
 12-hour one with AM and PM (`hh`, `a`, in the language's words or English's), and seconds typed or
 left out. Its value is the toolkit's day-time, `YYYY-MM-DD HH:mm`, with `:ss` when the pattern
 writes seconds or they were typed. What isn't a real day and time (February 30th, 25:00, 13 PM,
-words) is `undefined`, so a field can mark it. Spaces between the parts may differ, and a comma may
-be left out. With no pattern, it reads the language's own short date and time, and a day-time as the
-toolkit keeps one (`2026-11-16 14:30`, or with a `T`). `locale` names the months and AM and PM: the
-page's is `lang()`.
+words) is `undefined`, so a field can mark it. Unquoted spaces between fields may vary. With no
+pattern, it reads the language's own short date and time with flexible spacing and an optional
+comma, and a day-time as the toolkit keeps one (`2026-11-16 14:30`, or with a `T`). `locale` names
+the months and AM and PM: the page's is `lang()`.
 
 A date alone is `parsePattern(text, pattern, locale)`: `parsePattern("31/12/2026", "dd/MM/yyyy")` is
 `"2026-12-31"`, and `"31/02/2026"` is `undefined`.
@@ -945,7 +945,8 @@ import { Barcode } from "copilotz/web";
 
 Barcode widths must fit at least one whole unit per module, including the requested quiet margins.
 An undersized barcode raises a `RangeError` with its minimum width. EAN-13 with quiet margins
-requires 113 pixels for PNG or 113 points for PDF.
+requires 113 pixels for PNG or 113 points for PDF. In `documentPdf`, omitting the barcode's `width`
+uses the space from its `x` position to the page edge.
 
 ## A route's own page
 

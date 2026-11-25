@@ -134,7 +134,7 @@ export function toJson(
   }
   return JSON.stringify(
     rows.map((row) =>
-      Object.fromEntries(headers.map((header, i) => [header, i < row.length ? row[i] : ""]))
+      Object.fromEntries(headers.map((header, i) => [header, row[i] === undefined ? "" : row[i]]))
     ),
   );
 }

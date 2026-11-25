@@ -109,8 +109,15 @@ export function Form(
 ): ReactNode {
   const parts = useRef(new Set<{ current: PartSubmit }>());
   const attempt = useRef<AbortController | null>(null);
-  useLayoutEffect(() => () => attempt.current?.abort(), []);
   const [submitting, setSubmitting] = useState(false);
+  useLayoutEffect(() => {
+    // Activity preserves state while hidden and reconnects this effect when shown.
+    setSubmitting(attempt.current !== null);
+    return () => {
+      attempt.current?.abort();
+      attempt.current = null;
+    };
+  }, []);
   const [error, setError] = useState<string>();
   const [refused, setRefused] = useState(NOTHING);
   /** The fields shown, by name: how many of each. */

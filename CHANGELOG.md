@@ -49,14 +49,19 @@ guides ship with the runtime.
 
 - A `Form` shows a server refusal under the named `Field`, including a nested field's parent. A
   field's `name` reaches a control drawn as a function.
-- A day pattern accepts a typed four-digit year for `yy`, extra spaces and an optional comma.
-  Table-shaped JSON with raw values preserves each cell's type.
+- Date-only patterns read exactly two digits for `yy`, including in `yyMMdd`. Day-time patterns also
+  accept four digits for a separate `yy` field. Quoted punctuation and spaces match as written.
+  Locale-generated separators allow flexible spacing and an optional comma.
+- JSON records keep sparse cells as `""` and explicit `null` as `null`. Table-shaped JSON with raw
+  values preserves each cell's type.
 - A `Form` keeps the part handlers and submit callback it started with, so a dialog switched to
   another record mid-upload doesn't save one record's file onto the other. `EntityDialog` stays busy
   from its first part to the save (Cancel and Escape wait), starts fresh for each record, and passes
   cleared fields to `onSubmit(record, form, unset)` for an `$unset`.
-- `EntityDialog` reads named controls after its `useFormSubmit` parts finish, so a save includes
-  their edits. A `Form` that unmounts during a save calls `onSubmittingChange(false, form)` once.
+- `EntityDialog` reads the final values of named controls that were enabled when submission began,
+  including controls disabled while saving.
+- A `Form` that unmounts or is hidden by React `Activity` during a save calls
+  `onSubmittingChange(false, form)` once. Showing it again allows a new submission.
 - An unanswered `confirm()` resolves `false` when the last `<Toasts />` leaves, instead of showing
   later with an old callback.
 - A timed `DateRangePicker` reads back the date and 24-hour time it shows. `parseDayTime` reads a
@@ -67,8 +72,10 @@ guides ship with the runtime.
 - `tableSheet` accepts inline `DataTable` columns with `align` and `render` and infers the row type.
 - PDF column widths and alignments follow the visible columns. A minimal-quoted CSV keeps a row with
   one empty field (`""`). `copilotz/web/export`'s types need no React.
-- A barcode with no `width` grows to fit its whole modules and quiet margins on screen, in PNG and
-  in PDF. An explicit width below that minimum raises a `RangeError` with the width it needs.
+- A barcode with no `width` grows to fit its whole modules and quiet margins on screen and in PNG.
+  In `documentPdf`, an omitted width uses the space from `x` to the page edge. Insufficient width
+  raises a `RangeError` with the minimum required. The `Drawn` barcode type keeps its numeric
+  `width`.
 
 **Fixed, here since rc.63 or before:**
 

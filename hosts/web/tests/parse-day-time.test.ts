@@ -34,6 +34,20 @@ test("a day-time in the app's pattern: day first or month first, 24 or 12 hours"
   assertEquals(parseDayTime("Nov 16, 2026, 2:30 PM", "MMM d, yyyy, h:mm a"), "2026-11-16 14:30");
 });
 
+test("a four-digit year for yy needs a separate numeric field in a day-time", () => {
+  assertEquals(parseDayTime("26/11/12 13:45", "yy/MM/dd HH:mm"), "2026-11-12 13:45");
+  assertEquals(parseDayTime("2026/11/12 13:45", "yy/MM/dd HH:mm"), "2026-11-12 13:45");
+  assertEquals(parseDayTime("261112 13:45", "yyMMdd HH:mm"), "2026-11-12 13:45");
+  assertEquals(parseDayTime("20261112 13:45", "yyMMdd HH:mm"), undefined);
+  assertEquals(parseDayTime("11122026 13:45", "MMddyy HH:mm"), undefined);
+});
+
+test("quoted commas and spaces are required in an explicit day-time pattern", () => {
+  const pattern = "dd/MM/'lot,  1'/yy HH:mm";
+  assertEquals(parseDayTime("01/02/lot,  1/26 13:45", pattern), "2026-02-01 13:45");
+  assertEquals(parseDayTime("01/02/lot1/26 13:45", pattern), undefined);
+});
+
 test("seconds: kept when typed, `:00` when the pattern writes them and they weren't typed", () => {
   assertEquals(parseDayTime("16/11/2026 14:30:05", "dd/MM/yyyy HH:mm:ss"), "2026-11-16 14:30:05");
   assertEquals(parseDayTime("16/11/2026 14:30", "dd/MM/yyyy HH:mm:ss"), "2026-11-16 14:30:00");

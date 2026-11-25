@@ -41,7 +41,7 @@
  * />
  * ```
  */
-import { type ReactNode, useId, useState } from "react";
+import { type ReactNode, useId, useRef, useState } from "react";
 import { Button } from "./button.tsx";
 import { Checkbox } from "./checkbox.tsx";
 import { DatePicker } from "./date-picker.tsx";
@@ -49,7 +49,7 @@ import { DateTimePicker } from "./date-time-picker.tsx";
 import { Dialog } from "./dialog.tsx";
 import { type Control, Field } from "./field.tsx";
 import { Form } from "./form.tsx";
-import { entityValues, formValues } from "./form-values.ts";
+import { entityValues, formValues, namedControls } from "./form-values.ts";
 import { Input } from "./input.tsx";
 import { Picker, type PickerOption } from "./picker.tsx";
 import { Textarea } from "./textarea.tsx";
@@ -196,6 +196,12 @@ function RecordDialog<T extends Record<string, unknown>>(
   const [missing, setMissing] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
+  const controls = useRef<ReturnType<typeof namedControls>>([]);
+  const submittingChanged = (busy: boolean, element: HTMLFormElement) => {
+    controls.current = busy ? namedControls(element) : [];
+    setSaving(busy);
+  };
+
   const set = (change: Partial<T>) => {
     setDraft((now) => ({ ...now, ...change }));
     setMissing((now) => now.filter((name) => !(name in change)));
@@ -205,7 +211,11 @@ function RecordDialog<T extends Record<string, unknown>>(
     element: HTMLFormElement,
     signal: AbortSignal,
   ) => {
-    const ready = entityValues(fields, { ...draft, ...formValues(element), ...handed }, given);
+    const ready = entityValues(
+      fields,
+      { ...draft, ...formValues(element, controls.current), ...handed },
+      given,
+    );
     setMissing(ready.missing);
     if (ready.missing.length) return;
     const answer = await onSubmit(ready.values as Omit<T, "_id">, element, ready.unset);
@@ -232,7 +242,7 @@ function RecordDialog<T extends Record<string, unknown>>(
         </>
       }
     >
-      <Form id={form} onSubmittingChange={setSaving} errors={errors} onSubmit={submit}>
+      <Form id={form} onSubmittingChange={submittingChanged} errors={errors} onSubmit={submit}>
         {fields.map((field) => (
           <Field
             key={field.name}

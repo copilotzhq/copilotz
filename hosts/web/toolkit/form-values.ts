@@ -20,16 +20,23 @@ type Element = {
 /** Controls that hold nothing a record keeps. */
 const SKIPPED = new Set(["submit", "button", "reset", "image", "file", "fieldset", "output"]);
 
+/** Capture which controls participate before the dialog disables them for saving. */
+export function namedControls(form: { elements: ArrayLike<unknown> }): Element[] {
+  return (Array.from(form.elements) as Element[]).filter((c) =>
+    !!c.name && !c.disabled && !SKIPPED.has((c.type ?? "").toLowerCase())
+  );
+}
+
 /**
  * What a form's named controls hold, as a record keeps it: text as a string; a number field as a
  * number (`undefined` when cleared); a checkbox as `true` or `false`; the chosen radio's value;
  * a multiple select, or several controls of one name, as a list. Buttons, files and disabled
- * controls are left out.
+ * controls are left out. Pass the controls captured at submit to read their values after a part finishes.
  */
-export function formValues(form: { elements: ArrayLike<unknown> }): Record<string, unknown> {
-  const controls = (Array.from(form.elements) as Element[]).filter((c) =>
-    !!c.name && !c.disabled && !SKIPPED.has((c.type ?? "").toLowerCase())
-  );
+export function formValues(
+  form: { elements: ArrayLike<unknown> },
+  controls = namedControls(form),
+): Record<string, unknown> {
   const count = new Map<string, number>();
   for (const c of controls) count.set(c.name!, (count.get(c.name!) ?? 0) + 1);
   const values: Record<string, unknown> = {};

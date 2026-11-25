@@ -111,8 +111,16 @@ export type EmailSettings = {
    * log is a way in).
    */
   adapter: string;
-  /** With the capture adapter, also write each delivered message as an .eml file in this directory. */
-  capture?: { directory?: string };
+  /**
+   * Set `directory` to save captured messages as .eml files and `allowPublicOrigin: true`
+   * to capture mail in a test with a public `links.origin`.
+   */
+  capture?: {
+    /** Also write each captured message as an .eml file in this directory. */
+    directory?: string;
+    /** Allow a test with a public links.origin to capture mail locally. */
+    allowPublicOrigin?: boolean;
+  };
   /** Who messages are from: `"Example <noreply@example.com>"`. */
   from?: string;
   /**

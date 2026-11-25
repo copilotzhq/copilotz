@@ -73,7 +73,7 @@ Nothing to set: it works as it comes.
 
 The runtime doesn't start without [`chat`](chat.md) and [`spaces`](spaces.md): add them too.
 
-It ships in a package of its own, `@copilotz/work@1.0.0-rc.64`, for `copilotz` `1.0.0-rc.64`:
+It ships in a package of its own, `@copilotz/work@1.0.0-rc.65`, for `copilotz` `1.0.0-rc.65`:
 install it beside `copilotz`.
 
 ## Listing

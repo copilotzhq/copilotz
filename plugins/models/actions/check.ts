@@ -2,7 +2,9 @@
  * `models.check`: whether a model can be called as configured (its provider,
  * adapter and settings), for a port. Other plugins' startup checks ask it
  * about the models they're configured with, so a mistake stops the runtime
- * from starting.
+ * from starting. For `llm`, it answers the models a choice would try, in
+ * order (`"provider/model"`): with a person's plans (`harnesses`), theirs
+ * first.
  *
  * `models.efforts` `{ model }`: the efforts the catalog says a model takes
  * (`none` first when its reasoning can be turned off), `[]` when it doesn't
@@ -17,7 +19,7 @@ import { imagers } from "../shared/image.ts";
 import { transcribers } from "../shared/transcribe.ts";
 
 export const check = defineAction({
-  description: "Throws what's wrong with a model for a port; nothing when it can be called",
+  description: "Throws what's wrong with a model for a port; for llm, the models it would try",
   record: false,
   input: {
     type: "object",
@@ -31,8 +33,8 @@ export const check = defineAction({
   run: async (ctx, input) => {
     await loadCatalog();
     const model = input.model as ModelRef;
-    if (input.port === "llm") chooseModels(ctx, model);
-    else if (input.port === "embeddings") embedder(ctx, model);
+    if (input.port === "llm") return chooseModels(ctx, model).map((m) => m.id);
+    if (input.port === "embeddings") embedder(ctx, model);
     else if (input.port === "image") imagers(ctx, model);
     else transcribers(ctx, model);
   },

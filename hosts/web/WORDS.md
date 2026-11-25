@@ -338,6 +338,10 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.folderDropped` | “{name}” is a folder, and folders can't be uploaded. Drop the files in it, or a zip of it. |
 | `computers.foldersDropped` | one: {count} folder wasn't uploaded: folders can't be. Drop the files in it, or a zip of it. / other: {count} folders weren't uploaded: folders can't be. Drop the files in them, or a zip of each. |
 | `computers.gotCode` | The page gave you a code? |
+| `computers.grokAbout` | Your agents run on your Grok plan, through Grok Build on your computer. |
+| `computers.grokCli` | Grok Build |
+| `computers.grokPlan` | Grok plan |
+| `computers.grokTitle` | Grok plan |
 | `computers.hideInstall` | Hide |
 | `computers.howToFix` | How to use it |
 | `computers.howToInstall` | How to install |
@@ -371,7 +375,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.output` | What {cli} says |
 | `computers.ownSignIn` | It's your agents' own sign-in: your own use of {cli} on that computer stays as it is. |
 | `computers.paletteGroup` | General |
-| `computers.paletteKeywords` | plan, subscription, sign in, computer, Claude, ChatGPT, Codex, Gemini, Google |
+| `computers.paletteKeywords` | plan, subscription, sign in, computer, Claude, ChatGPT, Codex, Gemini, Google, Grok |
 | `computers.palettePlans` | Plans on your computers |
 | `computers.paletteSignedIn` | Signed in on {computer} |
 | `computers.paletteSignedInMany` | one: Signed in on {count} computer / other: Signed in on {count} computers |

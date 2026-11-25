@@ -62,8 +62,11 @@ export type OrgKind = {
   at: string;
 };
 
-/** What a level chose: a tier by its name; the org's also the highest tier its members may use. */
-export type Choice = { tier?: string; cap?: string };
+/**
+ * What a level chose: a tier by its name; the org's also the highest tier its
+ * members may use; a person's also the order of their plans (`harnesses`).
+ */
+export type Choice = { tier?: string; cap?: string; harnesses?: string[] };
 
 /** Where a choice is kept. */
 export const ORG_CHOICE = "org";

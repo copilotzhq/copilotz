@@ -71,6 +71,11 @@ export const computers: Words = {
     other:
       "{count} pastas não foram enviadas: pastas não podem ser. Solte os arquivos delas, ou um zip de cada uma.",
   },
+  "computers.grokAbout":
+    "Seus agentes rodam no seu plano do Grok, pelo Grok Build no seu computador.",
+  "computers.grokCli": "Grok Build",
+  "computers.grokPlan": "plano do Grok",
+  "computers.grokTitle": "Plano do Grok",
   "computers.gotCode": "A página deu um código?",
   "computers.hideInstall": "Ocultar",
   "computers.howToFix": "Como usar",
@@ -113,7 +118,7 @@ export const computers: Words = {
     "É o login dos seus agentes: o seu próprio uso do {cli} nesse computador continua como está.",
   "computers.paletteGroup": "Geral",
   "computers.paletteKeywords":
-    "plano, assinatura, entrar, login, computador, Claude, ChatGPT, Codex, Gemini, Google",
+    "plano, assinatura, entrar, login, computador, Claude, ChatGPT, Codex, Gemini, Google, Grok",
   "computers.palettePlans": "Planos nos seus computadores",
   "computers.paletteSignIn": "Entrar no seu {plan}",
   "computers.paletteSignedIn": "Conectado em {computer}",

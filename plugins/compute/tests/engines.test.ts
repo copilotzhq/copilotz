@@ -12,7 +12,7 @@
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { join } from "node:path";
 import process from "node:process";
-import { type Actor, createRuntime, definePlugin } from "../../../runtime/mod.ts";
+import { type Actor, createRuntime, defineAction, definePlugin } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import models from "../../models/mod.ts";
 import { chat, type Message, tool } from "../../agents/chat/mod.ts";
@@ -78,6 +78,19 @@ async function setup(
   const topic = `engines-test.${crypto.randomUUID()}`;
   const app = definePlugin({
     name: "app",
+    actions: {
+      // Which plans `actor` has connected here, as the tiers ask on each turn.
+      "test.connected": defineAction({
+        input: { type: "object" },
+        run: (ctx, input: { actor: Actor }) => ctx.as(input.actor).call("computer.connected", {}),
+      }),
+      // Her computer, gone quiet (as it last said: still signed in).
+      "test.offline": defineAction({
+        input: { type: "object" },
+        run: (ctx) =>
+          ctx.as().db.collection("computer").updateMany({}, { $set: { online: false } }),
+      }),
+    },
     resources: {
       shared: { thread: {}, message: {} },
       agents: {
@@ -215,6 +228,45 @@ test("someone with no plan signed in goes straight to the next model, and no com
     assertEquals(last.from, "north");
     assertStringIncludes(last.text ?? "", "hello there");
     assertEquals(s.asked.length, 0);
+  });
+});
+
+test("which plans someone has connected: signed in on a computer of theirs that's on or wakes", async () => {
+  await setup(async (s) => {
+    const plans = (actor: Actor) => s.rt.call<string[]>("test.connected", { actor });
+    const north = (person: Actor): Actor => ({ kind: "agent", id: "north", for: person });
+    // As her, or an agent working for her; never anyone else's.
+    assertEquals(await plans(ana), ["claude-plan"]);
+    assertEquals(await plans(north(ana)), ["claude-plan"]);
+    assertEquals(await plans(north(cy)), []);
+    // A routine's turn, with nobody there: a plan's CLI doesn't run then.
+    const routine = { kind: "routine", id: "r1", name: "Morning news", rev: 1 };
+    assertEquals(await plans({ ...north(ana), for: { ...ana, origin: routine } }), []);
+    // Her laptop, off: not until it's on again. A cloud computer asleep wakes when asked.
+    await s.rt.call("test.offline", {});
+    assertEquals(await plans(north(ana)), []);
+    const [mine] = await s.rt.call<{ computer: string }[]>("computer.engines", {}, { actor: ana });
+    await s.rt.call("computer.mark", {
+      computer: mine.computer,
+      status: { kind: "cloud", state: "asleep" },
+    });
+    assertEquals(await plans(north(ana)), ["claude-plan"]);
+    // Each plan serves its maker's models, by their own names.
+    const plansOnly = ["claude-plan/claude-haiku-5-5", "codex-plan/gpt-6-luna"];
+    assertEquals(
+      await s.rt.call("models.check", {
+        model: { model: [...plansOnly, "gemini-plan/gemini-4-neon"], harnesses: ["gemini-plan"] },
+        port: "llm",
+      }),
+      ["gemini-plan/gemini-4-neon"],
+    );
+    assertEquals(
+      await s.rt.call("models.check", {
+        model: { model: plansOnly, harnesses: ["codex-plan", "claude-plan"] },
+        port: "llm",
+      }),
+      plansOnly,
+    );
   });
 });
 

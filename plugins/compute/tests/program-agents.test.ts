@@ -56,7 +56,7 @@ type Engines = Setup & {
   logged: string[];
 };
 
-/** Runs `fn` with a computer whose `claude` and `agy` are fakes (and no `codex`). */
+/** Runs `fn` with a computer whose `claude` and `agy` are fakes (and no `codex` or `grok`). */
 function engines(fn: (e: Engines) => Promise<void>, agents: AgentsOptions = {}) {
   return async () => {
     const dir = tempDir();
@@ -66,6 +66,7 @@ function engines(fn: (e: Engines) => Promise<void>, agents: AgentsOptions = {}) 
       claude: fakeCli(dir, "claude", "./program-agents-claude.ts", logs.claude),
       antigravity: fakeCli(dir, "agy", "./program-agents-acp.ts", logs.agy),
       codex: null,
+      grok: null,
     };
     await setup(async (s) => {
       const home = (engine: string) => join(s.root, ".copilotz", "engines", engine);
@@ -395,7 +396,7 @@ posix(
     signIn("claude");
     signIn("antigravity");
     const all = await work<EngineStatus[]>(WORK.agentsStatus, {});
-    assertEquals(all.map((s) => s.engine), ["claude", "codex", "antigravity"]);
+    assertEquals(all.map((s) => s.engine), ["claude", "codex", "antigravity", "grok"]);
     assertEquals(all[0], {
       engine: "claude",
       installed: true,

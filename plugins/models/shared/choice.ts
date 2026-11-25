@@ -7,12 +7,15 @@
  * - A model is `"provider/model"`, with the settings to call it with next to
  *   it (`effort`, `maxTokens`, … by port). A list is tried in order. A name
  *   without a slash is an alias from `resources.model`.
+ * - Given a person's plans (`harnesses`), a list runs on them first: see
+ *   plans.ts.
  * - The catalog (models.dev, snapshotted in `catalog.json`) fills in what a
  *   provider resource leaves out: its protocol and URL, and per model its
  *   cost, how its reasoning is controlled and its limits. It's loaded the
  *   first time it's needed (`loadCatalog`), not with the plugin.
  */
 import { invalid } from "../../../runtime/mod.ts";
+import { plansFirst } from "./plans.ts";
 import type { Endpoint } from "./provider.ts";
 
 /** USD per million tokens, by what `Usage` counts; `tiers` apply past a prompt size. */
@@ -132,6 +135,29 @@ export type Provider = Endpoint & {
    * (2 minutes; 0: never).
    */
   retry?: number;
+  /** A person's plan that runs other providers' models (a harness): see `Harness`. */
+  harness?: Harness;
+};
+
+/**
+ * A person's plan that runs other providers' models: Claude Code's
+ * `claude-plan`, ChatGPT's `chatgpt`. A model list given a person's plans
+ * (the `harnesses` setting) runs each model on theirs first (see plans.ts).
+ */
+export type Harness = {
+  /** Where it goes among a person's plans until they reorder them, lowest first. */
+  order: number;
+  /**
+   * The models it runs, by their API id (`"anthropic/claude-opus-5-5"`) or a
+   * provider's every one (`"anthropic/*"`), each by its own name for it
+   * (`"*"`: the same). An id wins over its provider's `"*"`.
+   */
+  serves: Record<string, string>;
+  /**
+   * The plan it runs on, as people know it ("ChatGPT"): plans run two ways
+   * (ChatGPT on the server, and through Codex) are one plan to them.
+   */
+  plan: string;
 };
 
 /** A model to call: `"provider/model"`, an alias, settings around one, or a list tried in order. */
@@ -146,6 +172,14 @@ export type ModelSettings = {
   options?: Record<string, unknown>;
   /** What it reads besides text, where the catalog doesn't know it (or is wrong): `["image"]`. */
   input?: Media[];
+  /**
+   * A person's plans (providers with `harness`), in their order: each model
+   * of the list runs on those that serve it first, model by model, and on
+   * the list's own providers after every plan. An entry naming one of them
+   * stands for its model, on plans only. Left with nothing, the list is tried
+   * as written.
+   */
+  harnesses?: string[];
   [setting: string]: unknown;
 };
 
@@ -232,9 +266,12 @@ function choices(
     return choices(resources, alias, {}, [...aliases, ref])
       .map((c) => ({ id: c.id, settings: over(c.settings, inherited) }));
   }
-  const { model, ...settings } = ref;
+  const { model, harnesses, ...settings } = ref;
   if (model === undefined) throw invalid("Model settings without a `model`");
-  return choices(resources, model, over(inherited, defined(settings)), aliases);
+  const found = choices(resources, model, over(inherited, defined(settings)), aliases);
+  return Array.isArray(harnesses)
+    ? plansFirst((resources.provider ?? {}) as Record<string, Provider>, found, harnesses)
+    : found;
 }
 
 /** Looks a model up in the catalog: `"provider/model"`. */
@@ -261,7 +298,8 @@ export function resolve(resources: Resources, ref: ModelRef): Resolved[] {
         `No provider "${provider}" for "${id}": declare resources.provider.${provider}`,
       );
     }
-    const { adapter, catalog: from, options, tags, title: _t, note: _n, ...endpoint } = declared;
+    const { adapter, catalog: from, options, tags, title: _t, note: _n, harness: _h, ...endpoint } =
+      declared;
     const listed = from === false ? undefined : catalog.providers[from ?? provider];
     const entry = typeof settings.catalog === "string"
       ? settings.catalog

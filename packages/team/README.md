@@ -39,7 +39,9 @@ import { teamWeb, tiersWeb } from "@copilotz/team/web";
 - **`tiers`**: which model each of the app's agents thinks with, by tier ("Everyday", "Expert"): the
   first that applies of a space's pick, the space's tier, the org's pick, the org's tier and its
   plan's (the `planTier` resource, which `@copilotz/billing`'s credits fill). Its collection is
-  `modelChoice`; chat asks it through the `agentModel` resource.
+  `modelChoice`; chat asks it through the `agentModel` resource. Where the app has people's plans
+  (Claude Code, ChatGPT…), each turn's chain runs on its person's plans first, in their order
+  (`tiers.harnesses`).
 
 Its front end's words are `team.<key>`: see
 [WORDS.md](https://github.com/copilotzhq/copilotz/blob/main/packages/team/WORDS.md).

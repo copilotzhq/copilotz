@@ -8,8 +8,15 @@
  * the tiers know works as the app's first. Asked on every run of a turn, so
  * it only reads by `_id` and the org's few templates, which the owner keeps
  * cached.
+ *
+ * Where the app has plans (providers with `harness`), the chain goes with
+ * the plans its person has connected now, in their order:
+ * `{ model: chain, harnesses }` (none for a turn that's nobody's), and the
+ * models plugin runs each model on them first (see shared/plans.ts). Asking
+ * which they have is one read per plugin that keeps plans, beside the rest.
  */
 import { defineAction, personOf } from "copilotz";
+import { connectedOf, harnessesOf, orderOf } from "../shared/plans.ts";
 import { levelsOf, orgTiersOf } from "../shared/shown.ts";
 import { entryOf, kindOf, tierIn } from "../shared/tiers.ts";
 
@@ -30,16 +37,22 @@ export const modelAction = defineAction({
     if (!Object.keys(ctx.resources.tiers ?? {}).length) return null;
     const person = personOf(ctx.actor);
     const system = ctx.as();
-    const [{ tiers, kinds }, levels] = await Promise.all([
+    const plans = Object.keys(harnessesOf(ctx)).length > 0;
+    const [{ tiers, kinds }, levels, connected] = await Promise.all([
       orgTiersOf(system),
       levelsOf(system, {
         ...(input.space ? { space: input.space } : {}),
         ...(input.thread ? { thread: input.thread } : {}),
         ...(person ? { person } : {}),
       }),
+      plans && person ? connectedOf(ctx) : new Set<string>(),
     ]);
     const inForce = tierIn(tiers, levels);
     const kind = kindOf(ctx, input.agent, undefined, kinds);
-    return entryOf(inForce ? tiers[inForce.tier] : undefined, kind, kinds) ?? null;
+    const chain = entryOf(inForce ? tiers[inForce.tier] : undefined, kind, kinds);
+    if (chain === undefined) return null;
+    if (!plans) return chain;
+    const harnesses = orderOf(ctx, levels.person?.harnesses).filter((name) => connected.has(name));
+    return { model: chain, harnesses };
   },
 });

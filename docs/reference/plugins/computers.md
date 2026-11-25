@@ -46,7 +46,7 @@ Its named queries read for callers, as the rules let them:
 
 ## What it lets callers do
 
-Of its 33 Actions, people may call 21; agents may call 14; contacts and someone signed out may call
+Of its 34 Actions, people may call 21; agents may call 14; contacts and someone signed out may call
 none.
 
 | Action                   | Person | Agent | Contact | Anyone | Key | Routine | Maintenance | What it does                                                                        |
@@ -77,9 +77,10 @@ none.
 An agent works for a person, and calls what both may. A key calls only what its scope names. A
 routine is work done for a person, which they set going.
 
-Only the app's own code calls `computer.admit`, `computer.allowed`, `computer.enrollment`,
-`computer.gone`, `computer.mark`, `computer.provision`, `computer.ready`, `computer.running`,
-`computer.scope`, `computer.watch` and `env.values`: its plugins, its schedules and the system.
+Only the app's own code calls `computer.admit`, `computer.allowed`, `computer.connected`,
+`computer.enrollment`, `computer.gone`, `computer.mark`, `computer.provision`, `computer.ready`,
+`computer.running`, `computer.scope`, `computer.watch` and `env.values`: its plugins, its schedules
+and the system.
 
 Agents act through its 14 tools, as whoever they work for:
 
@@ -123,20 +124,20 @@ Its Views show to the model.
   `write_file`.
 - **Front ends:** [`computers-terminal`](computers-terminal.md) and
   [`computers-web`](computers-web.md).
-- **What it adds to resources:** `context` (`computer`), `cost` (`claude-plan/*`, `codex-plan/*`,
-  `gemini-plan/*`), `provider` (`claude-plan`, `codex-plan`, `gemini-plan`), `usageNames`
-  (`computer`).
+- **What it adds to resources:** `connectedPlans` (`computers`), `context` (`computer`), `cost`
+  (`claude-plan/*`, `codex-plan/*`, `gemini-plan/*`, `grok-plan/*`), `provider` (`claude-plan`,
+  `codex-plan`, `gemini-plan`, `grok-plan`), `usageNames` (`computer`).
 
 ## What it needs
 
-Nothing to set. It reads `computerWake`, `directory`, `downloads`, `org` and `origins`, resource
-kinds the app and other plugins fill.
+Nothing to set. It reads `computerWake`, `directory`, `downloads`, `org`, `origins` and `provider`,
+resource kinds the app and other plugins fill.
 
 ## What it requires
 
 The runtime doesn't start without [`chat`](chat.md) and [`spaces`](spaces.md): add them too.
 
-It ships with `copilotz@1.0.0-rc.64`.
+It ships with `copilotz@1.0.0-rc.65`.
 
 ## What it does on its own
 

@@ -18,6 +18,8 @@
 import { type Context, failure } from "../../../../runtime/mod.ts";
 import type { Computer } from "../collections/computer.ts";
 import type { Desk } from "../collections/desk.ts";
+import { servingOrder } from "./serving.ts";
+import { type EngineStatus, type Failed, WORK } from "./workloads.ts";
 
 /** The engines a computer program runs, by its own name for each. */
 export const ENGINES = ["claude", "codex", "antigravity", "grok"] as const;
@@ -31,6 +33,12 @@ export type EngineSeen = {
   account?: string;
   /** When it said so. */
   at: string;
+  /**
+   * When the plan last reached its limit there (a call failed `limit`),
+   * until a call there next succeeds: calls move on meanwhile, and Your AI
+   * says since when.
+   */
+  limited?: string;
 };
 
 /** A failure an engine's call answers with: its `code` tells the model list to move on. */
@@ -52,12 +60,11 @@ export async function sharedWithOthers(ctx: Context, computer: string): Promise<
 }
 
 /**
- * The computer `person`'s calls on `engine` run on: theirs, signed in to it
- * when it last said, and not shared with others' agents; one online first
- * (`wanted`, where their session is, before others), then the most recently
- * seen.
- * With none it fails at once, without asking any computer, so a model list
- * moves on to its next without a wait.
+ * The computer `person`'s calls on `engine` run on: the first in
+ * `servingOrder` (online, then one the app keeps, which wakes, then the
+ * rest) that others' agents don't work on as them. With none it fails at
+ * once, without asking any computer, so a model list moves on to its next
+ * without a wait.
  */
 export async function engineComputer(
   ctx: Context,
@@ -65,20 +72,14 @@ export async function engineComputer(
   engine: EngineName,
   wanted?: string,
 ): Promise<Computer> {
-  const computers = await ctx.as().db.collection<Computer>("computer")
-    .find({ owner: person }, { sort: { seen: -1 } });
-  const signed = computers.filter((c) =>
-    (c.engines as Record<string, EngineSeen> | undefined)?.[engine]?.signedIn
-  );
-  if (!signed.length) {
+  const computers = await ctx.as().db.collection<Computer>("computer").find({ owner: person });
+  const ranked = servingOrder(computers, engine, wanted);
+  if (!ranked.length) {
     throw engineFailure(
       "engine_signed_out",
-      "Your plan isn't signed in on a computer of yours: sign in from Connected accounts.",
+      "Your plan isn't signed in on a computer of yours: connect it from Your AI.",
     );
   }
-  const ranked = signed.sort((a, b) =>
-    Number(b.online) - Number(a.online) || Number(b._id === wanted) - Number(a._id === wanted)
-  );
   for (const computer of ranked) {
     if (!await sharedWithOthers(ctx, computer._id)) return computer;
   }
@@ -125,9 +126,70 @@ export async function shareable(
   );
 }
 
+/** Keeps that `engine`'s plan reached its limit on `computer` now (`at`), or no longer (none). */
+export async function limitOf(ctx: Context, computer: string, engine: EngineName, at?: string) {
+  const field = `engines.${engine}.limited`;
+  await ctx.as().db.collection<Computer>("computer").updateOne(
+    { _id: computer },
+    at ? { $set: { [field]: at } } : { $unset: { [field]: "" } },
+  );
+}
+
 /** Says `computer` isn't signed in to `engine` anymore (its CLI said so), so calls stop going there. */
 export async function signedOut(ctx: Context, computer: string, engine: EngineName) {
   await ctx.as().db.collection<Computer>("computer").updateOne({ _id: computer }, {
     $set: { [`engines.${engine}.signedIn`]: false },
   });
+}
+
+/**
+ * Asks `computer` what its plans' CLIs are now (`computer.agents.status`:
+ * `engines`, or every one), and keeps what it said on it, field by field (a
+ * plan's `limited` stays): what it said, by engine, or undefined when it
+ * didn't answer (it's offline, or its program is older than the work).
+ * Asked after a wake, it's what's true there now, not what was before it
+ * slept.
+ */
+export async function engineStatus(
+  ctx: Context,
+  computer: string,
+  engines?: EngineName[],
+): Promise<Partial<Record<EngineName, EngineSeen>> | undefined> {
+  const said = await ctx.workers.call<EngineStatus[] | Failed>(
+    "computer",
+    computer,
+    WORK.agentsStatus,
+    engines ? { engines } : {},
+  ).catch(() => undefined);
+  if (!Array.isArray(said)) return undefined;
+  const at = new Date().toISOString();
+  const seen: Partial<Record<EngineName, EngineSeen>> = {};
+  const set: Record<string, unknown> = {};
+  const unset: Record<string, ""> = {};
+  for (const status of said) {
+    if (!(ENGINES as readonly string[]).includes(status.engine)) continue;
+    const name = status.engine as EngineName;
+    seen[name] = {
+      installed: status.installed,
+      signedIn: status.signedIn,
+      ...(status.version ? { version: status.version } : {}),
+      ...(status.account ? { account: status.account } : {}),
+      at,
+    };
+    const field = `engines.${name}`;
+    Object.assign(set, {
+      [`${field}.installed`]: status.installed,
+      [`${field}.signedIn`]: status.signedIn,
+      [`${field}.at`]: at,
+    });
+    for (const key of ["version", "account"] as const) {
+      if (status[key]) set[`${field}.${key}`] = status[key];
+      else unset[`${field}.${key}`] = "";
+    }
+  }
+  await ctx.as().db.collection<Computer>("computer").updateOne({ _id: computer }, {
+    $set: set,
+    ...(Object.keys(unset).length ? { $unset: unset } : {}),
+  });
+  return seen;
 }

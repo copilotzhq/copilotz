@@ -27,7 +27,7 @@ Nobody calls it: it has no Actions, tools or routes.
 
 Its Views show on the web.
 
-- **On the web:** `accounts`, `accounts.keys`, `accounts.palette`.
+- **On the web:** `accounts`, `accounts.connect`, `accounts.keys`, `accounts.palette`.
 - **What it adds to resources:** `palette` (`accounts`), `userMenu` (`accounts`).
 
 ## What it needs

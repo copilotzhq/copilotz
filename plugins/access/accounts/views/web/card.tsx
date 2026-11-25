@@ -1,5 +1,5 @@
 /**
- * A provider on Connected accounts: what connecting it allows, how the
+ * A provider on Your AI: what connecting it allows, how the
  * person's account there stands, and what to do: connect it; once
  * connected, who it is (its plan, when it was signed in and renewed) and
  * disconnecting; when it needs them, why, and reconnecting.

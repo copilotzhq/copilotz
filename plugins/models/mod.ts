@@ -60,6 +60,7 @@ import { generateImage } from "./actions/image.ts";
 import { keyableAction, offered } from "./actions/offered.ts";
 import { price } from "./actions/price.ts";
 import { stream } from "./actions/stream.ts";
+import { test } from "./actions/test.ts";
 import { transcribe } from "./actions/transcribe.ts";
 import { hashEmbeddings } from "./adapters/embeddings/hash.ts";
 import { openai as openaiEmbeddings } from "./adapters/embeddings/openai.ts";
@@ -89,6 +90,7 @@ export const models: Plugin = definePlugin({
   actions: {
     "llm.generate": generate,
     "llm.stream": stream,
+    "llm.test": test,
     "embeddings.embed": embed,
     "transcription.transcribe": transcribe,
     "image.generate": generateImage,

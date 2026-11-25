@@ -46,33 +46,34 @@ Its named queries read for callers, as the rules let them:
 
 ## What it lets callers do
 
-Of its 34 Actions, people may call 21; agents may call 14; contacts and someone signed out may call
+Of its 35 Actions, people may call 22; agents may call 14; contacts and someone signed out may call
 none.
 
-| Action                   | Person | Agent | Contact | Anyone | Key | Routine | Maintenance | What it does                                                                        |
-| ------------------------ | ------ | ----- | ------- | ------ | --- | ------- | ----------- | ----------------------------------------------------------------------------------- |
-| `computer.allowOrigin`   | yes    | no    | no      | no     | no  | no      | no          | Lets an agent do a kind of work at a desk when a routine runs, or stops letting it. |
-| `computer.code`          | yes    | no    | no      | no     | no  | no      | no          | A one-time code to connect a computer to a space.                                   |
-| `computer.default`       | yes    | yes   | no      | no     | yes | yes     | no          | Makes a computer the one a space's agents use.                                      |
-| `computer.engine`        | yes    | yes   | no      | no     | yes | yes     | no          | Runs one step of an agent's model call on its person's plan, on their computer.     |
-| `computer.engine.cancel` | yes    | yes   | no      | no     | yes | yes     | no          | Stops what an agent's model call is doing on its person's plan.                     |
-| `computer.engine.login`  | yes    | no    | no      | no     | no  | no      | no          | Signs a plan's CLI in on one of your computers, step by step.                       |
-| `computer.engine.logout` | yes    | no    | no      | no     | no  | no      | no          | Signs a plan's CLI out on one of your computers, by its own sign-out.               |
-| `computer.engines`       | yes    | no    | no      | no     | no  | no      | no          | Your computers, and which plans' CLIs each runs, signed in or not.                  |
-| `computer.forget`        | yes    | yes   | no      | no     | yes | yes     | no          | Forgets one of your computers.                                                      |
-| `computer.move`          | yes    | yes   | no      | no     | yes | yes     | no          | Moves one of your computers to another space.                                       |
-| `computer.preview`       | yes    | yes   | no      | no     | yes | yes     | no          | Makes an address for what a job on a space's computer serves.                       |
-| `computer.previews`      | yes    | yes   | no      | no     | yes | yes     | no          | A space's previews: what its computers serve, at addresses of their own.            |
-| `computer.rename`        | yes    | yes   | no      | no     | yes | yes     | no          | Names one of your computers.                                                        |
-| `computer.share`         | yes    | yes   | no      | no     | yes | yes     | no          | Puts one of your computers in a space, for its members and their agents.            |
-| `computer.unpreview`     | yes    | yes   | no      | no     | yes | yes     | no          | Takes a preview away: its address no longer opens.                                  |
-| `computer.unshare`       | yes    | yes   | no      | no     | yes | yes     | no          | Takes a computer out of a space.                                                    |
-| `computer.upgradeAsks`   | no     | no    | no      | no     | no  | no      | yes         | Keeps computers' old asks and yeses as chat keeps them.                             |
-| `computer.upload`        | yes    | no    | no      | no     | no  | no      | no          | Puts a file on a space's computer, in its folder there: where its bytes go.         |
-| `computer.view`          | yes    | yes   | no      | no     | yes | yes     | no          | Says you have a space's computer open, so it stays awake while you do.              |
-| `computer.work`          | yes    | no    | no      | no     | no  | no      | no          | Works on a space's computer, in its folder there.                                   |
-| `env.set`                | yes    | yes   | no      | no     | yes | yes     | no          | Sets a variable or secret of a space's environment (or an app's own).               |
-| `env.unset`              | yes    | yes   | no      | no     | yes | yes     | no          | Takes a variable or secret away from a space's environment (or an app's own).       |
+| Action                   | Person | Agent | Contact | Anyone | Key | Routine | Maintenance | What it does                                                                                                     |
+| ------------------------ | ------ | ----- | ------- | ------ | --- | ------- | ----------- | ---------------------------------------------------------------------------------------------------------------- |
+| `computer.allowOrigin`   | yes    | no    | no      | no     | no  | no      | no          | Lets an agent do a kind of work at a desk when a routine runs, or stops letting it.                              |
+| `computer.code`          | yes    | no    | no      | no     | no  | no      | no          | A one-time code to connect a computer to a space.                                                                |
+| `computer.default`       | yes    | yes   | no      | no     | yes | yes     | no          | Makes a computer the one a space's agents use.                                                                   |
+| `computer.engine`        | yes    | yes   | no      | no     | yes | yes     | no          | Runs one step of an agent's model call on its person's plan, on their computer.                                  |
+| `computer.engine.cancel` | yes    | yes   | no      | no     | yes | yes     | no          | Stops what an agent's model call is doing on its person's plan.                                                  |
+| `computer.engine.login`  | yes    | no    | no      | no     | no  | no      | no          | Signs a plan's CLI in on one of your computers, step by step.                                                    |
+| `computer.engine.logout` | yes    | no    | no      | no     | no  | no      | no          | Signs a plan's CLI out on one of your computers, by its own sign-out.                                            |
+| `computer.engines`       | yes    | no    | no      | no     | no  | no      | no          | Your computers, and which plans' CLIs each runs, signed in or not.                                               |
+| `computer.forget`        | yes    | yes   | no      | no     | yes | yes     | no          | Forgets one of your computers.                                                                                   |
+| `computer.move`          | yes    | yes   | no      | no     | yes | yes     | no          | Moves one of your computers to another space.                                                                    |
+| `computer.prepare`       | yes    | no    | no      | no     | no  | no      | no          | Gets one of your computers ready for your plans: awake, on this app's program, and what its plans' CLIs are now. |
+| `computer.preview`       | yes    | yes   | no      | no     | yes | yes     | no          | Makes an address for what a job on a space's computer serves.                                                    |
+| `computer.previews`      | yes    | yes   | no      | no     | yes | yes     | no          | A space's previews: what its computers serve, at addresses of their own.                                         |
+| `computer.rename`        | yes    | yes   | no      | no     | yes | yes     | no          | Names one of your computers.                                                                                     |
+| `computer.share`         | yes    | yes   | no      | no     | yes | yes     | no          | Puts one of your computers in a space, for its members and their agents.                                         |
+| `computer.unpreview`     | yes    | yes   | no      | no     | yes | yes     | no          | Takes a preview away: its address no longer opens.                                                               |
+| `computer.unshare`       | yes    | yes   | no      | no     | yes | yes     | no          | Takes a computer out of a space.                                                                                 |
+| `computer.upgradeAsks`   | no     | no    | no      | no     | no  | no      | yes         | Keeps computers' old asks and yeses as chat keeps them.                                                          |
+| `computer.upload`        | yes    | no    | no      | no     | no  | no      | no          | Puts a file on a space's computer, in its folder there: where its bytes go.                                      |
+| `computer.view`          | yes    | yes   | no      | no     | yes | yes     | no          | Says you have a space's computer open, so it stays awake while you do.                                           |
+| `computer.work`          | yes    | no    | no      | no     | no  | no      | no          | Works on a space's computer, in its folder there.                                                                |
+| `env.set`                | yes    | yes   | no      | no     | yes | yes     | no          | Sets a variable or secret of a space's environment (or an app's own).                                            |
+| `env.unset`              | yes    | yes   | no      | no     | yes | yes     | no          | Takes a variable or secret away from a space's environment (or an app's own).                                    |
 
 An agent works for a person, and calls what both may. A key calls only what its scope names. A
 routine is work done for a person, which they set going.

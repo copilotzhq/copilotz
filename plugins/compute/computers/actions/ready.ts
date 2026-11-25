@@ -10,10 +10,9 @@
 import { defineAction } from "../../../../runtime/mod.ts";
 import type { Computer } from "../collections/computer.ts";
 import { type JobWatch, watchTimer } from "../collections/job-watch.ts";
-import { binaryFor, newer, type Offer, UPDATE } from "../program/release.ts";
-import type { Downloads } from "../resources/downloads.ts";
 import { mirror } from "../shared/desks.ts";
 import { failed } from "../shared/failed.ts";
+import { offerUpdate } from "../shared/update.ts";
 import { type Enrolled, type Failed, type Info, WORK } from "../shared/workloads.ts";
 
 export const readyAction = defineAction({
@@ -53,24 +52,8 @@ export const readyAction = defineAction({
         id: watchTimer(watch._id),
       });
     }
-    const release = ctx.resources.downloads as Downloads | undefined;
-    const binary = said && release && newer(release.manifest.version, said.version) &&
-      binaryFor(release.manifest, said);
-    if (binary) {
-      // The URL as the release has it: on the app's origin, the computer resolves it there. A
-      // program too old to update itself doesn't take it.
-      await ctx.workers.call(
-        "computer",
-        input.id,
-        UPDATE,
-        {
-          version: release.manifest.version,
-          url: `${release.base}${binary.file}`,
-          size: binary.size,
-          sha256: binary.sha256,
-        } satisfies Offer,
-      ).catch(() => {});
-    }
+    // Older than the app's release: offered it, it updates itself and comes again as it.
+    if (said) await offerUpdate(ctx, "computer", input.id, said);
     return null;
   },
 });

@@ -10,7 +10,8 @@
  */
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -19,10 +20,13 @@ import {
   defineAction,
   defineCollection,
   definePlugin,
+  type Plugin,
 } from "../../../runtime/mod.ts";
 import { memoryStore } from "../../../stores/memory/mod.ts";
 import { env, host, runtime, serve, tempDir, test } from "../../../testing/mod.ts";
-import { POOL, type PoolAssign } from "../computers/shared/pool.ts";
+import { POOL, POOL_KIND, type PoolAssign } from "../computers/shared/pool.ts";
+import { offerUpdate } from "../computers/shared/update.ts";
+import { VERSION } from "../computers/program/version.ts";
 import { audienceOf, type Pool, type PoolOptions, startPool } from "../computers/program/pool.ts";
 import { connectionOf, loadState } from "../computers/program/state.ts";
 import { alive } from "../computers/program/workloads/processes.ts";
@@ -95,11 +99,11 @@ type App = {
   work<R = unknown>(id: string, workload: string, input: unknown): Promise<R>;
 };
 
-/** Runs `fn` with an app that has both kinds of workers; everything stops after. */
-async function app(fn: (app: App) => Promise<void>) {
+/** Runs `fn` with an app that has both kinds of workers (and `more`); everything stops after. */
+async function app(fn: (app: App) => Promise<void>, more: Plugin[] = []) {
   const rt = await createRuntime({
     store: memoryStore(),
-    plugins: [computers, pools],
+    plugins: [computers, pools, ...more],
     transports: [{ type: "websocket", config: { path: "/oxian" } }],
   });
   const listener = await host(rt.hypervisor);
@@ -509,4 +513,112 @@ test({
       });
       assertEquals(missing.error?.code, "not_found");
     }),
+});
+
+test({
+  name:
+    "a free pool VM takes the app's newer release, updates itself and ends to start again; serving a computer, it doesn't",
+  ignore: POSIX_ONLY,
+  fn: async () => {
+    const next = "#!/bin/sh\necho 99.0.0\n";
+    const sha256 = createHash("sha256").update(next).digest("hex");
+    const program = join(tempDir(), "computer");
+    writeFileSync(program, `#!/bin/sh\necho ${VERSION}\n`, { mode: 0o755 });
+    const files = await serve((request) =>
+      new URL(request.url).pathname === "/release/computer"
+        ? new Response(next)
+        : new Response("Not found", { status: 404 })
+    );
+    // The app's release, as `downloads` says it, and what its pool's `ready` does as a VM comes.
+    const release = definePlugin({
+      name: "release-test",
+      resources: {
+        downloads: {
+          base: `${files.url}/release/`,
+          manifest: {
+            version: "99.0.0",
+            binaries: [{
+              os: process.platform,
+              arch: process.arch,
+              file: "computer",
+              size: next.length,
+              sha256,
+            }],
+          },
+        },
+      },
+      actions: {
+        "pooltest.offer": defineAction({
+          input: { type: "object", properties: { vm: { type: "string" } } },
+          run: (ctx, input) => offerUpdate(ctx, POOL_KIND, input.vm!),
+        }),
+      },
+    });
+    try {
+      await app(async (app) => {
+        // Serving a computer, it isn't updated: that VM goes once it's released.
+        const busy = await app.pool({ vm: "vm-2", token: "local:vm-2.t0ken", program });
+        await busy.ready;
+        assertEquals(await app.assign("vm-2", { computer: "c2", device: tempDir(), code: CODE }), {
+          ok: true,
+        });
+        assertEquals(await app.rt.call("pooltest.offer", { vm: "vm-2" }), false);
+        assertEquals(readFileSync(program, "utf8"), `#!/bin/sh\necho ${VERSION}\n`);
+
+        // Free, it says what it is, takes the release and ends, for its service to start it again.
+        const free = await app.pool({ program });
+        await free.ready;
+        const info = await app.rt.call<{ version: string; serves: string[] }>("pooltest.work", {
+          vm: "vm-1",
+          workload: POOL.info,
+          input: {},
+        });
+        assertEquals(info.version, VERSION);
+        assert(info.serves.includes(POOL.update), "it takes updates");
+        assertEquals(await app.rt.call("pooltest.offer", { vm: "vm-1" }), true);
+        assertEquals(await free.closed, "updated");
+        assertEquals(readFileSync(program, "utf8"), next);
+      }, [release]);
+    } finally {
+      await files.close();
+    }
+  },
+});
+
+test({
+  name: "a pool VM run from source doesn't take updates, and isn't offered one",
+  ignore: POSIX_ONLY,
+  fn: async () => {
+    const release = definePlugin({
+      name: "release-test",
+      resources: {
+        downloads: {
+          base: "https://downloads.test/",
+          manifest: {
+            version: "99.0.0",
+            binaries: [{
+              os: process.platform,
+              arch: process.arch,
+              file: "computer",
+              size: 1,
+              sha256: "a".repeat(64),
+            }],
+          },
+        },
+      },
+      actions: {
+        "pooltest.offer": defineAction({
+          input: { type: "object", properties: { vm: { type: "string" } } },
+          run: (ctx, input) => offerUpdate(ctx, POOL_KIND, input.vm!),
+        }),
+      },
+    });
+    await app(async (app) => {
+      const pool = await app.pool({ program: null });
+      await pool.ready;
+      const started = Date.now();
+      assertEquals(await app.rt.call("pooltest.offer", { vm: "vm-1" }), false);
+      assert(Date.now() - started < 5_000, "not waited for");
+    }, [release]);
+  },
 });

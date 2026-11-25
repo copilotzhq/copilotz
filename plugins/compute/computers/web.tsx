@@ -3,11 +3,13 @@
  * computers: connecting one, adding one of yours, which one agents use, who
  * answers what they ask; then the terminal, jobs and files in the space's
  * folder), on its page and in the panel beside a chat; a computer's own page
- * at `/computer/<id>`, for its owner; the person's plans on their own
- * computers (Claude, ChatGPT through Codex, Google AI through Antigravity:
- * signing each CLI in once, so their agents' model calls run on their plan),
- * a section of Connected accounts (the accounts plugin's `accountSections`),
- * with the palette's commands to sign each in; in chats, what an agent asks to do on
+ * at `/computer/<id>`, for its owner; Your AI's plans and computers (the
+ * accounts plugin's `accountSections`: a card per plan the app uses, the
+ * person's order of them, and the connect flow, which readies a computer,
+ * installs and signs in each plan's CLI, and tests it; then their computers,
+ * a Terminal a click away), with the palette's commands to connect each, and
+ * a step for the app's welcome (`computer.plans.welcome`); a slot for what a
+ * computer costs (`computer.cost`, filled by the app's cost display); in chats, what an agent asks to do on
  * one (the command, what a write will write, an app it would publish: chat's
  * card for it, with its answers, through chat's `askViews`) and their calls
  * to computer tools, shown as commands and output, files and changes, links.
@@ -46,6 +48,9 @@ import { stepView } from "./views/web/step.tsx";
 import { routinePanelView } from "./views/web/routine-panel.tsx";
 import { plansView } from "./views/web/plans.tsx";
 import { plansPaletteView } from "./views/web/plans-palette.ts";
+import { yoursView } from "./views/web/yours.tsx";
+import { plansWelcomeView } from "./views/web/welcome.tsx";
+import { costView } from "./views/web/cost.tsx";
 
 /** The computer tools (resources/tools.ts), by name: the browser loads front-end code only. */
 const TOOLS = [
@@ -76,6 +81,9 @@ export const computersWeb: Plugin = definePlugin({
     "computer.routine": routinePanelView,
     "computer.plans": plansView,
     "computer.plans.palette": plansPaletteView,
+    "computer.plans.welcome": plansWelcomeView,
+    "computer.yours": yoursView,
+    "computer.cost": costView,
     "env.space": envSpaceView,
   },
   resources: {
@@ -102,8 +110,11 @@ export const computersWeb: Plugin = definePlugin({
       computers: { view: "computer.palette", order: 30 },
       plans: { view: "computer.plans.palette", order: 91 },
     },
-    // A person's plans on their own computers, on Connected accounts, below its providers.
-    accountSections: { plans: { view: "computer.plans", order: 10 } },
+    // Your AI: the person's plans (the accounts that pay for models among them), then their computers.
+    accountSections: {
+      plans: { view: "computer.plans", order: 10, plans: true },
+      computers: { view: "computer.yours", order: 20 },
+    },
     // What a routine's agent may do on its own (routines' page).
     routinePanels: { computers: { view: "computer.routine", order: 10 } },
     // Every computer tool's calls show as one View: commands, jobs, files, search, the browser.

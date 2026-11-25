@@ -69,7 +69,7 @@ async function once(ctx: Context, account: AccountDoc, provider: AccountProvider
   const held = await unseal(key, account._id, account.tokens);
   if (!held.refresh) {
     await lose(ctx, account, "needs_reconnect");
-    throw lapsed(`Your ${provider.title} sign-in ran out: reconnect it in Connected accounts`);
+    throw lapsed(`Your ${provider.title} sign-in ran out: reconnect it in Your AI`);
   }
   let answer;
   try {
@@ -87,7 +87,7 @@ async function once(ctx: Context, account: AccountDoc, provider: AccountProvider
     const status = lostAs((error as { oauth?: string }).oauth);
     await lose(ctx, account, status);
     throw lapsed(
-      `Your ${provider.title} account needs signing in again: reconnect it in Connected accounts`,
+      `Your ${provider.title} account needs signing in again: reconnect it in Your AI`,
     );
   }
   const at = Date.now();

@@ -497,7 +497,7 @@ function ShareDialog(
           Otherwise each person answers what their own agents ask. You can change this later, or
           take {name} out of {space.name}, from its menu here.
         </p>
-        {signed ? <SignedInNotice computer={name} plan={signed.plan} /> : null}
+        {signed ? <SignedInNotice computer={name} plan={signed} /> : null}
         {error ? <Notice tone="destructive" role="alert">{error}</Notice> : null}
       </div>
     </Dialog>

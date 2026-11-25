@@ -38,11 +38,11 @@ export const tokenAction = defineAction({
     const _id = accountId(person, input.provider);
     const account = await system.db.collection<AccountDoc>("account").findOne({ _id });
     if (!account) {
-      throw missing(`No ${provider.title} account is connected: connect one in Connected accounts`);
+      throw missing(`No ${provider.title} account is connected: connect one in Your AI`);
     }
     if (account.status !== "connected" || !account.tokens) {
       throw lapsed(
-        `Your ${provider.title} account needs signing in again: reconnect it in Connected accounts`,
+        `Your ${provider.title} account needs signing in again: reconnect it in Your AI`,
       );
     }
     const due = !account.expires || Date.parse(account.expires) - SKEW <= Date.now();

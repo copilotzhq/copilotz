@@ -1,7 +1,8 @@
 /**
- * Connected accounts' sections (`accountSections`): other front ends' Views, shown below the
- * providers in their order (one taken out with `null` isn't), each given the address's query and
- * the page's mode; with no provider to connect, the sections show alone.
+ * Your AI's sections (`accountSections`): other front ends' Views, shown first, in their order
+ * (one taken out with `null` isn't), each given the address's query and the page's mode; then
+ * the providers. One that shows the plans (`plans: true`) takes the providers that pay for
+ * models: the rest are "Other accounts". With no provider to connect, the sections show alone.
  */
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { createElement, type ReactNode } from "react";
@@ -16,6 +17,11 @@ const chatgpt: ProviderShown = {
   title: "ChatGPT",
   allows: "Agents working for you run on your ChatGPT plan.",
   models: ["chatgpt"],
+};
+const github: ProviderShown = {
+  name: "github",
+  title: "GitHub",
+  allows: "Agents working for you read and push to your repositories.",
 };
 
 function ctxOf(providers: ProviderShown[], sections: unknown, query: Record<string, string>) {
@@ -47,22 +53,36 @@ const SECTIONS = {
   gone: null,
 };
 
-test("other front ends' sections show below the providers, in order, with the address's query", () => {
-  const { ctx, shown } = ctxOf([chatgpt], SECTIONS, { signin: "claude" });
+test("other front ends' sections show first, in order, with the address's query; then the providers", () => {
+  const { ctx, shown } = ctxOf([chatgpt], SECTIONS, { connect: "claude-plan" });
   const markup = renderToStaticMarkup(<>{accountsView(undefined, ctx)}</>);
   assertEquals(shown.map((s) => s.name), ["other.first", "computer.plans", "accounts.keys"]);
   assertEquals(shown[1], {
     name: "computer.plans",
     item: {},
-    hints: { query: { signin: "claude" }, mode: "full" },
+    hints: { query: { connect: "claude-plan" }, mode: "full" },
   });
-  // Below the providers' cards.
-  const card = markup.indexOf("Connect ChatGPT");
   const first = markup.indexOf('data-view="other.first"');
   const plans = markup.indexOf('data-view="computer.plans"');
-  assert(card >= 0 && card < first && first < plans, "the providers, then each section in order");
+  const card = markup.indexOf("Connect ChatGPT");
+  assert(first >= 0 && first < plans && plans < card, "each section in order, then the providers");
+  assertStringIncludes(markup, "Your AI");
   assertEquals(sectionsOf(SECTIONS).map((s) => s.key), ["early", "plans"]);
   assertEquals(sectionsOf(undefined), []);
+});
+
+test("a section that shows the plans takes the providers that pay for models; the rest are Other accounts", () => {
+  const { ctx } = ctxOf([chatgpt, github], {
+    plans: { view: "computer.plans", order: 10, plans: true },
+  }, {});
+  const markup = renderToStaticMarkup(<>{accountsView(undefined, ctx)}</>);
+  assert(!markup.includes("Connect ChatGPT"), "ChatGPT is one of the plans");
+  assertStringIncludes(markup, "Other accounts");
+  assertStringIncludes(markup, "Connect GitHub");
+  assert(
+    markup.indexOf('data-view="computer.plans"') < markup.indexOf("Other accounts"),
+    "the plans first",
+  );
 });
 
 test("with no provider to connect, the sections show alone", () => {

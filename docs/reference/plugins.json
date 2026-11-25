@@ -707,6 +707,10 @@
           "place": "web"
         },
         {
+          "name": "accounts.connect",
+          "place": "web"
+        },
+        {
           "name": "accounts.keys",
           "place": "web"
         },
@@ -6152,6 +6156,34 @@
           "helper": "people"
         },
         {
+          "name": "computer.prepare",
+          "summary": "Gets one of your computers ready for your plans: awake, on this app's program, and what its plans' CLIs are now",
+          "input": {
+            "type": "object",
+            "properties": {
+              "computer": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "computer"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
           "name": "computer.preview",
           "summary": "Makes an address for what a job on a space's computer serves",
           "input": {
@@ -7546,6 +7578,10 @@
           "place": "web"
         },
         {
+          "name": "computer.cost",
+          "place": "web"
+        },
+        {
           "name": "computer.palette",
           "place": "web"
         },
@@ -7558,6 +7594,10 @@
           "place": "web"
         },
         {
+          "name": "computer.plans.welcome",
+          "place": "web"
+        },
+        {
           "name": "computer.routine",
           "place": "web"
         },
@@ -7567,6 +7607,10 @@
         },
         {
           "name": "computer.step",
+          "place": "web"
+        },
+        {
+          "name": "computer.yours",
           "place": "web"
         },
         {
@@ -7585,6 +7629,9 @@
       "resources": {
         "provides": {
           "accountSections": {
+            "computers": {
+              "view": "computer.yours"
+            },
             "plans": {
               "view": "computer.plans"
             }
@@ -7660,6 +7707,18 @@
           },
           {
             "kind": "jobActions",
+            "found": [
+              "source"
+            ]
+          },
+          {
+            "kind": "planList",
+            "found": [
+              "source"
+            ]
+          },
+          {
+            "kind": "userMenu",
             "found": [
               "source"
             ]
@@ -15106,6 +15165,35 @@
           "recorded": false,
           "private": [],
           "internal": true
+        },
+        {
+          "name": "llm.test",
+          "summary": "Tries one model your own plan pays for with a short question, to show it answers",
+          "input": {
+            "type": "object",
+            "properties": {
+              "model": {
+                "type": "string",
+                "pattern": "^[^/]+/.+"
+              }
+            },
+            "required": [
+              "model"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": false,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
         },
         {
           "name": "models.check",

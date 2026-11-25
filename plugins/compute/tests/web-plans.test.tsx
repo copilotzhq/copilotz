@@ -1,12 +1,12 @@
 /**
- * A person's plans on their own computers, on the web: the section of Connected accounts
- * (drawn as the server would, through React's own renderer) with no computer yet, and with
- * computers in each state (signed in as whom, installed, its CLI missing, offline, not checked,
- * shared with others' agents); the sign-in dialog's choice of computer and what that one still
- * needs; a missing CLI installed by Sign in (macOS and Linux; Windows keeps the instructions),
- * and an installer that fails; signing out, and why a computer signed in to a plan isn't shared
- * with others' agents; how a sign-in is asked again until it's done; what a CLI says, as it's
- * shown; the palette's commands; and words: nothing English left once the app gives its own.
+ * A person's plans on the web: Your plans (drawn as the server would, through React's own
+ * renderer), every plan the app has or those its tiers list, grouped and in the person's order;
+ * a plan's card in each state, in English and Portuguese; the connect flow in a page, the
+ * founder's test end to end (an asleep cloud computer on an old program, its CLI missing: no
+ * command shown), an installer that fails (its command only then, with its output and the
+ * terminal), and where the plans run when there's no computer; Your computers; the welcome's
+ * step; how a sign-in is asked again until it's done; what a CLI says, as it's shown; the
+ * palette; and words: nothing English left once the app gives its own.
  */
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { act, type ReactNode } from "react";
@@ -16,36 +16,44 @@ import type { PaletteGroup } from "../../../hosts/web/mod.ts";
 import { setWords } from "../../../hosts/web/words.ts";
 import { englishLeft, pseudoWords } from "../../../testing/words.ts";
 import { page } from "../../../hosts/web/tests/page.ts";
+import type { Account, ProviderShown } from "../../access/accounts/contract.ts";
 import type { Computer } from "../computers/collections/computer.ts";
 import type { Desk } from "../computers/collections/desk.ts";
+import type { Prepared } from "../computers/actions/prepare.ts";
+import { INSTALL } from "../computers/shared/install.ts";
 import { plansView } from "../computers/views/web/plans.tsx";
+import { yoursView } from "../computers/views/web/yours.tsx";
+import { plansWelcomeView } from "../computers/views/web/welcome.tsx";
 import { plansPaletteView } from "../computers/views/web/plans-palette.ts";
-import { SignInDialog } from "../computers/views/web/plan-sign-in.tsx";
+import { ConnectFlow } from "../computers/views/web/connect-flow.tsx";
+import { sentence } from "../computers/views/web/plan-card.tsx";
 import { SignedInNotice } from "../computers/views/web/plan-shared.tsx";
 import { ShareWarning } from "../computers/views/web/desks.tsx";
 import { computers as computersPtBR } from "../../../hosts/web/pt-br/computers.ts";
 import {
   asksForCode,
-  installable,
+  cardOf,
   type LoginEvent,
   type LoginStep,
   type Machine,
   plainOutput,
-  planOf,
-  ranked,
+  type PlanShown,
+  plansOf,
   safeLink,
-  sharedIn,
   shownCode,
   signedPlan,
   signingIn,
-  standingOf,
-  straightTo,
 } from "../computers/views/web/plan-states.ts";
+import { visitorSystem } from "../computers/views/web/platform.ts";
 import { computersWeb } from "../computers/web.tsx";
 import { test } from "../../../testing/mod.ts";
 
-/** A View's context over fixed reads, by `<collection>.<query>` (and a desk's by its computer). */
-function ctxOf(reads: Record<string, unknown>, query: Record<string, string> = {}) {
+/** A View's context over fixed reads, by `<collection>.<query>` (a desk's by its computer). */
+function ctxOf(
+  reads: Record<string, unknown>,
+  query: Record<string, string> = {},
+  resources: Record<string, unknown> = {},
+) {
   return {
     db: {
       collection: (name: string) => ({
@@ -54,9 +62,11 @@ function ctxOf(reads: Record<string, unknown>, query: Record<string, string> = {
           value:
             reads[params?.computer ? `${name}.${named}.${params.computer}` : `${name}.${named}`],
         }),
+        find: () => ({ status: "ready", value: reads[`${name}.find`] }),
       }),
     },
-    resources: {},
+    // The accounts' front end is there: it links Your AI.
+    resources: { userMenu: { accounts: { href: "/accounts" } }, ...resources },
     name: "test",
     viewer: { name: "ana" },
     hints: { query, mode: "full" },
@@ -80,33 +90,35 @@ const computerOf = (over: Partial<Computer> & { _id: string }): Computer => ({
   seen: AT,
   ...over,
 });
+const signed = (account?: string) => ({
+  installed: true,
+  signedIn: true,
+  at: AT,
+  ...(account ? { account } : {}),
+});
 
 const mac = computerOf({
   _id: "mac",
-  name: "MacBook Pro",
+  name: "MacBook",
+  info: { os: "darwin" },
   engines: {
-    claude: {
-      installed: true,
-      signedIn: true,
-      version: "2.0.31",
-      account: "ana@example.com",
-      at: AT,
-    },
-    codex: { installed: true, signedIn: false, version: "0.58.0", at: AT },
-    antigravity: { installed: false, signedIn: false, at: AT },
+    claude: signed("ana@example.com"),
+    codex: { installed: true, signedIn: false, at: AT },
   },
 });
-const thinkpad = computerOf({
-  _id: "pad",
-  name: "Old ThinkPad",
+const cloud = computerOf({
+  _id: "cloud",
+  name: "Cloud computer",
   online: false,
   seen: "2026-11-18T10:00:00.000Z",
-  engines: { claude: { installed: true, signedIn: false, at: AT } },
+  status: { kind: "cloud", state: "asleep" },
+  info: { os: "linux" },
+  engines: { claude: signed() },
 });
 const studio = computerOf({
   _id: "studio",
-  name: "studio-linux",
-  engines: { claude: { installed: true, signedIn: false, at: AT } },
+  name: "Studio PC",
+  engines: { antigravity: signed() },
 });
 const deskOf = (computer: string, space: string, answers: "asker" | "owner" = "asker"): Desk => ({
   _id: `${computer}-${space}`,
@@ -122,307 +134,451 @@ const SPACES = [
   { _id: "p", name: "Ana", kind: "personal", can: ["read", "write", "manage"] },
   { _id: "acme", name: "Acme", kind: "shared", can: ["read", "write", "manage"] },
 ];
+const CHATGPT: ProviderShown = {
+  name: "chatgpt",
+  title: "ChatGPT",
+  allows: "Agents working for you run on your ChatGPT plan instead of the app's API key.",
+  paste: "http://localhost:1455/auth/callback",
+  models: ["chatgpt"],
+};
+const plus: Account = {
+  _id: "ana:chatgpt",
+  person: "ana",
+  provider: "chatgpt",
+  status: "connected",
+  label: "ana@example.com",
+  plan: "Plus",
+  connected: AT,
+};
 const READS = {
-  "computer.mine": [mac, thinkpad, studio],
+  "computer.mine": [mac, cloud, studio],
   "space.reached": SPACES,
   "desk.of.mac": [deskOf("mac", "p")],
-  "desk.of.pad": [deskOf("pad", "p")],
+  "desk.of.cloud": [deskOf("cloud", "p")],
   "desk.of.studio": [deskOf("studio", "p"), deskOf("studio", "acme")],
+  "account.providers": [CHATGPT],
+  "account.find": [],
+};
+/** As the app's tiers list the plans it uses, in the person's order (`planList`). */
+const LISTED = [
+  {
+    name: "claude-plan",
+    title: "Claude plan",
+    plan: "Claude plan",
+    model: "claude-plan/claude-haiku-5-5",
+    connected: true,
+  },
+  {
+    name: "chatgpt",
+    title: "ChatGPT",
+    plan: "ChatGPT plan",
+    model: "chatgpt/gpt-6-luna",
+    connected: false,
+  },
+  {
+    name: "codex-plan",
+    title: "ChatGPT plan, through Codex",
+    plan: "ChatGPT plan",
+    connected: false,
+  },
+  { name: "cursor-plan", title: "Cursor plan", plan: "Cursor plan", connected: false },
+];
+const TIERS = { planList: { query: "modelChoice.harnesses", order: "tiers.harnesses" } };
+/** The app keeps cloud computers: the one here wakes. */
+const CLOUD = {
+  computerKinds: {
+    cloud: {
+      title: "Cloud computer",
+      icon: "server",
+      mine: "cloudComputer.mine",
+      view: "cloud.computer",
+    },
+  },
 };
 
 const machine = (computer: Computer, shared: Machine["shared"] = []): Machine => ({
   computer,
   name: computer.name ?? computer._id,
   shared,
+  ...(computer.status ? { kind: { view: "cloud.computer", icon: "server" } } : {}),
 });
 
-test("no computer yet: what plans need, every plan named, and connecting one first", () => {
-  const markup = draw(plansView({}, ctxOf({ "computer.mine": [], "space.reached": SPACES })));
-  const shown = text(markup);
-  assertStringIncludes(shown, "Plans on your computers");
-  assertStringIncludes(shown, "instead of an API key");
-  assertStringIncludes(shown, "Connect a computer of yours first");
+test("without tiers: every plan the app has, each on its own card, not connected, each to Connect", () => {
+  const shown = text(draw(plansView({}, ctxOf({ ...READS, "computer.mine": [] }))));
+  assertStringIncludes(shown, "Your plans");
   for (
-    const title of [
+    const plan of [
+      "ChatGPT",
       "Claude plan",
       "ChatGPT plan, through Codex",
       "Google AI plan, through Antigravity",
+      "Grok plan",
     ]
   ) {
-    assertStringIncludes(shown, title);
+    assertStringIncludes(shown, `${plan} Not connected: your agents use the app's models. Connect`);
   }
-  assertStringIncludes(shown, "Connect a computer");
-  assertStringIncludes(shown, "this app never sees it");
-  assert(!/>Sign in</.test(markup), "nothing to sign in on yet");
+  assertStringIncludes(shown, "Your plan pays for the AI.");
+  assertStringIncludes(shown, "Connect your plans");
+  // Loading, nothing yet.
+  assertStringIncludes(draw(plansView({}, ctxOf({}))), 'aria-busy="true"');
 });
 
-test("a card per plan, each computer as it stands: signed in as whom, installed, missing, offline, shared", () => {
-  const markup = draw(plansView({}, ctxOf(READS)));
-  const shown = text(markup);
-  // Claude: signed in on the Mac, as whom, with its version; the ThinkPad offline.
-  assertStringIncludes(shown, "Signed in as ana@example.com");
-  assertStringIncludes(shown, "version 2.0.31");
-  assertStringIncludes(shown, "Installed, not signed in");
-  assertStringIncludes(shown, "Offline");
-  // Codex: installed on the Mac, not signed in: the card's Sign in goes straight there.
-  assertStringIncludes(shown, "ChatGPT plan, through Codex");
-  // Antigravity: missing on the Mac, Sign in installs it (rc.64 showed how to, by hand).
-  assertStringIncludes(shown, "Antigravity isn't installed");
-  assertStringIncludes(shown, "Install Antigravity and sign in");
-  // Shared into Acme: said once, over the cards, with how to change it; not a line of each card.
-  assertStringIncludes(shown, "studio-linux is shared with others' agents in Acme");
-  assertStringIncludes(shown, "How to use it");
-  assertEquals(shown.split("studio-linux").length - 1, 1);
-  // Grok Build: not on any of them yet.
-  assertStringIncludes(shown, "Grok plan");
-  assertStringIncludes(shown, "Grok Build");
-  // Signed in once, Claude says so; the others offer Sign in.
-  assertEquals((markup.match(/copilotz-badge/g) ?? []).length >= 1, true);
-  assertEquals((shown.match(/Sign in(?! again| on| as)/g) ?? []).length, 3);
-  assertStringIncludes(shown, "Check again");
-  assertStringIncludes(shown, "Connect a computer");
-});
-
-test("loading, it says nothing yet", () => {
-  const ctx = ctxOf({});
-  const markup = draw(plansView({}, ctx));
-  assertStringIncludes(markup, 'aria-busy="true"');
-  assert(!text(markup).includes("Sign in"));
-});
-
-test("how a computer stands for a plan, and where a sign-in goes first", () => {
-  const all = [machine(mac), machine(thinkpad), machine(studio, [{ _id: "acme", name: "Acme" }])];
-  assertEquals(standingOf(all[0], "claude"), {
-    state: "signedIn",
-    account: "ana@example.com",
-    version: "2.0.31",
-    at: AT,
-  });
-  assertEquals(standingOf(all[0], "codex").state, "installed");
-  assertEquals(standingOf(all[0], "antigravity").state, "missing");
-  assertEquals(standingOf(all[1], "codex").state, "unchecked");
-  assertEquals(standingOf(all[2], "claude").state, "shared");
-  // On, its CLI there and not signed in, first; shared last.
-  assertEquals(ranked(all, "codex").map((m) => m.computer._id), ["mac", "pad", "studio"]);
-  // The only computer a sign-in can start on goes straight; none, or a choice, opens the dialog.
-  assertEquals(straightTo(all, "codex")?.computer._id, "mac");
-  assertEquals(straightTo(all, "antigravity"), undefined);
-  assertEquals(straightTo([...all, machine({ ...mac, _id: "mac2" })], "codex"), undefined);
-  // A cloud computer asleep can start (it wakes); an own one offline can't.
-  const asleep = { ...machine({ ...thinkpad, _id: "cloud" }), kind: { view: "cloud.state" } };
-  assertEquals(straightTo([machine(thinkpad), asleep], "claude")?.computer._id, "cloud");
-  // Shared where others' agents answer to themselves; a Personal space, or asking the owner, isn't.
-  assertEquals(sharedIn([deskOf("s", "p"), deskOf("s", "acme")], SPACES), [
-    { _id: "acme", name: "Acme" },
+test("with tiers: the plans they list, ways of a plan as one card, in the person's order; the order to change", () => {
+  const plans = plansOf(LISTED, [CHATGPT]);
+  // Cursor's way in isn't one this front end connects: left out.
+  assertEquals(plans.map((p) => [p.plan, p.ways.map((w) => w.provider)]), [
+    ["Claude plan", ["claude-plan"]],
+    ["ChatGPT plan", ["chatgpt", "codex-plan"]],
   ]);
-  assertEquals(sharedIn([deskOf("s", "acme", "owner")], SPACES), []);
-  assertEquals(planOf("codex")?.install, "npm i -g @openai/codex");
-  assertEquals(planOf("nope"), undefined);
-});
-
-test("the sign-in dialog: which computer, and what the one chosen still needs", () => {
-  const all = [machine(mac), machine(thinkpad), machine(studio, [{ _id: "acme", name: "Acme" }])];
-  const dialog = (engine: "claude" | "antigravity") =>
-    draw(
-      <SignInDialog
-        plan={planOf(engine)!}
-        machines={all}
-        open
-        onClose={() => {}}
-        check={() => Promise.resolve()}
-        call={() => Promise.resolve({} as never)}
-      />,
-    );
-  const missing = text(dialog("antigravity"));
-  assertStringIncludes(missing, "Sign in to your Google AI plan");
-  assertStringIncludes(missing, "On which computer?");
-  assertStringIncludes(missing, "Antigravity isn't installed on MacBook Pro yet");
-  assertStringIncludes(missing, "curl -fsSL https://antigravity.google/cli/install.sh | bash");
-  assertStringIncludes(missing, "your own use of Antigravity on that computer stays as it is");
-  // The shared one is there, and can't be chosen.
-  const markup = dialog("claude");
-  assertStringIncludes(
-    text(markup),
-    "Your plan runs on your own computer. This shared one runs your agents' tools.",
-  );
-  assertEquals((markup.match(/disabled=""/g) ?? []).length >= 1, true);
-  assertStringIncludes(text(markup), "Signed in as ana@example.com");
-});
-
-const box = computerOf({
-  _id: "box",
-  name: "Cloud box",
-  info: { os: "linux" },
-  engines: { antigravity: { installed: false, signedIn: false, at: AT } },
-});
-const pc = computerOf({
-  _id: "pc",
-  name: "Desk PC",
-  info: { os: "win32" },
-  engines: { antigravity: { installed: false, signedIn: false, at: AT } },
-});
-const signInto = (m: Machine, call = () => Promise.resolve({} as never)) => (
-  <SignInDialog
-    plan={planOf("antigravity")!}
-    machines={[m]}
-    open
-    onClose={() => {}}
-    check={() => Promise.resolve()}
-    call={call}
-  />
-);
-
-test("a missing CLI: Sign in installs it first, saying what it runs; Windows keeps the instructions", () => {
-  assertEquals(installable(machine(box), "antigravity"), true);
-  assertEquals(installable(machine(pc), "antigravity"), false);
-  assertEquals(installable(machine(mac), "codex"), false);
-  assertEquals(installable(machine({ ...box, online: false }), "antigravity"), false);
-  // A cloud computer asleep wakes for it.
-  const asleep = { ...machine({ ...box, online: false }), kind: { view: "cloud.state" } };
-  assertEquals(installable(asleep, "antigravity"), true);
-
-  const posix = text(draw(signInto(machine(box))));
-  assertStringIncludes(
-    posix,
-    "Antigravity isn't installed on Cloud box yet. Signing in runs Antigravity's official installer there first:",
-  );
-  assertStringIncludes(posix, "$ curl -fsSL https://antigravity.google/cli/install.sh | bash");
-  assertStringIncludes(posix, "Cancel Install Antigravity and sign in");
-  const windows = text(draw(signInto(machine(pc))));
-  assertStringIncludes(
-    windows,
-    "Antigravity isn't installed on Desk PC yet. In a terminal there, run:",
-  );
-  assert(!windows.includes("Install Antigravity"), windows);
-
-  // The card's rows: the same.
-  const card = text(draw(plansView(
+  assertEquals(plans[1].ways[0], {
+    provider: "chatgpt",
+    title: "ChatGPT",
+    plan: "ChatGPT plan",
+    account: "chatgpt",
+    model: "chatgpt/gpt-6-luna",
+    connected: false,
+  });
+  const shown = text(draw(plansView(
     {},
-    ctxOf({
-      "computer.mine": [box, pc],
-      "space.reached": SPACES,
-      "desk.of.box": [],
-      "desk.of.pc": [],
-    }),
+    ctxOf(
+      {
+        ...READS,
+        "modelChoice.harnesses": LISTED,
+        "account.find": [plus],
+        "cloudComputer.mine": [{ _id: "cloud" }],
+      },
+      {},
+      { ...TIERS, ...CLOUD },
+    ),
   )));
   assertStringIncludes(
-    card,
-    "Cloud box Antigravity isn't installed Install Antigravity and sign in",
+    shown,
+    "Claude plan Connected Running on MacBook (online), with Cloud computer ready as backup.",
   );
-  assertStringIncludes(card, "Desk PC Antigravity isn't installed How to install");
+  assertStringIncludes(
+    shown,
+    "ChatGPT plan Connected Connected as ana@example.com (Plus), on the server: always ready.",
+  );
+  assertStringIncludes(
+    shown,
+    "Use my plans in this order When a model runs on more than one of your plans, your agents " +
+      "try them in this order. 1 Claude plan",
+  );
+  assertStringIncludes(shown, "2 ChatGPT · not connected");
+  assertStringIncludes(shown, "3 ChatGPT plan, through Codex · not connected");
 });
 
-test("an installer that fails: what it said last, and how to install it by hand", () =>
-  page(async (render) => {
-    const asked: unknown[] = [];
-    const answers: LoginStep[] = [
-      { state: "running", output: "Downloading Antigravity…\n", signedIn: false },
-      { state: "done", output: "curl: (6) Could not resolve host\n", signedIn: false },
-    ];
-    const call = <R,>(_action: string, input?: unknown) => {
-      asked.push(input);
-      return Promise.resolve(answers.shift() as R);
-    };
-    await render(signInto(machine(box), call as never));
-    const button = [...document.querySelectorAll("button")]
-      .find((b) => b.textContent === "Install Antigravity and sign in")!;
-    await act(async () => button.click());
-    for (let i = 0; i < 100 && answers.length; i++) {
-      await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
-    }
-    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
-    assertEquals(asked[0], { computer: "box", engine: "antigravity", install: true });
-    const shown = document.body.textContent!;
-    assertStringIncludes(shown, "Antigravity didn't install on Cloud box");
-    assertStringIncludes(shown, "Could not resolve host");
-    assertStringIncludes(shown, "In a terminal there, run:");
-    assertStringIncludes(shown, "curl -fsSL https://antigravity.google/cli/install.sh | bash");
-  }));
-
-test("asked to install, a sign-in's first call says so, and only the first", async () => {
-  const asked: unknown[] = [];
-  const answers: LoginStep[] = [
-    { state: "running", output: "Installing…\n", signedIn: false },
-    { state: "done", output: "", signedIn: true },
-  ];
-  await new Promise<void>((done) => {
-    signingIn({
-      computer: "box",
-      engine: "antigravity",
-      install: true,
-      every: 5,
-      call: <R,>(_action: string, input?: unknown) => {
-        asked.push(input);
-        return Promise.resolve(answers.shift() as R);
-      },
-      on: (event) => ("error" in event || event.step.state === "done") && done(),
-    });
+test("a plan's card, in each state, in English and Portuguese", () => {
+  const [claude, chatgpt] = plansOf(LISTED, [CHATGPT]);
+  const google: PlanShown = plansOf(undefined, [])[2];
+  const cards = (machines: Machine[], accounts: Account[] = []) => ({
+    claude: sentence(cardOf(claude, machines, accounts)),
+    chatgpt: sentence(cardOf(chatgpt, machines, accounts)),
   });
-  assertEquals(asked, [
-    { computer: "box", engine: "antigravity", install: true },
-    { computer: "box", engine: "antigravity" },
+  const ready = cardOf(claude, [machine(mac), machine(cloud)], []);
+  assertEquals(ready.state === "ready" && [ready.on?.name, ready.backup?.name], [
+    "MacBook",
+    "Cloud computer",
   ]);
-});
-
-test("signed in, a computer signs out from its menu; a cloud one isn't shared with others' agents until it does, and sharing one's own says what it means: in English and Portuguese", () => {
-  assertEquals(signedPlan(mac)?.engine, "claude");
-  assertEquals(signedPlan(studio), undefined);
-  // The card: the Mac's Claude line signs out from its menu.
-  assertStringIncludes(text(draw(plansView({}, ctxOf(READS)))), "Sign in again Sign out");
-  const notice = () => draw(<SignedInNotice computer="MacBook Pro" plan={signedPlan(mac)!.plan} />);
-  assertStringIncludes(
-    text(notice()),
-    "MacBook Pro is signed in to your Claude plan. Sign out of it first: a computer shared with " +
-      "others can't keep plan sign-ins. Plans on your computers",
-  );
-  assertStringIncludes(notice(), 'href="/accounts"');
-  const acme = SPACES[1] as Parameters<typeof ShareWarning>[0]["space"];
-  const own = () => text(draw(<ShareWarning space={acme} name="MacBook Pro" />));
-  assertStringIncludes(
-    own(),
-    "Agents in Acme run on MacBook Pro as you: they can read everything you can on it, including " +
-      "your own sign-ins (Claude Code, Codex, SSH keys). Share it only with people you trust.",
-  );
-  // A cloud computer's says what it said.
-  assertStringIncludes(
-    text(draw(<ShareWarning space={acme} name="Cloud box" kept />)),
-    "It all runs as you: share it with people you trust.",
-  );
+  const laptopOff = machine({ ...mac, online: false });
+  const cases = () => ({
+    backup: cards([machine(mac), machine(cloud)]).claude,
+    asleep: cards([machine(cloud)]).claude,
+    away: cards([laptopOff]).claude,
+    server: cards([], [plus]).chatgpt,
+    reconnect: cards([], [{ ...plus, status: "needs_reconnect" }]).chatgpt,
+    shared: sentence(cardOf(google, [machine(studio, [{ _id: "acme", name: "Acme" }])], [])),
+    off: cards([]).claude,
+  });
+  assertEquals(cases(), {
+    backup: "Running on MacBook (online), with Cloud computer ready as backup.",
+    asleep: "Running on Cloud computer (asleep: it wakes when your agents need it).",
+    away: "Signed in on MacBook, which is off. Your agents use the app's models until it's on.",
+    server: "Connected as ana@example.com (Plus), on the server: always ready.",
+    reconnect: "ChatGPT needs you to sign in again.",
+    shared:
+      "Signed in only on Studio PC, shared with others' agents, so your plan can't run there.",
+    off: "Not connected: your agents use the app's models.",
+  });
+  // At its limit there: since when.
+  const limited = cardOf(claude, [
+    machine({ ...mac, engines: { claude: { ...signed(), limited: "2026-11-19T14:20:00.000Z" } } }),
+  ], []);
+  assertEquals(limited.state === "ready" && limited.limited, "2026-11-19T14:20:00.000Z");
   const restore = setWords(computersPtBR);
   try {
-    assertStringIncludes(
-      text(notice()),
-      "MacBook Pro está conectado ao seu plano do Claude. Saia dele primeiro: um computador " +
-        "compartilhado com outros não pode manter logins de planos.",
-    );
-    const all = [machine(mac), machine(studio, [{ _id: "acme", name: "Acme" }])];
-    const shown = text(draw(
-      <SignInDialog
-        plan={planOf("claude")!}
-        machines={all}
-        open
-        onClose={() => {}}
-        check={() => Promise.resolve()}
-        call={() => Promise.resolve({} as never)}
-      />,
-    ));
-    assertStringIncludes(
-      shown,
-      "Seu plano roda no seu próprio computador. Este, compartilhado, roda as ferramentas dos seus agentes.",
-    );
-    assertStringIncludes(text(draw(plansView({}, ctxOf(READS)))), "Entrar de novo Sair");
-    assertStringIncludes(
-      own(),
-      "Os agentes de Acme rodam em MacBook Pro como você: eles podem ler tudo o que você pode lá, " +
-        "inclusive seus próprios logins (Claude Code, Codex, chaves SSH). Compartilhe só com " +
-        "pessoas de confiança.",
-    );
+    assertEquals(cases(), {
+      backup: "Rodando no MacBook (ligado), com o Cloud computer pronto como reserva.",
+      asleep: "Rodando no Cloud computer (dormindo: acorda quando seus agentes precisam).",
+      away:
+        "Conectado no MacBook, que está desligado. Seus agentes usam os modelos do app até ele ligar.",
+      server: "Conectado como ana@example.com (Plus), no servidor: sempre pronto.",
+      reconnect: "O ChatGPT precisa que você entre de novo.",
+      shared:
+        "Conectado só em Studio PC, compartilhado com agentes de outras pessoas, então seu plano não roda lá.",
+      off: "Não conectado: seus agentes usam os modelos do app.",
+    });
   } finally {
     restore();
   }
 });
 
-test("a sign-in is asked again until it's done, one call at a time; a code goes with the next", async () => {
+/** Lets what's under way go on: calls answered, effects run. */
+const settle = (ms = 20) => act(() => new Promise((resolve) => setTimeout(resolve, ms)));
+/**
+ * Types into a field. React here loaded before the page's DOM, so it hears a change as an old
+ * browser says it: the field focused, its value set, a key let go.
+ */
+function typeInto(element: HTMLInputElement, value: string) {
+  return act(() => {
+    element.focus();
+    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value")!.set!.call(
+      element,
+      value,
+    );
+    // The page's own events (happy-dom's window), not the runtime's.
+    // deno-lint-ignore no-window no-window-prefix
+    element.dispatchEvent(new window.Event("input", { bubbles: true }));
+    // deno-lint-ignore no-window
+    element.dispatchEvent(new window.KeyboardEvent("keyup", { bubbles: true }));
+  });
+}
+
+test("the founder's test, in a page: an asleep cloud computer, an old program, its CLI missing; it ends connected, and no command is ever shown", () =>
+  page(async (render) => {
+    const asked: [string, unknown][] = [];
+    const logins: LoginStep[] = [
+      { state: "running", output: "Installing Claude Code…\n", signedIn: false },
+      {
+        state: "running",
+        output: "Paste code here if prompted > ",
+        signedIn: false,
+        url: "https://claude.ai/oauth/authorize?code=true",
+      },
+    ];
+    const call = <R,>(action: string, input?: unknown): Promise<R> => {
+      asked.push([action, input]);
+      if (action === "computer.prepare") {
+        // Woken, restarted on the release (computer.prepare's own), and asked: Claude Code missing.
+        return Promise.resolve(
+          {
+            computer: "cloud",
+            online: true,
+            shared: false,
+            engines: { claude: { installed: false, signedIn: false, at: AT } },
+            program: { version: "1.0.0-rc.66", current: true },
+          } satisfies Prepared as R,
+        );
+      }
+      if (action === "computer.engine.login") {
+        if ((input as { input?: string }).input) {
+          return Promise.resolve(
+            { state: "done", output: "Signed in.\n", signedIn: true, installed: true } as R,
+          );
+        }
+        return Promise.resolve(
+          (logins.shift() ?? {
+            state: "running",
+            output: "",
+            signedIn: false,
+            url: "https://claude.ai/oauth/authorize?code=true",
+          }) as R,
+        );
+      }
+      if (action === "llm.test") return Promise.resolve({ text: "Ready.", ms: 900 } as R);
+      return Promise.reject(new Error(`not here: ${action}`));
+    };
+    const asleep = machine({ ...cloud, engines: {} });
+    const seen: string[] = [];
+    const look = () => seen.push(document.body.textContent ?? "");
+    await render(
+      <ConnectFlow
+        plans={plansOf(LISTED, [CHATGPT])}
+        picked={["claude-plan"]}
+        machines={[asleep]}
+        computers={[asleep.computer]}
+        accounts={[]}
+        kinds={[]}
+        onClose={() => {}}
+        call={call as never}
+      />,
+    );
+    look();
+    // Readied, then signing in: installing first, then the sign-in page, here.
+    for (let i = 0; i < 80 && !document.querySelector("input[autocomplete=one-time-code]"); i++) {
+      await settle(50);
+      look();
+    }
+    const field = document.querySelector<HTMLInputElement>("input[autocomplete=one-time-code]");
+    assert(field, "a field for the code its page gives");
+    assertStringIncludes(document.body.textContent!, "Open the sign-in page");
+    await typeInto(field, "c0de");
+    await act(() => field.form!.requestSubmit());
+    for (let i = 0; i < 80 && !document.body.textContent!.includes("It answered"); i++) {
+      await settle(50);
+      look();
+    }
+    const shown = document.body.textContent!;
+    assertStringIncludes(shown, "Cloud computer is ready");
+    assertStringIncludes(shown, "Claude Code is installed");
+    assertStringIncludes(shown, "It answered: “Ready.”");
+    assertStringIncludes(shown, "Your agents now run on Claude plan.");
+    assertEquals(asked.filter(([action]) => action !== "computer.engine.login"), [
+      ["computer.prepare", { computer: "cloud" }],
+      ["llm.test", { model: "claude-plan/claude-haiku-5-5" }],
+    ]);
+    assertEquals(asked.find(([a]) => a === "computer.engine.login")?.[1], {
+      computer: "cloud",
+      engine: "claude",
+      install: true,
+    });
+    // Never a command to run, nor a terminal to run it in.
+    for (const said of seen) {
+      assert(!said.includes(INSTALL.claude), "no install command shown");
+      assert(!said.toLowerCase().includes("terminal"), "no terminal asked for");
+    }
+  }));
+
+test("an installer that fails: then, and only then, its command, with what it said, and the computer's terminal", () =>
+  page(async (render) => {
+    const call = <R,>(action: string): Promise<R> =>
+      action === "computer.prepare"
+        ? Promise.resolve({
+          computer: "mac",
+          online: true,
+          shared: false,
+          engines: { antigravity: { installed: false, signedIn: false, at: AT } },
+          program: { version: "1.0.0-rc.66", current: true },
+        } as R)
+        : Promise.resolve({
+          state: "done",
+          output: "curl: (6) Could not resolve host\n",
+          signedIn: false,
+          installed: false,
+        } as R);
+    await render(
+      <ConnectFlow
+        plans={plansOf(undefined, [])}
+        picked={["gemini-plan"]}
+        machines={[machine(mac)]}
+        computers={[mac]}
+        accounts={[]}
+        kinds={[]}
+        onClose={() => {}}
+        call={call as never}
+      />,
+    );
+    for (let i = 0; i < 40 && !document.body.textContent!.includes("didn't install"); i++) {
+      await settle(25);
+    }
+    const shown = document.body.textContent!;
+    assertStringIncludes(
+      shown,
+      "Antigravity didn't install on MacBook. What its installer said is below.",
+    );
+    assertStringIncludes(shown, "Could not resolve host");
+    assertStringIncludes(shown, "Or install it from MacBook's terminal, then check again:");
+    assertStringIncludes(shown, INSTALL.antigravity);
+    const terminal = [...document.querySelectorAll("a")].find((a) =>
+      a.textContent === "Open MacBook's terminal"
+    );
+    assertEquals(terminal?.getAttribute("href"), "/computer/mac");
+  }));
+
+test("where the plans run, with no computer: in the cloud, made in a click, recommended; this computer only on a desktop", () =>
+  page(async (render) => {
+    const made: unknown[] = [];
+    const call = <R,>(action: string, input?: unknown): Promise<R> => {
+      made.push([action, input]);
+      return action === "cloud.create"
+        ? Promise.resolve({ computer: "new-cloud" } as R)
+        : new Promise<R>(() => {});
+    };
+    const kinds = [{
+      key: "cloud",
+      title: "Cloud computer",
+      mine: "cloudComputer.mine",
+      view: "cloud.computer",
+      add: {
+        view: "cloud.new",
+        title: "Use a cloud computer",
+        description: "",
+        quick: { action: "cloud.create", input: { size: "small" } },
+      },
+    }];
+    await render(
+      <ConnectFlow
+        plans={plansOf(undefined, [])}
+        picked={["claude-plan"]}
+        machines={[]}
+        computers={[]}
+        accounts={[]}
+        kinds={kinds}
+        personal="p"
+        onClose={() => {}}
+        call={call as never}
+      />,
+    );
+    await settle();
+    const shown = document.body.textContent!;
+    assertStringIncludes(shown, "Where should they run?");
+    assertStringIncludes(shown, "In the cloud Recommended");
+    assertStringIncludes(shown, "Always ready. It sleeps when your agents aren't working");
+    // This computer, only where the browser is a desktop's.
+    assertEquals(shown.includes("On this computer"), !!visitorSystem());
+    const choice = [...document.querySelectorAll("button")]
+      .find((b) => b.textContent?.startsWith("In the cloud"))!;
+    await act(() => choice.click());
+    await settle();
+    assertEquals(made[0], ["cloud.create", { size: "small", in: "p" }]);
+    assertEquals(made[1], ["computer.prepare", { computer: "new-cloud" }]);
+  }));
+
+test("the welcome's step: the app's plans and None; picking offers to connect them", () => {
+  const shown = text(draw(plansWelcomeView({}, ctxOf({ ...READS, "account.find": [plus] }))));
+  assertStringIncludes(shown, "ChatGPT Connected");
+  assertStringIncludes(shown, "Claude plan");
+  assertStringIncludes(shown, "None of these");
+  assertStringIncludes(shown, "You can connect them later, in Your AI.");
+});
+
+test("your computers: each one's state, the plans it runs, its terminal; one shared says so", () => {
+  const markup = draw(yoursView({}, ctxOf(READS)));
+  const shown = text(markup);
+  assertStringIncludes(shown, "Your computers");
+  assertStringIncludes(shown, "MacBook Online · Runs Claude plan Terminal");
+  assertStringIncludes(shown, "Cloud computer");
+  assertStringIncludes(
+    shown,
+    "Studio PC Online · Studio PC is shared with others' agents, so plans can't run on it.",
+  );
+  assertStringIncludes(markup, 'href="/computer/mac"');
+});
+
+test("a computer signed in to a plan isn't shared with others' agents until it's signed out: in English and Portuguese", () => {
+  assertEquals(signedPlan(mac), "Claude plan");
+  assertEquals(signedPlan(computerOf({ _id: "x" })), undefined);
+  const notice = () => draw(<SignedInNotice computer="MacBook" plan={signedPlan(mac)!} />);
+  assertStringIncludes(
+    text(notice()),
+    "MacBook is signed in to your Claude plan. Sign out of it first: a computer shared with " +
+      "others can't keep plan sign-ins. Your plans",
+  );
+  assertStringIncludes(notice(), 'href="/accounts"');
+  const acme = SPACES[1] as Parameters<typeof ShareWarning>[0]["space"];
+  assertStringIncludes(
+    text(draw(<ShareWarning space={acme} name="MacBook" />)),
+    "Agents in Acme run on MacBook as you: they can read everything you can on it",
+  );
+  const restore = setWords(computersPtBR);
+  try {
+    assertStringIncludes(text(notice()), "MacBook está conectado ao seu Plano do Claude.");
+  } finally {
+    restore();
+  }
+});
+
+test("a sign-in is asked again until it's done, one call at a time; a code goes with the next; asked to install, only the first says so", async () => {
   const asked: Record<string, unknown>[] = [];
   const answers: LoginStep[] = [
     { state: "running", output: "Starting…\n", signedIn: false },
@@ -440,6 +596,7 @@ test("a sign-in is asked again until it's done, one call at a time; a code goes 
   const session = signingIn({
     computer: "mac",
     engine: "claude",
+    install: true,
     every: 5,
     call: <R,>(_action: string, input?: unknown) => {
       asked.push(input as Record<string, unknown>);
@@ -453,7 +610,8 @@ test("a sign-in is asked again until it's done, one call at a time; a code goes 
   });
   await over;
   assertEquals(asked.length, 4);
-  assertEquals(asked[0], { computer: "mac", engine: "claude" });
+  assertEquals(asked[0], { computer: "mac", engine: "claude", install: true });
+  assertEquals(asked[1], { computer: "mac", engine: "claude" });
   assertEquals(asked[2].input, "C0DE");
   assertEquals(events.length, 4);
   // Done, it stops: stopping then tells the computer nothing.
@@ -498,62 +656,70 @@ test("what a CLI says, as it's shown: no escapes, safe links, a code it shows or
   assertEquals(safeLink("javascript:alert(1)"), undefined);
   assertEquals(safeLink("file:///etc/passwd"), undefined);
   assertEquals(safeLink(undefined), undefined);
-  // A device's sign-in: a code to type on the page, on the next line.
   const device = "2. Enter this one-time code (expires in 15 minutes)\n   ABCD-7Q2K\n";
   assertEquals(shownCode(device), "ABCD-7Q2K");
   assertEquals(asksForCode(device), false);
-  // A code to paste back.
   assertEquals(asksForCode("Paste code here if prompted > "), true);
   assertEquals(shownCode("Paste code here if prompted > "), undefined);
   assertEquals(asksForCode("Opening your browser to sign in…"), false);
 });
 
-test("the palette: plans, signing each in, and where one is signed in", () => {
-  const groups = plansPaletteView({}, ctxOf(READS)) as PaletteGroup[];
+test("the palette: each plan to connect, or how it stands", () => {
+  const groups = plansPaletteView(
+    {},
+    ctxOf({ ...READS, "account.find": [plus] }),
+  ) as PaletteGroup[];
   assertEquals(groups[0].title, "General");
   const items = groups[0].items;
-  assertEquals(items[0], {
-    key: "plans:open",
-    label: "Plans on your computers",
-    icon: "sparkles",
-    keywords: items[0].keywords,
-    href: "/accounts",
-  });
-  const claude = items.find((i) => i.key === "plans:signed:claude");
-  assertEquals(claude?.description, "Signed in on MacBook Pro");
-  const codex = items.find((i) => i.key === "plans:signin:codex");
-  assertEquals(codex?.label, "Sign in to your ChatGPT plan");
-  assertEquals(codex?.href, "/accounts?signin=codex");
+  const chatgpt = items.find((i) => i.key === "plans:connected:ChatGPT");
+  assertEquals(
+    chatgpt?.description,
+    "Connected as ana@example.com (Plus), on the server: always ready.",
+  );
+  const google = items.find((i) => i.key === "plans:connect:Google AI plan, through Antigravity");
+  assertEquals(google?.label, "Connect your Google AI plan, through Antigravity");
+  assertEquals(google?.href, "/accounts?connect=Google%20AI%20plan%2C%20through%20Antigravity");
   assertEquals(plansPaletteView({}, ctxOf({})), null);
 });
 
-test("the front end adds the section to Connected accounts, and its command to the palette", () => {
+test("the front end adds Your plans (the plans among the accounts) and Your computers to Your AI, its slots and its commands", () => {
   assertEquals(computersWeb.resources?.accountSections, {
-    plans: { view: "computer.plans", order: 10 },
+    plans: { view: "computer.plans", order: 10, plans: true },
+    computers: { view: "computer.yours", order: 20 },
   });
   assertEquals(
     (computersWeb.resources?.palette as Record<string, unknown>).plans,
     { view: "computer.plans.palette", order: 91 },
   );
-  assert(computersWeb.views?.["computer.plans"]);
-  assert(computersWeb.views?.["computer.plans.palette"]);
+  for (
+    const view of ["computer.plans", "computer.yours", "computer.plans.welcome", "computer.cost"]
+  ) {
+    assert(computersWeb.views?.[view], view);
+  }
 });
 
 test("its words are the app's: nothing English left once they're all given", () => {
   // The toolkit's own words (a dialog's Close) are the toolkit's: given too.
   const restore = setWords({ ...pseudoWords("computers"), ...pseudoWords("toolkit") });
   try {
-    const all = [machine(mac), machine(thinkpad), machine(studio, [{ _id: "acme", name: "Acme" }])];
+    const tiers = ctxOf(
+      { ...READS, "modelChoice.harnesses": LISTED, "account.find": [plus] },
+      {},
+      TIERS,
+    );
     const markup = [
-      draw(plansView({}, ctxOf(READS))),
-      draw(plansView({}, ctxOf({ "computer.mine": [], "space.reached": SPACES }))),
+      draw(plansView({}, tiers)),
+      draw(plansView({}, ctxOf({ ...READS, "computer.mine": [] }))),
+      draw(yoursView({}, ctxOf(READS))),
+      draw(plansWelcomeView({}, ctxOf(READS))),
       draw(
-        <SignInDialog
-          plan={planOf("antigravity")!}
-          machines={all}
-          open
+        <ConnectFlow
+          plans={plansOf(LISTED, [CHATGPT])}
+          machines={[machine(mac)]}
+          computers={[mac]}
+          accounts={[]}
+          kinds={[]}
           onClose={() => {}}
-          check={() => Promise.resolve()}
           call={() => Promise.resolve({} as never)}
         />,
       ),
@@ -562,7 +728,13 @@ test("its words are the app's: nothing English left once they're all given", () 
     const read = [
       text(markup),
       ...[...markup.matchAll(/(?:aria-label|title|placeholder|alt)="([^"]*)"/g)].map((m) => m[1]),
-    ].join(" ");
+    ].join(" ")
+      // What the app's tiers and accounts say (the app words them: `text.<English>`), and names.
+      .replace(
+        /Claude plan|ChatGPT plan, through Codex|ChatGPT plan|ChatGPT|Google AI plan, through Antigravity/g,
+        "",
+      )
+      .replace(/MacBook|Cloud computer|Studio PC|ana@example\.com|Plus|Acme/g, "");
     assertEquals(englishLeft(read, "computers"), []);
     assertStringIncludes(markup, "«computers.plansTitle»");
   } finally {

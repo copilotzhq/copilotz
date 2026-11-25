@@ -7,8 +7,12 @@
  * Action answers null for a computer it doesn't keep (a person's own), which
  * stays as it is. Without the resource, nothing changes.
  *
+ * `sleep` puts one to sleep now (its VM goes): `computer.prepare` restarts
+ * one whose program is older than the app's release, so it wakes on a VM
+ * running the release.
+ *
  * ```ts
- * resources: { computerWake: { wake: "cloud.wake", touch: "cloud.touch" } }
+ * resources: { computerWake: { wake: "cloud.wake", touch: "cloud.touch", sleep: "cloud.release" } }
  * ```
  */
 import { type Context, personOf } from "../../../../runtime/mod.ts";
@@ -18,6 +22,8 @@ import { desksIn, named, type Where, whereFor } from "./where.ts";
 export type ComputerWake = {
   wake?: string;
   touch?: string;
+  /** Puts one to sleep now, input `{ computer }`: one it doesn't keep, it leaves as it is. */
+  sleep?: string;
   /** The tool an agent makes one with, for what it's told when its space has no computer. */
   make?: string;
 };
@@ -50,6 +56,22 @@ export async function wake(ctx: Context, computer: string): Promise<boolean | st
       ? message
       : `The computer couldn't wake: ${message}`;
   }
+}
+
+/**
+ * Wakes `computer` again on a new VM, when something puts computers to
+ * sleep (`sleep`) and wakes them: what `wake` answers, false when nothing
+ * can, or what it couldn't.
+ */
+export async function restart(ctx: Context, computer: string): Promise<boolean | string> {
+  const hook = hookOf(ctx);
+  if (!hook?.sleep || !hook.wake) return false;
+  try {
+    await ctx.call(hook.sleep, { computer });
+  } catch (error) {
+    return `The computer couldn't restart: ${error instanceof Error ? error.message : error}`;
+  }
+  return await wake(ctx, computer);
 }
 
 /**

@@ -23,7 +23,8 @@
  * to it: routes/upload.ts), where they may change it (`computer.upload`).
  *
  * A computer also runs its owner's plans: Claude Code, Codex, Antigravity or
- * Grok Build, signed in there once (`computer.engines`,
+ * Grok Build, signed in there once (`computer.prepare` readies the computer:
+ * awake, on the app's release, its CLIs as they are; `computer.engines`,
  * `computer.engine.login`, out with `computer.engine.logout`), so an agent's
  * model calls for them run on their plan, through the CLI, instead of on an
  * API key (the `claude-plan`, `codex-plan`, `gemini-plan` and `grok-plan`
@@ -84,6 +85,7 @@ import { engineAdapter } from "./adapters/engine.ts";
 import { engineAction, engineCancelAction } from "./actions/engine.ts";
 import { engineLoginAction, engineLogoutAction, enginesAction } from "./actions/engines.ts";
 import { connectedAction } from "./actions/connected.ts";
+import { prepareAction } from "./actions/prepare.ts";
 import { engineCost, engineProviders } from "./resources/engines.ts";
 
 export type { Computer } from "./collections/computer.ts";
@@ -92,6 +94,8 @@ export type { EnvVar } from "./collections/env-var.ts";
 export type { Preview } from "./collections/preview.ts";
 export type { ComputersSettings } from "./shared/settings.ts";
 export type { ComputerWake } from "./shared/wake.ts";
+/** Offers a computer, or a free VM of a pool, the app's release when its program is older. */
+export { offerUpdate } from "./shared/update.ts";
 /** Asks and yeses computers kept before chat kept every ask, kept as chat keeps them now. */
 export { upgradeAsks, type Upgraded } from "./shared/upgrade.ts";
 
@@ -154,6 +158,7 @@ export const computers: Plugin = definePlugin({
     "computer.engine.logout": engineLogoutAction,
     // Which of a person's plans are signed in on their computers, for model lists (trusted code).
     "computer.connected": connectedAction,
+    "computer.prepare": prepareAction,
   },
   // A model call on a plan's CLI (the providers below name it).
   adapters: { llm: { engine: engineAdapter } },

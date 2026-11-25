@@ -27,18 +27,19 @@ Nobody calls it: it has no Actions, tools or routes.
 
 Its Views show on the web.
 
-- **On the web:** `computer`, `computer.ask`, `computer.palette`, `computer.plans`,
-  `computer.plans.palette`, `computer.routine`, `computer.space`, `computer.step`, `env.space`.
-- **What it adds to resources:** `accountSections` (`plans`), `askViews` (`destroy`, `jobs`,
-  `publish`, `terminal`, `writes`), `palette` (`computers`, `plans`), `routinePanels` (`computers`),
-  `spaceTabs` (`computer`, `env`), `toolViews` (`browser`, `edit_file`, `job_logs`, `list_files`,
-  `list_jobs`, `read_file`, `save_file`, `send_file`, `start_job`, `stop_job`, `terminal`,
-  `web_search`, `write_file`).
+- **On the web:** `computer`, `computer.ask`, `computer.cost`, `computer.palette`, `computer.plans`,
+  `computer.plans.palette`, `computer.plans.welcome`, `computer.routine`, `computer.space`,
+  `computer.step`, `computer.yours`, `env.space`.
+- **What it adds to resources:** `accountSections` (`computers`, `plans`), `askViews` (`destroy`,
+  `jobs`, `publish`, `terminal`, `writes`), `palette` (`computers`, `plans`), `routinePanels`
+  (`computers`), `spaceTabs` (`computer`, `env`), `toolViews` (`browser`, `edit_file`, `job_logs`,
+  `list_files`, `list_jobs`, `read_file`, `save_file`, `send_file`, `start_job`, `stop_job`,
+  `terminal`, `web_search`, `write_file`).
 
 ## What it needs
 
-Nothing to set. It reads `computerKinds`, `envActions` and `jobActions`, resource kinds the app and
-other plugins fill.
+Nothing to set. It reads `computerKinds`, `envActions`, `jobActions`, `planList` and `userMenu`,
+resource kinds the app and other plugins fill.
 
 ## What it requires
 

@@ -55,6 +55,7 @@ export const say = defineWords("chat", {
   // An archived chat's page
   archivedTitle: "This chat is archived",
   notesArchivedTitle: "Archived, with the chat they're about",
+  subthreadArchivedTitle: "Archived, with the chat it's part of",
   archivedNote:
     "It's listed apart, under Archived in its space's chats. A new message brings it back.",
   // Messages

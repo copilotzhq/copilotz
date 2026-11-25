@@ -4,7 +4,7 @@
  *
  * - **This chat**, the one open: renaming it, moving it to another space
  *   (spaces' picker), with everything in it, and archiving it, or restoring
- *   it (for staff notes, their chat).
+ *   it (for staff notes or a subthread, their chat).
  * - **Chats** to go to: the latest few; while searching, the latest hundred,
  *   found by what they're called and what was said first and last, each
  *   saying its space; and the archived ones after them, said so (read only
@@ -15,7 +15,8 @@ import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
 import { go, type PaletteGroup, type PaletteItem } from "../../../../../hosts/web/mod.ts";
 import type { Thread } from "../../collections/thread.ts";
-import { archiveInput, type Archiving } from "./archive.ts";
+import { archiveInput, type Archiving, seenOf } from "./archive.ts";
+import { chatDocOf } from "./chat-of.ts";
 import { type Listed, threadTitle, titleOf } from "./listed.ts";
 import { moveStep } from "./move.tsx";
 import { renameStep } from "./rename.tsx";
@@ -56,10 +57,8 @@ export const chatPaletteView = (_: unknown, ctx: ViewContext<ReactNode>): Palett
   // The spaces the person reaches, read directly (the rules keep it to those): to say where each is.
   const spaces = ctx.db.collection<Space>("space").find({}).value;
   const thread = open ? ctx.db.collection<Thread>("thread").findOne({ _id: open }).value : null;
-  // Staff notes are archived with their chat: it says whether they are.
-  const chat = thread?.about
-    ? ctx.db.collection<Thread>("thread").findOne({ _id: thread.about }).value
-    : thread;
+  // Staff notes and subthreads are archived with their chat: it says whether they are.
+  const chat = thread ? chatDocOf(ctx.db, thread) : thread;
   if (!threads || !spaces || !shelved) return null;
   const named = new Map(
     spaces.map((s) => [s._id, s.kind === "personal" ? say("personal") : s.name]),
@@ -93,7 +92,7 @@ export const chatPaletteView = (_: unknown, ctx: ViewContext<ReactNode>): Palett
         archiveThis(ctx.call, {
           thread: open,
           archived: !!chat?.archived,
-          ...(thread.latest ? { latest: thread.latest } : {}),
+          latest: seenOf(thread, chat === thread ? undefined : chat),
         }),
       ],
     });

@@ -16,7 +16,16 @@ import { say } from "./words.ts";
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
 export function ChatRow(
-  { thread: t, compact, call }: { thread: Listed; compact: boolean; call: Call },
+  { thread: t, latest, compact, call }: {
+    thread: Listed;
+    /**
+     * What archiving it says was shown last (see `seenOf`): for a notes row,
+     * the newest of it and its chat's row. Left out, the row's own.
+     */
+    latest?: string | null;
+    compact: boolean;
+    call: Call;
+  },
 ): ReactNode {
   const title = titleOf(t);
   const last = lastOf(t);
@@ -65,7 +74,7 @@ export function ChatRow(
             archiveItem({
               thread: t._id,
               archived: !!t.archived,
-              ...(t.latest ? { latest: t.latest } : {}),
+              latest: latest === undefined ? t.latest ?? null : latest,
               call,
             }),
           ]}

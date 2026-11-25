@@ -227,6 +227,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.stopped` | Stopped |
 | `chat.stopping` | Stopping… |
 | `chat.stopToSendNow` | Stop to send now |
+| `chat.subthreadArchivedTitle` | Archived, with the chat it's part of |
 | `chat.suggestions` | Suggestions |
 | `chat.theirPersonalSpace` | {name}'s Personal space |
 | `chat.thinking` | thinking |

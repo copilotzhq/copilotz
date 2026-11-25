@@ -200,7 +200,8 @@ function screens(): ReactNode[] {
       archive={{ archived: true }}
     />,
     <ArchivedNote thread="t1" call={call} />,
-    <ArchivedNote thread="t1:notes" notes call={call} />,
+    <ArchivedNote thread="t1:notes" part="notes" call={call} />,
+    <ArchivedNote thread="m1:sub" part="subthread" call={call} />,
     <Shelf space="s1" compact={false} search="" open fold={() => {}} />,
     <>{archivedView({ _id: "s1" }, ctx([thread("a", { archived: at })]))}</>,
     <>{archivedView({ _id: "s1" }, ctx([]))}</>,

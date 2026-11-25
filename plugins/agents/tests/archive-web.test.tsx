@@ -23,6 +23,7 @@ import { toastState } from "../../../hosts/web/toolkit/toast-state.ts";
 import { wordsOf } from "../../../hosts/web/words.ts";
 import { ptBR } from "../../../hosts/web/pt-br/mod.ts";
 import { test } from "../../../testing/mod.ts";
+import { archiveInput, seenOf } from "../chat/views/web/archive.ts";
 import { ArchivedNote } from "../chat/views/web/archived-note.tsx";
 import { archivedView } from "../chat/views/web/archived.tsx";
 import { ChatRow } from "../chat/views/web/chat-row.tsx";
@@ -239,16 +240,16 @@ test("an archived chat's page says so, with Restore, as its notes' page does", (
   const shownOn = (id: string, threads: Record<string, unknown>) => {
     const page = pageOf(threads, id);
     return {
-      notes: elements(page, ArchivedNote).map((n) => [n.props.thread, n.props.notes]),
+      notes: elements(page, ArchivedNote).map((n) => [n.props.thread, n.props.part]),
       archive: elements(page, Header)[0].props.archive,
     };
   };
   assertEquals(shownOn("c1", { c1: chat }), {
-    notes: [["c1", false]],
+    notes: [["c1", undefined]],
     archive: { archived: true, latest: "m2" },
   });
   assertEquals(shownOn("c1:notes", { c1: chat, "c1:notes": notes }), {
-    notes: [["c1:notes", true]],
+    notes: [["c1:notes", "notes"]],
     archive: { archived: true, latest: "n4" },
   });
   const { archived: _, ...back } = chat;
@@ -260,13 +261,119 @@ test("an archived chat's page says so, with Restore, as its notes' page does", (
   assertStringIncludes(note, "This chat is archived");
   assertStringIncludes(note, "A new message brings it back.");
   assertStringIncludes(
-    html(<ArchivedNote thread="c1:notes" notes call={calls().call} />),
+    html(<ArchivedNote thread="c1:notes" part="notes" call={calls().call} />),
     "Archived, with the chat",
   );
 });
 
+const early = "2026-11-25T10:00:00.000Z";
+const late = "2026-11-25T11:00:00.000Z";
+
+// Review H1 and M1: a notes page said the notes' latest, and an empty chat said nothing.
+test("archiving says the newest it shows of the chat and the thread open; showing none, null", () => {
+  const chat = { _id: "c1", in: "s1", title: "Order 12", latest: "m2", at: late };
+  const notes = { _id: "c1:notes", in: "s1", about: "c1", latest: "n4", at: early };
+  const archiveOn = (id: string, threads: Record<string, unknown>) =>
+    elements(pageOf(threads, id), Header)[0].props.archive;
+  assertEquals(archiveOn("c1:notes", { c1: chat, "c1:notes": notes }), {
+    archived: false,
+    latest: "m2",
+  });
+  assertEquals(
+    archiveOn("c1:notes", { c1: { ...chat, at: early }, "c1:notes": { ...notes, at: late } }),
+    { archived: false, latest: "n4" },
+  );
+  const empty = { _id: "c9", in: "s1", messages: 0, at: early };
+  assertEquals(archiveOn("c9", { c9: empty }), { archived: false, latest: null });
+  // What archiving then asks: what was shown, or that nothing was.
+  assertEquals(archiveInput({ thread: "c9", archived: false, latest: null }), {
+    thread: "c9",
+    archived: true,
+    latest: null,
+  });
+  assertEquals(archiveInput({ thread: "c9", archived: false }), {
+    thread: "c9",
+    archived: true,
+    latest: null,
+  });
+  assertEquals(archiveInput({ thread: "c9", archived: true, latest: "m2" }), {
+    thread: "c9",
+    archived: false,
+  });
+  // The newest of what's shown, by when each last moved.
+  assertEquals(seenOf(chat, notes), "m2");
+  assertEquals(seenOf({ ...chat, at: early }, { ...notes, at: late }), "n4");
+  assertEquals(seenOf(empty, undefined, null), null);
+});
+
+test("a list's notes row says the newest of it and its chat's row; an empty row, null", async () => {
+  const { made, call } = calls();
+  const chat = thread("c1", { latest: "m2", at: late });
+  const notes = thread("c1:notes", { about: "c1", latest: "n4", at: early });
+  const row = (t: Listed, latest: string | null) =>
+    itemsOf(ChatRow({ thread: t, latest, compact: false, call }))[2].onSelect!();
+  row(notes, seenOf(notes, chat));
+  row(thread("e", { messages: 0, latest: undefined }), null);
+  await Promise.resolve();
+  assertEquals(made, [
+    ["chat.archive", { thread: "c1:notes", archived: true, latest: "m2" }],
+    ["chat.archive", { thread: "e", archived: true, latest: null }],
+  ]);
+});
+
+// Review L2: a subthread's page offered Archive, and said nothing, when its chat was archived.
+test("a subthread's page follows its chat: archived, it says so, and its menus restore it", async () => {
+  const chat = { _id: "c1", in: "s1", title: "Order 12", latest: "m2", at: early, archived: late };
+  const sub = {
+    _id: "m1:sub",
+    in: "s1",
+    fork: true,
+    parent: { thread: "c1", message: "m1" },
+    latest: "s3",
+    at: late,
+  };
+  const deeper = {
+    _id: "s3:sub",
+    in: "s1",
+    fork: true,
+    parent: { thread: "m1:sub", message: "s3" },
+    latest: "d1",
+    at: late,
+  };
+  for (const [id, latest] of [["m1:sub", "s3"], ["s3:sub", "d1"]]) {
+    const page = pageOf({ c1: chat, "m1:sub": sub, "s3:sub": deeper }, id);
+    assertEquals(elements(page, ArchivedNote).map((n) => [n.props.thread, n.props.part]), [
+      [id, "subthread"],
+    ]);
+    assertEquals(elements(page, Header)[0].props.archive, { archived: true, latest });
+  }
+  assertStringIncludes(
+    html(<ArchivedNote thread="m1:sub" part="subthread" call={calls().call} />),
+    "Archived, with the chat it",
+  );
+  const open = palette({ open: sub as Listed, threads: { c1: chat, "m1:sub": sub } });
+  const restore = open.groups.find((g) => g.title === "This chat")!.items.at(-1)!;
+  assertEquals(restore.label, "Restore this chat");
+  // And the notes page's palette says the newest it shows; an empty chat's, none.
+  const notes = { _id: "c1:notes", in: "s1", about: "c1", latest: "n4", at: late };
+  const { archived: _, ...back } = chat;
+  const onNotes = palette({ open: notes as Listed, threads: { c1: back, "c1:notes": notes } });
+  await onNotes.groups.find((g) => g.title === "This chat")!.items.at(-1)!.run!(
+    {} as PaletteControl,
+  );
+  const empty = thread("e", { messages: 0, latest: undefined });
+  const onEmpty = palette({ open: empty, threads: { e: empty } });
+  await onEmpty.groups.find((g) => g.title === "This chat")!.items.at(-1)!.run!(
+    {} as PaletteControl,
+  );
+  assertEquals([...onNotes.made, ...onEmpty.made], [
+    ["chat.archive", { thread: "c1:notes", archived: true, latest: "n4" }],
+    ["chat.archive", { thread: "e", archived: true, latest: null }],
+  ]);
+});
+
 /** The palette's groups over fake rows: active chats, archived ones, the open chat. */
-function palette(o: { search?: string; open?: Listed }) {
+function palette(o: { search?: string; open?: Listed; threads?: Record<string, unknown> }) {
   const { made, call } = calls();
   const asked: unknown[] = [];
   const groups = chatPaletteView(undefined, {
@@ -287,7 +394,13 @@ function palette(o: { search?: string; open?: Listed }) {
         find: () => ({
           value: name === "space" ? [{ _id: "s1", name: "Launch", kind: "shared" }] : [],
         }),
-        findOne: () => ({ value: name === "thread" ? o.open ?? null : null }),
+        findOne: (filter: { _id: string }) => ({
+          value: name !== "thread"
+            ? null
+            : o.threads
+            ? o.threads[filter._id] ?? null
+            : o.open ?? null,
+        }),
       }),
     },
   } as never) as PaletteGroup[];

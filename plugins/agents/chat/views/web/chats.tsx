@@ -12,6 +12,7 @@
 import { type ReactNode, useDeferredValue, useState } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
 import { Button, EmptyState, IconButton, Input, Skeleton } from "../../../../../hosts/web/mod.ts";
+import { seenOf } from "./archive.ts";
 import { ChatRow } from "./chat-row.tsx";
 import { byDay, type Listed, matches } from "./listed.ts";
 import { Shelf } from "./shelf.tsx";
@@ -95,6 +96,9 @@ function Chats(
   }
   const shown = threads.filter((t) => matches(t, search));
   const groups = byDay(shown);
+  // A notes row shows them beside their chat's row: archiving it says the newer of the two.
+  const listed = new Map(threads.map((t) => [t._id, t]));
+  const seen = (t: Listed) => seenOf(t, t.about ? listed.get(t.about) : undefined);
   return (
     <div className={`chats${compact ? " chats-compact" : ""}`}>
       <div className="chats-tools">
@@ -118,7 +122,9 @@ function Chats(
           <section key={g.label} className="chats-group" aria-label={g.label}>
             <h3>{g.label}</h3>
             <ul className="chats-list">
-              {g.items.map((t) => <ChatRow key={t._id} thread={t} compact={compact} call={call} />)}
+              {g.items.map((t) => (
+                <ChatRow key={t._id} thread={t} latest={seen(t)} compact={compact} call={call} />
+              ))}
             </ul>
           </section>
         ))

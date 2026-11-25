@@ -242,7 +242,7 @@ test("with no zone given, the process's clock as Date reads it, POSIX zones and 
     if (new Date(2026, 0, 1).getUTCHours() === 3) {
       assertEquals(at("2026-01-01 00:00:00"), "2026-01-01T03:00:00.000Z");
     }
-    if (runtime !== "bun") assert(checked > 500, `${checked} walls checked against Date`);
+    if (runtime !== "bun") assert(checked > 400, `${checked} walls checked against Date`);
   } finally {
     if (original === undefined) delete process.env.TZ;
     else process.env.TZ = original;

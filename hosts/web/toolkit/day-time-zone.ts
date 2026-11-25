@@ -43,7 +43,7 @@ function wallMs(year: number, month: number, day: number, h: number, m: number, 
   return at.getTime();
 }
 
-/** What a zone's clock shows at an instant, as `wallMs` writes it. */
+/** What a named zone's clock shows at an instant, as `wallMs` writes it. */
 function wallAt(zone: string, ms: number): number {
   const parts: Record<string, string> = {};
   for (const { type, value } of clockOf(zone).formatToParts(new Date(ms))) parts[type] = value;
@@ -59,6 +59,23 @@ function wallAt(zone: string, ms: number): number {
 }
 
 /**
+ * What the page's own clock (the process's) shows at an instant, as `Date` reads it: its zone may
+ * have no IANA name `Intl` reads alike (`TZ=GMT+3` is three hours behind UTC by POSIX's sign, and
+ * `Intl` may read it as ahead).
+ */
+function localWallAt(ms: number): number {
+  const at = new Date(ms);
+  return wallMs(
+    at.getFullYear(),
+    at.getMonth() + 1,
+    at.getDate(),
+    at.getHours(),
+    at.getMinutes(),
+    at.getSeconds(),
+  );
+}
+
+/**
  * The moment a day-time (or a day, at 00:00:00) is in a time zone (IANA: `America/Sao_Paulo`;
  * the page's when none is given), as a `Date`: for a timestamp to store, or the ends of a report's
  * range to compare stored timestamps with. `dateOfDayTime("2026-11-16 14:30", "America/Sao_Paulo")`
@@ -68,9 +85,10 @@ function wallAt(zone: string, ms: number): number {
  * the gap (02:30 on the night New York springs forward is 03:30 there, `07:30Z`), and a time they
  * repeat is its first pass (01:30 on the night New York falls back is `05:30Z`, not `06:30Z`).
  * It's what `new Date(y, m - 1, d, h, mi, s)` does in the page's zone, and a named zone and the
- * page's own follow it alike. `undefined` when the value isn't a day (`YYYY-MM-DD`) or a day-time
- * (`YYYY-MM-DD HH:mm`, `YYYY-MM-DD HH:mm:ss`); a zone `Intl` doesn't know throws its
- * `RangeError`.
+ * page's own follow it alike. With no zone, the page's clock is read as `Date` reads it, so a
+ * zone set the POSIX way (`TZ=GMT+3`, `EST5EDT`) is the one `Date` uses. Years are 0000 to 9999.
+ * `undefined` when the value isn't a day (`YYYY-MM-DD`) or a day-time (`YYYY-MM-DD HH:mm`,
+ * `YYYY-MM-DD HH:mm:ss`); a zone `Intl` doesn't know throws its `RangeError`.
  */
 export function dateOfDayTime(value: string, timeZone?: string): Date | undefined {
   const timed = isDayTime(value);
@@ -78,11 +96,11 @@ export function dateOfDayTime(value: string, timeZone?: string): Date | undefine
   const [year, month, day] = partsOf(value);
   const { hour, minute, second = 0 } = timed ? partsOfDayTime(value) : { hour: 0, minute: 0 };
   const wall = wallMs(year, month, day, hour, minute, second);
-  const zone = timeZone ?? (new Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+  const clock = timeZone === undefined ? localWallAt : (ms: number) => wallAt(timeZone, ms);
   // The zone's offsets a day either side: one, or the two a change of the clocks is between.
-  const before = wallAt(zone, wall - DAY) - (wall - DAY);
-  const after = wallAt(zone, wall + DAY) - (wall + DAY);
-  const shown = [wall - before, wall - after].filter((at) => wallAt(zone, at) === wall);
+  const before = clock(wall - DAY) - (wall - DAY);
+  const after = clock(wall + DAY) - (wall + DAY);
+  const shown = [wall - before, wall - after].filter((at) => clock(at) === wall);
   // A time the clock shows: its first instant. A skipped one: by the offset before the change.
   return new Date(shown.length ? Math.min(...shown) : wall - before);
 }

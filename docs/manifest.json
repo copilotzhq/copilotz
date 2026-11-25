@@ -326,7 +326,7 @@
         {
           "title": "The compiler: plugins from folders",
           "slug": "guides/the-compiler",
-          "description": "Start an app with copilotz init. Generate a plugin's server, web and terminal entry points from its declarations, get checked names from the app, watch for changes, check the build or take over a plugin by hand."
+          "description": "Start an app with copilotz init. Generate plugin entry points, Action inputs and collection schemas from TypeScript. Get checked names, watch for changes, check the build or take over a plugin by hand."
         }
       ]
     },

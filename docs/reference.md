@@ -300,7 +300,25 @@ replaces). A later View, adapter or route replaces an earlier one of its name. E
 ### Collections
 
 Documents with a JSON Schema, read and written with MongoDB's collection API. `defineCollection`
-types its documents and queries from the schema.
+types its documents and queries from the schema. In a plugin built by `copilotz gen`, give it a
+document type to generate the schema instead:
+
+```ts
+import { defineCollection } from "copilotz";
+
+interface Order {
+  customerId: string;
+  /** @minimum 1 */
+  quantity: number;
+}
+
+export default defineCollection<Order>({ indexes: [["customerId"]] });
+```
+
+Queries and reads of `ctx.db.collection("order")` see `Order & { _id: string }`. Leave `_id` to the
+runtime. An explicit schema wins, and `Infer<typeof schema>` names its document type. Use `string`
+with `/** @format date-time */` for timestamps. The compiler refuses `Date` because documents travel
+as JSON. [A collection from its type](guides/the-compiler.md#a-collection-from-its-type).
 
 | Field     | What it does                                                                                |
 | --------- | ------------------------------------------------------------------------------------------- |
@@ -388,11 +406,14 @@ export default defineAction({
 
 The generator puts the JSON Schema in the plugin's `mod.ts`. Each caller gets the same input check,
 and tools see the field descriptions. The app needs `typescript` as a devDependency to generate the
-schema. A hand-written `input` always wins. With a hand-written `mod.ts`, supply `input` yourself.
+schema. The annotation also types the input in `allow(actor, input, ctx)`. Generation refuses
+`Date`; use `string` with `/** @format date-time */` for a JSON timestamp.
+[An Action’s input from its type](guides/the-compiler.md#an-actions-input-from-its-type). A
+hand-written `input` always wins. With a hand-written `mod.ts`, supply `input` yourself.
 
 | Field         | What it does                                                                                                          |
 | ------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `input`       | JSON Schema, inferred in `run` and `allow`. Omit it for an Action taking no parameters                                |
+| `input`       | JSON Schema, inferred in `run` and `allow`. Omit it for an empty call or a compiler-generated input                   |
 | `allow`       | who may call it (see [Who may call](#who-may-call-allow)); falls back to the plugin's `defaults.allow`, then internal |
 | `run`         | `(ctx, input) => result`: what it does                                                                                |
 | `description` | what it does, for people and for tools that list Actions                                                              |

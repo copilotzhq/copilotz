@@ -26,7 +26,16 @@
  * npm registry (`@jsr/oxian__ominipg`, the same code), as this repo installs it.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
@@ -297,6 +306,24 @@ try {
   run("npx", ["tsc", "-p", "."], dir);
   step("the browser's code, bundled from the package");
   process.stdout.write(run("node", ["bundle.ts"], dir));
+  step("the installed bin starts an app with checked registry names");
+  const starter = join(dir, "starter");
+  mkdirSync(starter);
+  symlinkSync(join(dir, "node_modules"), join(starter, "node_modules"), "junction");
+  run("npx", ["--no-install", "copilotz", "init", "starter"], dir);
+  run("npx", ["--no-install", "copilotz", "gen", "--check"], starter);
+  writeFileSync(
+    join(starter, "names.ts"),
+    `import type { Runtime, ViewContext } from "copilotz";
+export function names(runtime: Runtime, view: ViewContext) {
+  runtime.call("order.ship");
+  view.show("another-host:orders", {});
+  // @ts-expect-error Only the app's Actions can be called.
+  runtime.call("order.sihp");
+}
+`,
+  );
+  run("npx", ["--no-install", "tsc", "--noEmit"], starter);
   console.log("smoke: ok");
 } finally {
   rmSync(dir, { recursive: true, force: true });

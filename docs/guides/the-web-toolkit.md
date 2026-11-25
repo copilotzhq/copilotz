@@ -1,6 +1,6 @@
 ---
 title: "The web toolkit"
-description: "The pieces web front ends are made of, laid out and themed without CSS: layout, forms, table exports and totals, dates, bars, toasts, shortcuts, printing, PDF logos, Code 39, Code 128 and EAN barcodes, a route's own page and a sign-in (`Screen`), and every token a theme sets."
+description: "The pieces web front ends are made of, laid out and themed without CSS: layout, forms, table exports and totals, dates (ranges to the second, typed day-times read back), bars, toasts, shortcuts, printing, PDF logos, Code 39, Code 128 and EAN barcodes, a route's own page and a sign-in (`Screen`), and every token a theme sets."
 section: Guides
 order: 8
 ---
@@ -559,7 +559,10 @@ page language's.
 - **`DateRangePicker` with `time`**: each end has hours and minutes too, and the ends are
   `YYYY-MM-DD HH:mm`; a preset is its whole days, `00:00` to `23:59`. On one day, the end is never
   before the start. A stored time with seconds sorts after its minute (`"… 23:59:30" > "… 23:59"`),
-  so compare one with an end to the minute: `at.slice(0, 16) <= range.end`.
+  so compare one with an end to the minute: `at.slice(0, 16) <= range.end`, or take the ends to the
+  second ([below](#date-ranges-with-seconds)).
+- **`DateRangePicker` with `seconds`**: each end to the second, typed whole in From and To
+  ([below](#date-ranges-with-seconds)).
 - **`rangePresets(today, { keys, fiscalYearStart, min, max })`** builds presets by key, in the order
   given: `today`, `yesterday`, `todayLastYear`, `last7Days`, `last30Days`, `thisMonth`,
   `sameMonthToDateLastYear`, `sameMonthLastYear`, `lastMonth`, `thisYear`, `lastYear`,
@@ -585,8 +588,10 @@ page language's.
 - **Helpers:** `isDay` and `isDayTime`; `partsOfDayTime` (`{ day, hour, minute, second? }`);
   `addDays` and `addMonths`; `clampDayTime(value, min, max)`; `nowIn(timeZone, step, at, seconds)`,
   now (or the `Date` `at`) as the app's day-time; `formatDay` and `parseDay`, a day written in a
-  picker's `format` and read back; `formatDayTime`; `formatPattern` and `parsePattern`, which take a
-  time's letters too (`HH`, `hh`, `mm`, `ss`, `a`).
+  picker's `format` and read back; `formatDayTime`; `formatPattern`, which takes a time's letters
+  too (`HH`, `hh`, `mm`, `ss`, `a`), and `parsePattern`, which reads a day; `parseDayTime`,
+  `patternProblem`, `dayTimePattern` and `dateOfDayTime`, a typed day-time read back and the moment
+  it names ([below](#reading-typed-dates-and-times)).
 
 ```tsx
 <DateRangePicker
@@ -609,6 +614,142 @@ page language's.
   timeZone={zone}
   name="received_at"
 />;
+```
+
+### Date ranges with seconds
+
+`DateRangePicker` with `seconds` takes each end to the second, for a report filtered from 08:00:00
+to 17:59:59. Its ends are always `YYYY-MM-DD HH:mm:ss`: an end given without seconds is at its
+`:00`, and one given as a day alone runs from `00:00:00` (From) or to `23:59:59` (To). A preset runs
+from `00:00:00` to `23:59:59`, and shows as pressed only for whole days.
+
+- **From and To** are each one field holding the end's day and time, typed or pasted whole. There
+  are no spin fields: the typed field is the end's one editor. Picking days in the months keeps each
+  end's time, and on one day the end never comes before the start.
+- **One pattern** writes the field, the foot, From and To, and reads what's typed, so whatever the
+  picker shows reads back as the same end when pasted. The pattern is `format` when it can be read
+  back (`patternProblem`). A day's pattern gets the page language's time after it: `dd/MM/yyyy`
+  writes `02/11/2026 14:30:05` in Portuguese. A day-time pattern to the minute gets `:ss` after its
+  minutes. Otherwise it's the page language's own (`dayTimePattern(lang())`): its order and
+  separators, and a four-digit Gregorian year (`02/11/2026 14:30:05` in Thai, not 2569). A function
+  `format`, or a pattern that can't be read back, is set aside, and the console says why, once.
+- **The clock is the language's.** That is 12-hour with AM and PM where the language uses them:
+  `11/02/2026 02:30:05 PM` in American English. An app that wants 24 hours everywhere gives a
+  `format` with `HH`.
+- **Typing** reads what `parseDayTime` reads: any case, any spaces, the language's digits, and
+  seconds left out (they're `:00`). It also reads an end as the toolkit keeps it,
+  `2026-11-02 14:30:05` or with a `T`, but not an instant with a zone (`…Z`). Text that isn't one
+  real day and time is marked, and changes nothing.
+- **Bounds.** A typed end is kept within `min` and `max`, which are days and take all of them
+  (`00:00:00` to `23:59:59`). On any side they don't bound, it's kept within 200 years of `today`.
+  So a Buddhist year (`2569`) or a Persian one (`1405`), typed out of habit, is refused, not saved
+  as a Gregorian year. An app that needs years further away gives `min` or `max`.
+- From and To are `date-picker-end-time-width` wide (`15em`).
+
+```tsx
+// Sales from 08:00:00 on the 2nd to 17:59:59 on the 6th:
+// { start: "2026-11-02 08:00:00", end: "2026-11-06 17:59:59" }
+<DateRangePicker
+  label="Sales"
+  value={range}
+  onChange={setRange}
+  today={today}
+  max={today}
+  format="dd/MM/yyyy"
+  seconds
+/>;
+// An English app on a 24-hour clock: 11/02/2026 08:00:00 – 11/06/2026 17:59:59
+<DateRangePicker
+  value={range}
+  onChange={setRange}
+  today={today}
+  format="MM/dd/yyyy HH:mm:ss"
+  seconds
+/>;
+```
+
+To compare stored timestamps with the ends, turn each into a moment in the app's time zone with
+`dateOfDayTime` ([below](#reading-typed-dates-and-times)).
+
+### Reading typed dates and times
+
+`parseDayTime(text, pattern, locale)` reads a day and a time typed in a pattern, the inverse of
+`formatPattern`: what a pattern writes reads back as the value it was written from, in any language.
+With no pattern it reads the language's own (`dayTimePattern(locale)`). `locale` is the language of
+the month, weekday and AM/PM words, and of the digits it reads besides ASCII (English by default;
+the page's is `lang()`). The value has seconds when the pattern writes them.
+
+- **What it allows:**
+  - spaces of any kind and number where the pattern has spaces;
+  - letters in any case;
+  - a month or weekday name without its final dot (`nov` or `nov.` in French);
+  - AM and PM with or without dots (`p.m.`, `PM`);
+  - one digit where the pattern writes two and no digit follows;
+  - the language's own digits (Arabic-Indic in `ar-EG`, Persian in `fa-IR`), one kind to a field;
+  - invisible right-to-left marks;
+  - seconds left out with the `:` before them, when the pattern writes them (they're `:00`).
+
+  Literal words in the pattern must be typed as written (`'lot, 1'` needs its comma).
+- **What it refuses (`undefined`):**
+  - a day the month doesn't have (`31/02` is refused, never moved to March);
+  - 25:00, 13 PM;
+  - a two-digit year where the pattern writes four. The century is never guessed, and `yy` patterns
+    can't be read back at all;
+  - a weekday that isn't the date's;
+  - seconds the pattern doesn't write;
+  - text that could be read as two day-times.
+- **Days are Gregorian**, whatever the language's calendar: a Thai Buddhist year is read as that
+  Gregorian year.
+- **`patternProblem(pattern, locale)`** says why a pattern can't be read back, or gives `undefined`
+  when it can:
+  - a two-digit year (`yy`);
+  - a field of no fixed length running into a digit (`yyyy/dM`: `2026/211` is November 2nd or
+    January 21st);
+  - month names that are numbers (Chinese `11月`) run into a number (`dMMM`);
+  - month names that change within a month, as Persian ones do (write `MM`);
+  - a 12-hour hour without `a`;
+  - a field missing or repeated.
+
+  Every text is refused with a pattern that has a problem. Check an app's patterns with it in a
+  test.
+- **`dayTimePattern(locale, seconds)`** is the pattern a language's people type a day and a time in.
+  It has the language's order and separators and its clock, with a four-digit year, two-digit fields
+  and the Gregorian calendar: `MM/dd/yyyy hh:mm:ss a` in American English, `dd/MM/yyyy HH:mm:ss` in
+  Brazilian Portuguese. `formatPattern(value, dayTimePattern(locale), locale)` writes in it.
+- **`dateOfDayTime(value, timeZone)`** is the moment a day-time (or a day, at its start) names in a
+  time zone (the page's when none is given), as a `Date`. Where the clocks change, one rule,
+  Temporal's "compatible":
+  - a time they skip moves forward by the gap: 02:30 on the night New York springs forward is 03:30;
+  - a time they repeat is its first pass.
+
+  It's what `new Date(y, m - 1, d, h, mi, s)` does in the page's zone, and a named zone follows it
+  too.
+
+```ts
+import {
+  dateOfDayTime,
+  dayTimePattern,
+  formatPattern,
+  parseDayTime,
+  patternProblem,
+} from "copilotz/web";
+
+parseDayTime("02/11/2026 14:30:05", "dd/MM/yyyy HH:mm:ss"); // "2026-11-02 14:30:05"
+parseDayTime("11/2/2026 2:30 PM", "M/d/yyyy h:mm a"); // "2026-11-02 14:30"
+parseDayTime("02/11/2026 14:30", "dd/MM/yyyy HH:mm:ss"); // "2026-11-02 14:30:00"
+parseDayTime("31/02/2026 10:00", "dd/MM/yyyy HH:mm"); // undefined: February has no 31st
+parseDayTime("11/2/99, 2:30 PM", "M/d/yyyy, h:mm a"); // undefined: the year needs four digits
+patternProblem("yyyy/dM HH:mm"); // "`d` is followed by a digit (`M`): give it two digits or a separator"
+patternProblem("dd/MM/yy HH:mm"); // "`yy` leaves out the century: write `yyyy`"
+
+const typed = dayTimePattern("en-US"); // "MM'/'dd'/'yyyy hh':'mm':'ss' 'a"
+formatPattern("2026-11-02 14:30:05", typed, "en-US"); // "11/02/2026 02:30:05 PM"
+parseDayTime("11/02/2026 2:30:05 pm", typed, "en-US"); // "2026-11-02 14:30:05"
+
+// A report's ends as moments in the app's zone, to compare stored timestamps with.
+dateOfDayTime("2026-11-16 14:30", "America/Sao_Paulo")?.toISOString(); // "2026-11-16T17:30:00.000Z"
+dateOfDayTime("2026-03-08 02:30", "America/New_York")?.toISOString(); // "2026-03-08T07:30:00.000Z"
+dateOfDayTime("2026-11-01 01:30", "America/New_York")?.toISOString(); // "2026-11-01T05:30:00.000Z"
 ```
 
 ## Bars, tiles and toasts
@@ -1398,6 +1539,7 @@ and `dark`. The default is Copilotz's look; one that names another token follows
 | `date-picker-foot-gap`                 | `12px`                                                        |
 | `date-picker-fields-gap`               | `10px`                                                        |
 | `date-picker-end-width`                | `9.5em`                                                       |
+| `date-picker-end-time-width`           | `15em`                                                        |
 | `date-picker-height-touch`             | `44px`                                                        |
 | `date-picker-preset-height-touch`      | `40px`                                                        |
 

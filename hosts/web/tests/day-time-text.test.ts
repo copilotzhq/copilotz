@@ -359,3 +359,21 @@ test("one digit where two are written, when a separator follows; never across fi
   assertEquals(parseDayTime("202611 143005", "yyyyMMdd HHmmss"), undefined);
   assertEquals(parseDayTime("2026/2/28 14:30", "yyyy/M/d HH:mm"), "2026-02-28 14:30");
 });
+
+test("the toolkit guide's examples, as written there", () => {
+  assertEquals(parseDayTime("02/11/2026 14:30:05", "dd/MM/yyyy HH:mm:ss"), "2026-11-02 14:30:05");
+  assertEquals(parseDayTime("11/2/2026 2:30 PM", "M/d/yyyy h:mm a"), "2026-11-02 14:30");
+  assertEquals(parseDayTime("02/11/2026 14:30", "dd/MM/yyyy HH:mm:ss"), "2026-11-02 14:30:00");
+  assertEquals(parseDayTime("31/02/2026 10:00", "dd/MM/yyyy HH:mm"), undefined);
+  assertEquals(parseDayTime("11/2/99, 2:30 PM", "M/d/yyyy, h:mm a"), undefined);
+  assertEquals(
+    patternProblem("yyyy/dM HH:mm"),
+    "`d` is followed by a digit (`M`): give it two digits or a separator",
+  );
+  assertEquals(patternProblem("dd/MM/yy HH:mm"), "`yy` leaves out the century: write `yyyy`");
+  const typed = dayTimePattern("en-US");
+  assertEquals(typed, "MM'/'dd'/'yyyy hh':'mm':'ss' 'a");
+  assertEquals(formatPattern("2026-11-02 14:30:05", typed, "en-US"), "11/02/2026 02:30:05 PM");
+  assertEquals(parseDayTime("11/02/2026 2:30:05 pm", typed, "en-US"), "2026-11-02 14:30:05");
+  assertEquals(dayTimePattern("pt-BR"), "dd'/'MM'/'yyyy HH':'mm':'ss");
+});

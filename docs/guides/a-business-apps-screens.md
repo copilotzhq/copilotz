@@ -1194,6 +1194,9 @@ export const visits: Plugin = definePlugin({
 - **`DateRangePicker` with `time`** gives each end a time (`00:00` to `23:59` for a preset). A
   stored time with seconds sorts after its minute, so compare it with an end to the minute:
   `at.slice(0, 16) <= range.end`.
+- **`DateRangePicker` with `seconds`** takes each end to the second (`00:00:00` to `23:59:59` for a
+  preset), typed whole in From and To and read back by the pattern it's shown in
+  ([date ranges with seconds](the-web-toolkit.md#date-ranges-with-seconds)).
 - **Days compare as text** in the store (`$gte`, `$lte`), since `YYYY-MM-DD` sorts as it reads.
 
 ## Sign-in

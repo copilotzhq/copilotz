@@ -146,8 +146,10 @@ A release whose notes say to finish work in flight first needs none of it left w
 starts. While the old one runs, `runtime.idle()` resolves when no delivery or timer occurrence is
 pending, `runtime.stats().pending` counts them, and the `copilotz.processor.lag` gauge says how many
 events each Processor has yet to finish. `runtime.close({ drain })` starts nothing new, gives what's
-running `drain` ms to finish, and saves every Processor's position. Afterwards, in SQL (on a
-PostgreSQL schema shared by tenants, add `tenant = '…'` to each `WHERE`):
+running `drain` ms to finish, and saves every Processor's position. Afterwards, in SQL: with
+`sqlite3` on the file, maintenance's `/maintenance/sql`, or `psql` after
+`SET search_path TO copilotz;` (the store's `schema`). On a PostgreSQL schema shared by tenants, add
+`tenant = '…'` to every `WHERE`, the subquery's too.
 
 ```sql
 -- Processor deliveries not done: a Processor whose position is behind the log's last event.
@@ -160,8 +162,8 @@ SELECT id, data ->> 'action' AS action, at FROM events s
     AND NOT EXISTS (SELECT 1 FROM events c WHERE c.cause = s.id AND c.type = 'action.completed')
   ORDER BY seq DESC;
 
--- Timer occurrences waiting to be tried again (`<timer>@<due time>`).
-SELECT id FROM nodes WHERE collection = 'sys.timers' AND id LIKE '%@%';
+-- Timer occurrences waiting to be tried again.
+SELECT id, doc ->> 'at' AS at FROM nodes WHERE collection = 'sys.timers' AND doc -> 'retry' = 'true';
 ```
 
 The second also lists calls that failed for good and that nobody will call again: only the app's

@@ -449,27 +449,45 @@ import { defineAction, people } from "copilotz";
 
 export default defineAction({
   allow: people,
-  run: async (ctx, input: { order: string }) => {
+  input: {
+    type: "object",
+    properties: { order: { type: "string" } },
+    required: ["order"],
+  } as const,
+  run: async (ctx, { order }) => {
     // Refused for some callers. On a retry, the calls after it are found either way.
-    await ctx.call("discount.apply", { order: input.order }).catch(() => null);
-    await ctx.call("inventory.reserve", { order: input.order });
-    return ctx.call("invoice.create", { order: input.order });
+    await ctx.call("discount.apply", { order }).catch(() => null);
+    await ctx.call("inventory.reserve", { order });
+    return ctx.call("invoice.create", { order });
   },
 });
 ```
 
-- **Found wherever it's made.** A call refused or allowed on the retry, a call added, or calls that
-  start in another order (each after a read) move no other call.
-- **The same call twice is two calls,** `#1` and `#2`. A retry answers both from their records, and
-  runs a third if the code makes one.
-- **A refused call** keeps its number and records nothing.
+- **Calls of other Actions or inputs don't move it.** One refused or allowed on the retry, one
+  added, or calls that start in another order (each after a read) leave it where the retry finds it.
+- **Identical calls are matched in the order they're made.** The same call twice is two calls, `#1`
+  and `#2`; a retry answers both from their records and runs a third if the code makes one. An
+  identical call made earlier takes the lower number. So code that calls a failed Action again
+  itself (a retry loop of its own) charges twice when its caller is retried: the first call failed,
+  so it runs again, and the second answers from its record. Let the failure fail the caller, and
+  retry the caller.
+- **Refusals.** A call a synchronous `allow` refuses takes no number and records nothing: the same
+  call made next (through a grant, `ctx.as(grant(…)).call(…)`) takes the number, and a retry finds
+  it whichever way the permission went. A call an asynchronous `allow` refuses keeps the number it
+  took before waiting, so the same call made after it as a fallback can run once more on a retry
+  whose permission went the other way.
 - **A changed input is a new call:** the hash covers the whole input, private fields too. Keep a
   nested call's input the same across attempts: a time or a random id in it comes from the caller's
   input, not from the clock.
 - **Processors are apart.** Two Processors handling one event never share a call's record or a
-  timer.
+  timer. A Processor's name is part of its calls' ids: renamed, a Processor replays the log from the
+  start (its position is kept by name), and its nested calls run again for every event it replays.
 - **`ctx.branch(key)`** keeps identical calls of concurrent work apart (each of a step's tool
   calls), when they may start in another order.
+- **Names.** `:` and `/` join a caller's parts, and no name is checked for them: a Processor named
+  `a/k` and Processor `a`'s branch `k` name the same caller, and so can an event id and a Processor
+  name with `:` in them. Keep `/` and `:` out of Processor names, branch keys and the event ids you
+  give.
 - **The id is the log's, not an API.** Read a call's `cause` and `data.action`, not the id's parts.
 
 #### Actions with no parameters
@@ -859,10 +877,13 @@ schedules: {
   runs timers, so instances started together run it once.
 - **From code:** `ctx.schedule(action, input, { at | cron | every, id?, retries? })` sets a timer
   with the call's writes, and `ctx.unschedule(id)` removes it. In a transaction, `tx.schedule`
-  commits with the rest. Scheduling an id again replaces its timer. Without an `id`, a retried call
-  sets the same timers again rather than more: `<call>:timer.<n>`, or
-  `<event>:<processor>:timer.<n>` for a Processor's, apart from another Processor's. A declared
-  timer can't be changed from code.
+  commits with the rest. Scheduling an id again replaces its timer. Without an `id`, a timer is
+  named by its place among the timers its caller set: `<call>:timer.<n>`, or
+  `<event>:<processor>:timer.<n>` for a Processor's, apart from another Processor's. A retry that
+  sets the same timers in the same order replaces them rather than adding more; one that sets
+  another first, or skips one, adds a timer under a number the first attempt gave another. Give a
+  timer an `id` when a retry may set it in another order. A declared timer can't be changed from
+  code.
 - **As whom:** a timer set by an actor runs as them, where they were, and its call asks `allow`.
 - **Once:** the owner claims what's due in one commit and calls each occurrence as
   `<timer>@<due time>`, so an occurrence called twice runs once. A recurring timer that missed

@@ -5,16 +5,19 @@ Not a page. The release commit copies (a) into `CHANGELOG.md` and (b), (c) into 
 ## (a) CHANGELOG entry
 
 rc.64's **Known issues** are both fixed, so rc.65's entry has no Known issues. Its intro may say
-that retries now find every nested call an Action completed.
+that a retried Action finds the nested calls it completed, wherever it makes them.
 
 Under `**Fixed, here since rc.63 or before:**`:
 
-- **A retried Action finds every nested call it completed.** A nested call's id names its caller,
-  the Action, how many calls of it with the same input the caller made before, and its input's hash
-  (`<caller>.<action>#<n>.<inputHash>`), instead of its place among the caller's calls. A call
-  refused or allowed on the retry, a call added, or calls that start in another order no longer make
-  a completed call run again. A refused call keeps its number, and the same call made twice is still
-  two calls.
+- **A retried Action finds the nested calls it completed.** A nested call's id names its caller, the
+  Action, how many calls of it with the same input the caller made before, and its input's hash
+  (`<caller>.<action>#<n>.<inputHash>`), instead of its place among all the caller's calls. Calls of
+  other Actions or inputs, refused or allowed on the retry, added, or started in another order, no
+  longer make a completed call run again. Identical calls are matched in the order they're made: the
+  same call made twice is still two calls, and an identical call made earlier takes the lower
+  number. A call a synchronous `allow` refuses takes no number, as before, so the same call made
+  next through a grant is found whichever way the permission went; one an asynchronous `allow`
+  refuses keeps the number it took before waiting.
 - **Two Processors handling one event keep their calls and timers apart.** A delivery's calls are
   named under `<event>:<processor>`, and its timers are `<event>:<processor>:timer.<n>`. One
   Processor's call is no longer answered from another's record, and one's timer no longer replaces
@@ -39,6 +42,10 @@ Under `**Upgrading:**`:
   executors together. Rolling back to rc.64 with work in flight does the same in reverse.
 - **Nested-call ids change form.** Code that read a position from an id must read `cause` and
   `data.action` instead.
+- **A Processor's name is part of its calls' ids.** Renamed, a Processor replays the log from the
+  start, as before (its position is kept by name), and its nested calls now run again for every
+  event it replays; rc.64 answered them from the records left under the event. Keep `/` and `:` out
+  of Processor names and branch keys: they join a caller's parts.
 
 ## (b) AGENTS.md text
 
@@ -46,9 +53,11 @@ Section **"Rules: do this, not that"**, after the bullet that starts `**Outside 
 
 ```markdown
 - **Nested calls on a retry:** a retried Action or delivery (`ctx.retry`) gets each `ctx.call` that
-  completed back from its record, wherever in the code it's made. Keep a nested call's input the
-  same across attempts (no clock or random id made inside it), and use `ctx.branch(key)` to keep
-  identical calls of concurrent work apart.
+  completed back from its record, wherever in the code it's made; identical calls are matched in the
+  order they're made. Keep a nested call's input the same across attempts (no clock or random id
+  made inside it). Don't call a failed Action again in a loop of your own: let the failure fail the
+  caller, and retry the caller. Use `ctx.branch(key)` to keep identical calls of concurrent work
+  apart.
 ```
 
 ## (c) "Find it" lines

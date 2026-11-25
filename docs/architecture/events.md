@@ -51,9 +51,10 @@ fields.
 A nested call's id names its caller, what it calls and with what input, and how many identical calls
 that caller made before it: `<caller>.<action>#<n>.<inputHash>`. The caller is the call's id, or, in
 a Processor's delivery, the event and the Processor. A retried job finds each completed call again
-wherever it's made, whatever other calls it refuses, adds, or starts in another order. A call whose
-id is already in the log answers from it instead of running again. So a retry rewrites what it wrote
-instead of writing it twice.
+wherever it's made, whatever calls of other Actions or inputs it refuses, adds, or starts in another
+order. Identical calls are matched in the order they're made, so an identical call made earlier
+takes the lower number. A call whose id is already in the log answers from it instead of running
+again. So a retry rewrites what it wrote instead of writing it twice.
 
 ## Processors
 
@@ -84,8 +85,8 @@ starts, each Processor resumes from its cursor, reading the log back in batches.
 Delivery is at least once. A delivery that fails is tried 3 times in all, a little longer apart each
 time, and each try is on the record as `processor.retried`. The last failure records
 `processor.failed`, with the event and the error, so another Processor can answer for it. A delivery
-that runs again knows it (`ctx.retry`). Since work's ids come from its cause, running again rewrites
-instead of duplicating.
+that runs again knows it (`ctx.retry`). Its nested calls are named under the event and the
+Processor, so running again finds the ones it completed instead of running them twice.
 
 An owner that closes gives running deliveries 5 seconds to finish. One that doesn't finish keeps its
 cursor before its event, so the next owner delivers it again.

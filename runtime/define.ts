@@ -102,8 +102,11 @@ export type Context = {
    * event), the Action, how many calls of it with the same input the caller
    * made before, and the input's hash: `<caller>.<action>#<n>.<inputHash>`.
    * On a retry (`retry`), one that completed answers its recorded result
-   * without running again, wherever in the code it's made, and one that
-   * didn't runs. The same call made twice is two calls.
+   * without running again, and one that didn't runs. Calls of other Actions
+   * or inputs don't move it; identical ones are matched in the order they're
+   * made, so the same call made twice is two calls. One a synchronous `allow`
+   * refuses takes no number; one an asynchronous `allow` refuses keeps the
+   * number it took before waiting.
    */
   call<R = unknown>(action: AppName<"actions">, input?: unknown): Promise<R>;
   /**

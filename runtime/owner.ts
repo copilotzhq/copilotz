@@ -463,17 +463,9 @@ export async function createOwner(
       updateCheck(def.schema, `collection "${name}"`, def.vectors ?? []),
     ]),
   );
-  // Collections whose updates are checked only on documents that were valid (`validation`).
-  const moderate = new Set(
-    Object.entries(registry.collections).flatMap(([name, def]) =>
-      def.validation === "moderate" ? [name] : []
-    ),
-  );
   /** Refuses an update that can't fit; whether it's sure what the update leaves is valid. */
   const checkUpdate = (collection: string, update: Update): boolean =>
-    collection.startsWith(SYSTEM) ||
-    // Moderate: whether it may change a document depends on the document; its result decides.
-    (!moderate.has(collection) && updateChecks[collection](update));
+    collection.startsWith(SYSTEM) || updateChecks[collection](update);
   const valid = (collection: string, doc: Record<string, unknown>) => {
     try {
       validators[collection](doc);
@@ -499,8 +491,8 @@ export async function createOwner(
   /**
    * Checks what an update left (large values back in place) against the schema: a document
    * that was valid stays valid. One that wasn't (older than its schema) may still be updated:
-   * strict refuses only what the update adds to what was wrong with it, which every store tells
-   * alike (see updates.ts); moderate lets it be, as MongoDB's `validationLevel` does.
+   * what the update adds to what was wrong with it is refused, which every store tells alike (see
+   * updates.ts).
    */
   const checkResult = async (reader: Reader, collection: string, changes: Change[]) => {
     if (collection.startsWith(SYSTEM)) return;
@@ -512,11 +504,7 @@ export async function createOwner(
       if (!now.length) continue;
       const had = before ? of(await hydrate(before, blobsOf(reader))) : [];
       const known = new Set(had.map(key));
-      const added = !had.length
-        ? now
-        : moderate.has(collection)
-        ? []
-        : now.filter((p) => !known.has(key(p)));
+      const added = now.filter((p) => !known.has(key(p)));
       const last = deepest(added.map((p) => ({ ...p, instanceLocation: p.at })));
       if (last) throw schemaFailure(`collection "${collection}"`, last.error, last.at, last.rule);
     }

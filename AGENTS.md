@@ -490,8 +490,8 @@ test("each plugin imports another only through its contract, and requires it", (
   fit, a field the schema doesn't allow can't be set nor a required one unset, `$inc` counts
   numbers, and the document an update leaves must be valid. An update names its operators (`$set`,
   `$inc`, `$push`…): plugin code's update with none is refused (REST's `PATCH` and a View's
-  `updateOne` set plain fields). A collection whose older documents predate its schema says
-  `validation: "moderate"` until they're fixed.
+  `updateOne` set plain fields). A document older than its schema can still be updated with what
+  fits; a migration fixes the rest.
 - **Say `allow` on every Action outsiders call:** `people`, `contacts`, `peopleOrContacts`,
   `publicCallers`, or `inPerson` for what only the person decides (consent, keys, who's in a space,
   money). Write it by kind, never by identity. It's asked of agents too, and of whom they work for.

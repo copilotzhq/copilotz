@@ -1,3 +1,12 @@
+## Unreleased
+
+**Breaking:**
+
+- **`validation: "moderate"` is gone** (added in rc.62). Strict already lets a document older than
+  its schema be updated with what adds nothing wrong to it; what moderate let through besides was an
+  update writing what the schema refuses. Fix such documents with a migration. TypeScript refuses
+  the option; in JavaScript it's ignored, and the collection's updates are checked.
+
 ## 1.0.0-rc.62 — 2026-11-24
 
 Apps are written as Copilotz's own plugins are: updates keep to the schema on every store, as

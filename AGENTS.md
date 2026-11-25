@@ -4,7 +4,7 @@ A guide for coding agents (Claude Code, Codex, Cursor, Gemini) building an app w
 it whole before you write code. The last section is for work on Copilotz itself.
 
 It ships in the package (`node_modules/copilotz/AGENTS.md`, and `@copilotz/copilotz` on JSR) and
-goes with `copilotz@1.0.0-rc.64`. The [reading list](llms.txt) links to every docs page in the
+goes with `copilotz@1.0.0-rc.65`. The [reading list](llms.txt) links to every docs page in the
 installed package. The same pages are online at https://copilotz.com/llms.txt. When you're unsure of
 a name, fetch its page or read the package's types (`node_modules/copilotz/**/*.d.ts`). Don't guess.
 
@@ -69,8 +69,19 @@ It runs on Node 24+, Deno 2.9+ and Bun.
   [Rules: `guard` and `labels`](docs/reference.md#rules-guard-and-labels).
 - Group several writes inside an Action → `ctx.transaction`, `tx.call` →
   [A grant and a transaction for the whole Action](docs/reference.md#a-grant-and-a-transaction-for-the-whole-action).
+- Make nested calls safe to retry → `ctx.call`, `ctx.retry`, `ctx.branch(key)` →
+  [Nested calls and retries](docs/reference.md#nested-calls-and-retries).
 - Read a named query as its caller → `collection.query`, `runtime.query` →
   [Collections](docs/reference.md#collections).
+
+**Chats**
+
+- Archive a chat, for everyone who sees it → `chat.archive { thread, archived: true }` →
+  [Archiving a chat](docs/guides/chats.md#archiving-a-chat).
+- Restore an archived chat → `chat.archive { thread, archived: false }`, or a new message →
+  [Restoring a chat](docs/guides/chats.md#restoring-a-chat).
+- List archived chats → `thread.recent { archived: true }` →
+  [Listing archived chats](docs/guides/chats.md#listing-archived-chats).
 
 **Screens and dates**
 
@@ -78,10 +89,22 @@ It runs on Node 24+, Deno 2.9+ and Bun.
   [Shared UI: an app's own components](docs/guides/a-business-apps-screens.md#shared-ui-an-apps-own-components).
 - Build a form with labelled inputs → `Form`, `Field`, `Input` →
   [Forms](docs/guides/the-web-toolkit.md#forms).
+- Ask before deleting → `useConfirm`, `ConfirmDialog` →
+  [Confirming an action](docs/guides/the-web-toolkit.md#confirming-an-action).
+- Add or edit a record in a dialog with field errors → `RecordDialog`, `RecordChange` →
+  [A record in a dialog](docs/guides/the-web-toolkit.md#a-record-in-a-dialog).
+- Show a server's refused field under its input → `form.error(name)`, `refusedField` →
+  [Showing a refused field](docs/guides/the-web-toolkit.md#showing-a-refused-field).
 - Search, sort and page a list → `DataTable`, `tableAddress`, `tableQuery` →
   [Tables and their files](docs/guides/the-web-toolkit.md#tables-and-their-files).
 - Choose a day, time or range → `DatePicker`, `DateTimePicker`, `DateRangePicker` →
   [Dates](docs/guides/the-web-toolkit.md#dates).
+- Filter a report by a date range to the second → `DateRangePicker seconds` →
+  [Date ranges with seconds](docs/guides/the-web-toolkit.md#date-ranges-with-seconds).
+- Read and check a typed or pasted date-time → `parseDayTime`, `patternProblem`, `dayTimePattern` →
+  [Reading typed dates and times](docs/guides/the-web-toolkit.md#reading-typed-dates-and-times).
+- Turn a local wall-clock time into an instant in a time zone → `dateOfDayTime` →
+  [Reading typed dates and times](docs/guides/the-web-toolkit.md#reading-typed-dates-and-times).
 - Save from a View handler → `ctx.db.collection(name).insertOne/updateOne/deleteOne` →
   [The rules every screen keeps](docs/guides/a-business-apps-screens.md#the-rules-every-screen-keeps).
 
@@ -170,7 +193,7 @@ Plugins reach each other only through the runtime, by name. One that builds on a
 Start on Node 24 or newer:
 
 ```sh
-npx copilotz@1.0.0-rc.64 init orders
+npx copilotz@1.0.0-rc.65 init orders
 cd orders
 npm run check
 npm run dev
@@ -189,7 +212,7 @@ for fields such as `requires`, `defaults` and `guard`, `lib/web/` for React comp
 names in `copilotz-env.d.ts`. Commit that declaration and ignore `.copilotz/build/`. The server
 imports `#copilotz/plugins/<name>/mod.ts`, the browser `web.ts` and the terminal `terminal.ts` from
 the same folder. The starter's dev script watches declarations and the server. On Deno, the compiler
-entry is `deno run -A jsr:@copilotz/copilotz@1.0.0-rc.64/gen`.
+entry is `deno run -A jsr:@copilotz/copilotz@1.0.0-rc.65/gen`.
 
 Existing plugins with a hand-written `mod.ts` keep their own assembly and explicit schemas. List
 them alongside generated plugins in `app.ts`. [The compiler](docs/guides/the-compiler.md).
@@ -200,7 +223,7 @@ line `@AGENTS.md` (Claude Code reads `CLAUDE.md`, and follows the import). Keep 
 ```markdown
 # AGENTS.md
 
-This app runs on Copilotz (copilotz@1.0.0-rc.64). Read node_modules/copilotz/AGENTS.md first;
+This app runs on Copilotz (copilotz@1.0.0-rc.65). Read node_modules/copilotz/AGENTS.md first;
 node_modules/copilotz/llms.txt lists the installed guides.
 
 - `npm test` runs offline. Run `npm run build` after editing declarations. `npm run check` checks
@@ -582,6 +605,13 @@ test("each plugin imports another only through its contract, and requires it", (
   writes nothing.
 - **Outside effects:** write the intent, call out with its id as the idempotency key (a tool's
   `callId`), then write the result.
+- **Nested calls on a retry:** a retried Action or delivery (`ctx.retry`) gets each `ctx.call` that
+  completed back from its record, wherever in the code it's made; identical calls are matched in the
+  order they're made. Keep a nested call's input the same across attempts (no clock or random id
+  made inside it), and put who it's for in it when the same call is made for several people
+  (`ctx.as(person)`). Don't call a failed Action again in a loop of your own: let the failure fail
+  the caller, and retry the caller. Use `ctx.branch(key)` to keep identical calls of concurrent work
+  apart.
 - **Online:** `devSignIn` is for this machine only; Copilotz won't start it with a public origin.
   Keep the `links` secret (32 bytes or more) across restarts, or MCP conversations start over.
 
@@ -695,7 +725,9 @@ Read both before the first screen.
   developers, so a form says each field's refusal its own way (`{ name: "Give the name." }`, by
   `detail.field`), and the schema's text where it has none. A record whose fields the server sets
   (who made it, when, a number in a sequence) keeps an Action: a browser's View doesn't know who's
-  looking. A dialog closes only after the save, or the Action, answered.
+  looking. A dialog closes only after the save, or the Action, answered. In a `RecordDialog`, each
+  `Field`'s `error` is `form.error(name)` and `errors` gives the words by field; with a plain
+  `Form`, `refusedField(error)` reads the field.
 
 **Toolkit first.**
 
@@ -724,7 +756,8 @@ The pieces, by job:
   `Picker`, `MultiPicker`, `Autocomplete`, `TagsInput`, `FileInput`, `RowsEditor`, `DatePicker`,
   `DateRangePicker`, `DateTimePicker`, `TimeFields`.
 - **Actions and overlays:** `Button`, `IconButton`, `Menu`, `Popover`, `Dialog`, `Drawer`,
-  `Tooltip`, `toast` and `Toasts`.
+  `Tooltip`, `toast` and `Toasts`; `useConfirm` and `ConfirmDialog` to ask first; `RecordDialog` to
+  add or edit a record.
 - **Data:** `DataTable` (with `tableAddress`, `tableQuery`), `Pagination`, `DetailList`, `Badge`,
   `Chip`, `Avatar`, `Notice`, `EmptyState`, `Skeleton`, `Spinner`, `Kbd`.
 - **An app's own frame:** `AppBar`, `TopBar`, `TileGrid`, `LiveClock`, `Logo`, `Icon` (`drawing`: an
@@ -754,16 +787,26 @@ The pieces, by job:
   [Images and barcodes in a document](docs/guides/the-web-toolkit.md#images-and-barcodes-in-a-document).
 - **A create or edit form in a dialog:** the screen shows
   `ctx.show("dialog:customer", { _id, back })` when its address names one (`/customers/new`,
-  `/customers/<id>`). The dialog's View reads the record and returns a component: a `Dialog`
-  (`placement="top"`) around a `Form` of `Field layout="row"`s, Save in its footer submitting the
-  form by its id (`form="customer"`). `onSubmit` writes the record (`insertOne` for a new one,
-  `updateOne({ _id }, fields)` for an edit), then `toast()` and `go(back)`.
+  `/customers/<id>`). The dialog's View reads the record and returns a `RecordDialog` (`record`, or
+  `defaults` for a new one) whose children are `(form) => <Field … error={form.error("name")}>`s,
+  each control spread with its binder (`{...form.text("name")}`, `form.number`, `form.value` for a
+  picker). `onSave(change)` writes it: `insertOne(change.values)` for a new one,
+  `updateOne({ _id: change._id }, change.update)` for an edit, which holds only what changed (a
+  field emptied is an `$unset`). `toast` and `onClose={() => go(back)}` finish it. Call `ctx.show`
+  in the View's body, and put what it gives in the fields' function.
+- **A delete that asks first:** in a component of `lib/web/` (a row's Delete),
+  `const [dialog, confirm] = useConfirm()`, draw `{dialog}`, and on click
+  `confirm({ title, danger: true, toast, onConfirm: () => collection.deleteOne({ _id }) })`. As a
+  dialog View, `<ConfirmDialog key={_id} … onClose={() => go(back)} />`.
 - **Date, date-time and date-range fields:** days are `YYYY-MM-DD` and times `YYYY-MM-DD HH:mm` or
   `HH:mm:ss`, the app's clock time with no zone, never ISO timestamps. `todayIn(timeZone)` and
   `nowIn(timeZone)` in the app's zone, `format` patterns from its settings. `DatePicker`;
   `DateTimePicker` keeps a value's seconds until its time changes (`seconds` shows them);
-  `DateRangePicker` has `presets` (or `rangePresets(…)`), typed From and To, and `time` for ends
-  with a time of day.
+  `DateRangePicker` has `presets` (or `rangePresets(…)`), typed From and To, `time` for ends with a
+  time of day, and `seconds` for ends to the second, typed whole and read back by the pattern
+  they're shown in. Typed or pasted text: `parseDayTime(text, pattern, locale)`, with
+  `patternProblem(pattern)` in a test for the app's patterns. To compare stored timestamps with a
+  range, `dateOfDayTime(end, timeZone)` is each end's moment in the app's zone.
 - **A sign-in page:** Copilotz's own, with `passwordSignIn` (staff with usernames) or `emailSignIn`:
   the theme gives its look (`themeOf([look])` on the server), the `signInPage` resource its words
   and pitch. Accounts come from an Action of the app's that calls `password.set`. Don't write a
@@ -808,7 +851,11 @@ The pieces, by job:
   (Save, or a row's Update and Enter).
 - Dates in the browser's locale (`toLocaleString`, `<input type="date">`) or as ISO timestamps given
   to a picker; a function `format` on a range people type into (it can't be read back: use a
-  pattern); a record's date-time saved unchanged without its seconds.
+  pattern); a pattern with a two-digit year (`yy`: `patternProblem` says so) or fields that run
+  together (`yyyy/dM`) where people type; a record's date-time saved unchanged without its seconds.
+- A delete with no question, or `window.confirm`; a record dialog that saves the whole record
+  (`$set` of every field) instead of `change.update`, writing back fields nobody touched; a
+  `ConfirmDialog` reused for another record without a new `key`.
 - A `controlWidth` from rc.52–53 or from a CSS-grid habit. Both `labelWidth` and `controlWidth` are
   shares of the whole row: `"33.33%"` and `"66.67%"` fill it.
 - A workaround copied from an older release: rc.54 has `Screen`, typed range ends, seconds, `hidden`

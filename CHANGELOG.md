@@ -1,3 +1,180 @@
+## 1.0.0-rc.65 — 2026-11-25
+
+This release finishes what rc.64 postponed. A retried Action finds the nested calls it completed,
+wherever it makes them, so both of rc.64's known issues are fixed and none are left. The web toolkit
+asks before going on and edits a record in a dialog. Chats can be archived, and a new message brings
+one back. Date ranges go to the second, and typed dates are read back. Rare cases are known limits,
+listed below, not code: the code stays small.
+
+**Breaking:**
+
+- **Nested-call ids change form.** A nested call's id is now `<caller>.<action>#<n>.<inputHash>`,
+  and a Processor's timers are `<event>:<processor>:timer.<n>`. rc.65 doesn't read the records rc.64
+  kept under the old ids, so finish work in flight before upgrading (Upgrading, below). Code that
+  read a position from an id must read `cause` and `data.action` instead.
+
+**New:**
+
+- **Asking before going on.** `useConfirm()` asks from a handler: draw its `dialog` once, then
+  `await confirm({ title, message, danger, onConfirm, toast })`. It's `true` once confirmed and
+  done, and `false` when cancelled. `ConfirmDialog` is the same question as a component, for a
+  dialog View at an address. One element is one question, so give it a `key`. An async `onConfirm`
+  keeps the dialog busy. If it fails, the dialog says why and stays open to try again. With
+  `danger`, the button is destructive and Cancel has the focus. Questions belong to the component
+  that asks: when it unmounts, a question still waiting is answered no and never shows.
+- **A record in a dialog.** `RecordDialog` adds or edits one record: a `Dialog` holding a `Form`,
+  its fields bound to a draft by `form.text`, `form.number`, `form.checked`, `form.radio`,
+  `form.value` and `form.list`. Save gives `onSave` a `RecordChange`: a new record's `values` for
+  `insertOne`, or a stored one's `set`, `unset` and MongoDB `update` for `updateOne`. An untouched
+  field is never in it. An emptied text, number or choice is an `unset`, and an emptied list is
+  `[]`. A save runs to its end on the record it started on. The `EntityDialog` planned for rc.64
+  ships as `RecordDialog`.
+- **Refused fields.** A save refused by its field (`detail.field`) shows under the `Field` whose
+  `error` is `form.error(name)`, in the words `errors` gives for it. With a plain `Form`,
+  `refusedField(error)` reads the field.
+- **Dialog options.** `Dialog` takes `busy` (Escape, the backdrop and its × wait), `isolated` (it
+  answers only its own close and Escape, not those of a dialog shown inside it), `role`
+  (`"alertdialog"`) and `aria-describedby`. Confirmations and record dialogs are always isolated:
+  dismissing one never closes the `Dialog` or `Drawer` it's shown in.
+- **Words:** `toolkit.confirm`, `toolkit.delete` and `toolkit.notDone`, in English and Brazilian
+  Portuguese.
+- **Archiving a chat.** `chat.archive` (`{ thread, archived, latest? }`) puts a chat away for
+  everyone who sees it, as its title is. A person who may write where the chat is archives it from
+  its header's menu, a Chats tab row's menu or the command palette, or with `/archive` in the
+  terminal. Lists leave it out, with its staff notes and subthreads: `thread.recent`, and so the
+  sidebar, the Chats tab, the palette until you search, `/threads` and agents' `list_conversations`.
+  Nothing in it changes, and it still opens by its link.
+- **Archived chats, listed and brought back.** `thread.recent` with `archived: true` lists them, as
+  do a folded "Archived" at the end of the Chats tab (read only once it's opened or the tab is
+  searched) and `/threads archived`. The palette finds them while searching. Restore brings one back
+  (`archived: false`, `/restore`), and so does any new message in it, its notes or a subthread, in
+  that message's own commit: a customer writing on WhatsApp reopens their chat.
+- **Nothing new is archived unseen.** Front ends pass `latest`, the newest message they drew (`null`
+  for none). Archiving is refused (`conflict`) when anything in the conversation is newer: the chat,
+  its notes, or its subthreads at any level. The archiver's own messages count as seen.
+- **Ranges to the second.** `DateRangePicker` with `seconds` takes each end to the second
+  (`YYYY-MM-DD HH:mm:ss`); a preset runs from `00:00:00` to `23:59:59`. From and To each hold the
+  end's day and time, typed or pasted whole. The field, the foot, From and To write the ends with
+  one pattern, which reads them back: the app's `format` when it can be read back, else the page
+  language's own, with its clock (12-hour in American English) and a four-digit Gregorian year. Text
+  that can't be read, or a range that would end before it starts, is marked and keeps Apply off, so
+  what's shown is what's saved. A typed end stays within `min` and `max`, and within 200 years of
+  `today` where they don't bound it, so a Buddhist or Persian year typed out of habit is refused.
+- **Typed day-times read back.** `parseDayTime(text, pattern, locale)` reads what `formatPattern`
+  writes with the same pattern, in any language, for years 0000 to 9999: any case and spacing, names
+  without their final dot, the language's digits, seconds left out. It refuses what isn't one real
+  day and time (`31/02`, 13 PM), a two-digit year (it never guesses the century), and text that
+  could be two day-times. `patternProblem(pattern)` says why a pattern can't be read back (`yy`,
+  month names of a calendar other than the Gregorian one), and `dayTimePattern(locale)` is the
+  language's own pattern.
+- **A wall-clock time's moment.** `dateOfDayTime(value, timeZone)` is the `Date` a day-time names in
+  a time zone, by Temporal's "compatible" rule: a time the clocks skip moves forward by the gap, and
+  a time they repeat is its first pass, as `new Date(…)` does in the page's zone. With no zone, it
+  reads the page's clock as `Date` does (`TZ=GMT+3` is three hours behind UTC).
+
+**Fixed, here since rc.63 or before:**
+
+- **A retried Action finds the nested calls it completed,** wherever it makes them (rc.64's first
+  known issue). A nested call's id names its caller, the Action, how many calls of it with the same
+  input the caller made before, and its input's hash, instead of its place among all the caller's
+  calls. Calls of other Actions or inputs no longer make a completed call run again, whether they're
+  refused or allowed on the retry, added, or started in another order. Identical calls are matched
+  in the order they're made: the same call made twice is still two calls, and an identical call made
+  earlier takes the lower number. A call a synchronous `allow` refuses takes no number, as before,
+  so the same call made next through a grant is found whichever way the permission went. One an
+  asynchronous `allow` refuses keeps the number it took before waiting.
+- **Two Processors handling one event keep their calls and timers apart** (rc.64's second known
+  issue). A delivery's calls are named under `<event>:<processor>`, and its timers are
+  `<event>:<processor>:timer.<n>`. One Processor's call is no longer answered from another's record,
+  and one's timer no longer replaces another's. An unrecorded Action's calls are named under its
+  caller's Processor or branch.
+- **From and To are read when they're done, here since rc.54.** In `DateRangePicker`, each keystroke
+  that made a valid day moved the range, and Apply took the moved end: typing `2` on the way to `20`
+  in To moved From to the 2nd. From and To are now read only when they're left, on Enter, or on
+  Apply. Text that isn't a day stays as typed, marked, and Apply is off until it's put right. A
+  field left empty is its end again, and a field's own text always reads as its end. With a first
+  day picked, To is empty until the second is; where rc.54 couldn't read an end's text back
+  (Arabic's short date, a function `format`), it kept showing the old end.
+
+**Known limits:** rare cases left to the app on purpose, a line each.
+
+- **Confirmations and record dialogs**
+  ([the toolkit guide](docs/guides/the-web-toolkit.md#known-limits)):
+  - What's typed while a save runs isn't in it; on success the dialog closes.
+  - A `useFormSubmit` part's value wins over an edit of the same field, even one typed while the
+    part runs.
+  - A field made invalid while a part runs isn't checked again; the schema refuses it.
+  - A path through a list or a map that isn't there yet (`lines.0.qty`) makes an object: give it a
+    value in `defaults` or the record, or set it whole with `form.set`.
+  - Don't put a `RecordDialog` inside a form, or a form in its fields: a submit goes to every form
+    around it.
+  - Questions show one at a time: don't await another `confirm()` inside `onConfirm`.
+  - Draw `useConfirm`'s `{dialog}` once.
+  - A busy confirmation a browser closes anyway answers when its operation ends; a dialog a browser
+    closes just as its operation ends may show the outcome in the closed dialog.
+  - A `ConfirmDialog` given a new `key` while open gives the focus back to the page, not to the
+    first opener.
+  - An app's own `Dialog` closing still closes an app's own dialog or `Drawer` around it, as in
+    rc.64, unless the outer one is an `isolated` `Dialog`.
+- **Chats** ([the chats guide](docs/guides/chats.md#known-limits)):
+  - A newer message a page doesn't draw (deeper in a subthread, in closed notes) keeps it from
+    archiving there.
+  - An archived chat's notes aren't listed with it: open the chat to reach them.
+  - A subthread opened as a page doesn't say its chat is archived.
+  - A thread is a subthread only when its id is `<message>:sub`, as `send_message` makes them.
+  - A notes or subthread page passes its own newest message, so the chat's newer ones refuse it
+    there.
+  - A message's time is stamped before its commit, so one committed late can slip past the check.
+  - Notes made in the milliseconds before an archive aren't checked.
+  - An omitted `latest` (scripts, `/archive <id>`) checks nothing.
+- **Dates** ([the toolkit guide](docs/guides/the-web-toolkit.md#known-limits-of-dates-and-times)):
+  - Fields of no fixed length run together (`yyyy/dM`) can't always be read back, and
+    `patternProblem` doesn't say so.
+  - With `seconds` and a year-first format in another order than the toolkit's (`yyyy-dd-MM`), text
+    read as two different ends is refused.
+  - Names typed in capitals may not read in Greek or Turkish.
+  - A format with spaces at its edges doesn't read back what it writes.
+  - With `seconds`, `today` must be 200 years or more from 0000 and 9999.
+  - Changing the format or the page's language while a range is open reads what's being typed by the
+    new one.
+  - `min` and `max` given as times of day hold for typed ends, not for picked days or presets.
+  - The months' Next button goes past December 9999 without `max`.
+
+**Docs:**
+
+- The reference has "Nested calls and retries" under Actions, and the stores page says how to see
+  [work in flight](docs/operations/stores.md#work-in-flight).
+- The toolkit guide has "Confirming an action", "A record in a dialog", "Showing a refused field",
+  "Date ranges with seconds" and "Reading typed dates and times", with their known limits. In
+  [a business app's screens](docs/guides/a-business-apps-screens.md), the customer dialog is a
+  `RecordDialog`.
+- [Chats: their lists and archive](docs/guides/chats.md), a new guide: listing chats, archiving and
+  restoring one, and what agents see.
+- The REST guide's list of Actions a key can't call names `chat.rename` (missing since rc.63) and
+  `chat.archive`.
+- The "Find it" index in `AGENTS.md` has a Chats group, and lines for confirmations, record dialogs,
+  refused fields, ranges to the second, typed dates and nested calls.
+
+**Upgrading:**
+
+- **Finish work in flight before upgrading.** rc.65 doesn't read the records rc.64 kept under the
+  old nested-call ids. Work in flight is a Processor delivery not yet done, or a call that started,
+  didn't complete, and will be called again with the same id (by a client, a webhook sender, or a
+  timer's retry). Retried on rc.65, its nested calls that completed on rc.64 run once more, with all
+  they do (writes, emits without an `id`, outside calls), and timers are set a second time: a
+  Processor's and a nested call's. An Action's own timers keep their ids. Wait for `runtime.idle()`,
+  stop with `runtime.close({ drain })`, check what's left
+  ([work in flight](docs/operations/stores.md#work-in-flight)), then start rc.65, its owner and
+  executors together. Rolling back to rc.64 with work in flight does the same in reverse.
+- **Renaming a Processor now runs its nested calls again.** A Processor's name is part of its calls'
+  ids. Renamed, it replays the log from the start, as before (its position is kept by name), and its
+  nested calls now run again for every event it replays; rc.64 answered them from the records left
+  under the event. Keep `/` and `:` out of Processor names and branch keys: they join a caller's
+  parts.
+- **Existing date pickers:** without `seconds`, `DateRangePicker` draws as in rc.64, and only reads
+  From and To when they're done (Fixed, above). `DatePicker`, `DateTimePicker`, `parsePattern` and
+  `parseDay` are unchanged.
+
 ## 1.0.0-rc.64 — 2026-11-25
 
 Start a business app with `copilotz init`. Give each declaration a file and write its types once.

@@ -51,6 +51,18 @@ guides ship with the runtime.
   field's `name` reaches a control drawn as a function.
 - A day pattern accepts a typed four-digit year for `yy`, extra spaces and an optional comma.
   Table-shaped JSON with raw values preserves each cell's type.
+- A `Form` keeps the part handlers and submit callback it started with, so a dialog switched to
+  another record mid-upload doesn't save one record's file onto the other. `EntityDialog` stays busy
+  from its first part to the save (Cancel and Escape wait), starts fresh for each record, and passes
+  cleared fields to `onSubmit(record, form, unset)` for an `$unset`.
+- An unanswered `confirm()` resolves `false` when the last `<Toasts />` leaves, instead of showing
+  later with an old callback.
+- A timed `DateRangePicker` reads back the date and 24-hour time it shows. `parseDayTime` reads a
+  locale's month names and digits; `dateOfDayTime` resolves a skipped time forward and a repeated
+  one to its earlier instant, in the browser's zone and a named one alike.
+- PDF column widths and alignments follow the visible columns. A minimal-quoted CSV keeps a row with
+  one empty field (`""`). A barcode too narrow for whole modules refuses with its minimum width
+  (`RangeError`) instead of clipping. `copilotz/web/export`'s types need no React.
 
 **Docs:**
 

@@ -43,7 +43,12 @@ export type Job =
     actor?: Actor;
   })
   /** `retry`: this event may have been handled before (a retried or recovered delivery). */
-  | { kind: "process"; processor: string; event: Event; retry: boolean }
+  | (Pick<Attempt, "callNumbering" | "legacyCalls"> & {
+    kind: "process";
+    processor: string;
+    event: Event;
+    retry: boolean;
+  })
   | { kind: "query"; collection: string; query: string; params: unknown; actor?: Actor }
   /** A View, rendered (see `Owner.render`). */
   | {

@@ -17,7 +17,7 @@
  * path, which never sees the documents, takes only those updates, so it stays
  * fast for plain `$set` and counters.
  */
-import { Validator } from "@cfworker/json-schema";
+import { dereference, validate, Validator } from "@cfworker/json-schema";
 import { schemaFailure } from "./registry.ts";
 
 type Schema = Record<string, unknown> | boolean | undefined;
@@ -111,20 +111,13 @@ export function updateCheck(
   label: string,
   vectors: string[] = [],
 ): (update: Record<string, unknown>) => boolean {
-  const checks = new WeakMap<object, (value: unknown) => string | undefined>();
+  // Resolve references from the collection root, including resource ids on enclosing objects.
+  const lookup = dereference(schema as never);
   const fits = (at: Schema, value: unknown): string | undefined => {
     if (at === undefined || at === true) return undefined;
     if (at === false) return "not allowed";
-    let check = checks.get(at);
-    if (!check) {
-      const validator = new Validator(at as never, "2020-12", false);
-      check = (value) => {
-        const result = validator.validate(value);
-        return result.valid ? undefined : result.errors.at(-1)?.error ?? "invalid";
-      };
-      checks.set(at, check);
-    }
-    return check(value);
+    const result = validate(value, at as never, "2020-12", lookup, false);
+    return result.valid ? undefined : result.errors.at(-1)?.error ?? "invalid";
   };
   const refuse = (path: string, why: string) => {
     throw schemaFailure(label, why, `#/${path.replaceAll(".", "/")}`);

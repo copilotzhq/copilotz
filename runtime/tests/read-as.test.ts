@@ -3,6 +3,7 @@
  * read calls it too, read-only, as when an Action calls it. It used to be left
  * as the reader, quietly reading less than it asked for.
  */
+import { labels } from "../../plugins/access/spaces/shared/labels.ts";
 import { READ_VIEW } from "../browsers.ts";
 import { assertEquals, assertRejects } from "@std/assert";
 import {
@@ -135,6 +136,92 @@ for (const [kind, make] of Object.entries(stores)) {
       }
       assertEquals(calls, ["staff", "staff", "staff", "staff", "staff"]);
       assertEquals(entered, 0);
+    } finally {
+      await rt.close();
+    }
+  });
+}
+
+for (const [kind, make] of Object.entries(stores)) {
+  test(`${kind}: a grant checks the conversation and its caller rule inside the held transaction`, async () => {
+    const store = await make();
+    const rt = await createRuntime({
+      store,
+      // A cold PGlite read must use the held connection. The other stores also exercise a warm cache.
+      cache: kind === "pglite" ? false : undefined,
+      plugins: [{
+        ...probe,
+        labels,
+        collections: {
+          ...probe.collections,
+          member: {
+            schema: {
+              type: "object",
+              properties: {
+                space: { type: "string" },
+                member: { type: "string" },
+                approved: { type: "boolean" },
+              },
+              required: ["space", "member"],
+            },
+          },
+        },
+        actions: {
+          preview: defineAction({
+            allow: people,
+            transaction: true,
+            run: async (ctx, input) => {
+              const members = ctx.db.collection("member");
+              await members.insertOne({
+                space: "thread:one",
+                member: "contact:guest",
+                approved: input.approved,
+              });
+              await members.countDocuments({}); // Force the writer open before asking for the grant.
+              return ctx.db.collection("secret").query("counted");
+            },
+            input: {
+              type: "object",
+              properties: { approved: { type: "boolean" } },
+              required: ["approved"],
+            },
+          }),
+          shareAndRead: defineAction({
+            as: "count",
+            allow: people,
+            transaction: true,
+            run: async (ctx) => {
+              // The insert and read ride in a single request from the same grant.
+              await ctx.db.collection("member").insertOne({
+                space: "thread:one",
+                member: "contact:guest",
+              });
+              return ctx.db.collection("secret").countDocuments({});
+            },
+          }),
+          "secret.count": defineAction({
+            as: "count",
+            record: false,
+            allow: async (who, _input, ctx) =>
+              people(who) ||
+              !!await ctx.db.collection("member").findOne({ space: "thread:one", approved: true }),
+            run: () => "staff result",
+          }),
+        },
+      }],
+    });
+    const actor = { kind: "agent", id: "staff", for: ana, thread: "one" };
+    try {
+      assertEquals(await rt.call("secret.count", {}, { actor }), "staff result");
+      await assertRejects(
+        () => rt.call("preview", { approved: false }, { actor }),
+        Error,
+        "goes beyond",
+      );
+      await assertRejects(() => rt.call("shareAndRead", {}, { actor }), Error, "goes beyond");
+      assertEquals(await store.count("member", {}), 0);
+      assertEquals(await rt.call("preview", { approved: true }, { actor }), "staff result");
+      assertEquals(await store.count("member", {}), 1);
     } finally {
       await rt.close();
     }

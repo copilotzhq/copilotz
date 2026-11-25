@@ -5,7 +5,14 @@
  * twice is kept once.
  */
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
-import { createRuntime, defineAction, defineCollection, definePlugin, type Store } from "../mod.ts";
+import {
+  createRuntime,
+  defineAction,
+  defineCollection,
+  definePlugin,
+  grant,
+  type Store,
+} from "../mod.ts";
 import { memoryStore } from "../../stores/memory/mod.ts";
 import { sqliteStore } from "../../stores/sql/sqlite/mod.ts";
 import { postgresStore } from "../../stores/sql/postgres/mod.ts";
@@ -175,6 +182,46 @@ each(
       );
     } finally {
       await runtime.close();
+    }
+  },
+);
+
+each(
+  "a final flush attempts each identity in order and reports the first refusal",
+  async (make) => {
+    const store = await make();
+    const rt = await createRuntime({
+      store,
+      plugins: [{
+        name: "metering",
+        collections: { used: ledger.collections!.used },
+        guard: (actor, { collection }) => {
+          if (collection === "used") throw new Error(`refused ${actor.id}`);
+        },
+        actions: {
+          mixed: defineAction({
+            record: false,
+            allow: () => true,
+            run: (ctx) => {
+              ctx.record("used", { meter: "ordinary", quantity: 0 });
+              const metered = ctx.as(grant("meter"));
+              metered.record("used", { _id: "first", meter: "grant", quantity: 1 });
+              ctx.as({ kind: "person", id: "bob" }).record("used", { meter: "other", quantity: 0 });
+              metered.record("used", { _id: "second", meter: "grant", quantity: 2 });
+            },
+          }),
+        },
+      }],
+    });
+    try {
+      await assertRejects(
+        () => rt.call("mixed", {}, { actor: { kind: "person", id: "ana" } }),
+        Error,
+        "refused ana",
+      );
+      assertEquals((await store.find("used", {})).map((r) => r._id), ["first", "second"]);
+    } finally {
+      await rt.close();
     }
   },
 );

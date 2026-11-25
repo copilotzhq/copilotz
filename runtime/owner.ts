@@ -56,8 +56,10 @@ import { checkHttp, createFetch, SOCKET } from "./fetch.ts";
 import { createTickets } from "./tickets.ts";
 import { memoryStore } from "./memory.ts";
 import {
+  type Attempt,
   type Hooks,
   isRead,
+  legacyCalls,
   nextAttempt,
   type Op,
   type Outcome,
@@ -891,7 +893,8 @@ export async function createOwner(
           ? cached(op)
           : read(reader, op),
     );
-  const answer = async (reader: Reader, op: ReadOp) => {
+  const answer = async (reader: Reader, op: ReadOp, staged?: Reader) => {
+    if (staged && inMemory(op)) return projecting(op, (readOp) => read(staged, readOp));
     const value = await stored(reader, op);
     return memory && inMemory(op) ? value : hydrate(value, blobsOf(reader));
   };
@@ -925,30 +928,37 @@ export async function createOwner(
     action?: string,
     rules = ruleReads,
     track?: (op: Op | Dep) => void,
+    load?: (op: ReadOp) => Promise<unknown>,
   ) {
     if (actor?.kind !== "system" || !actor.via || !action || !registry.labels?.elevate) return;
     const allow = registry.actions[action]?.allow;
     if (
       !await registry.labels.elevate(
         actor.via as Actor,
-        allow && ((who, input) => allow(who, input, callerReads(who, track))),
+        allow &&
+          ((who, input) => allow(who, input, callerReads(who, track, undefined, load, rules))),
         rules,
       )
     ) {
       throw forbidden(`"${action}" goes beyond what everyone in this conversation may see`);
     }
   }
-  const callerReads = (actor?: Actor, track?: (read: Op | Dep) => void, view?: string) => {
+  const callerReads = (
+    actor?: Actor,
+    track?: (read: Op | Dep) => void,
+    view?: string,
+    load?: (op: ReadOp) => Promise<unknown>,
+    rules = actor && track ? ruling(track) : ruleReads,
+  ) => {
     // An actor's Views see what they reach, and what the rules read to
     // know it (memberships) is what they read too, kept or not: they follow its changes.
-    const rules = actor && track ? ruling(track) : ruleReads;
     // Reads as `who`, within their reach; `hide`: without private fields.
     const runFor = (who: Actor | undefined, hide: boolean, action?: string) => async (op: Op) => {
-      await checkElevation(who, action, rules, track);
+      await checkElevation(who, action, rules, track, load);
       known(op);
       track?.(op);
       const [read] = (await guard([op as ReadOp], who, rules)).ops;
-      const value = await answer(store, read as ReadOp);
+      const value = load ? await load(read as ReadOp) : await answer(store, read as ReadOp);
       return hide ? hidden(read as ReadOp, value) : value;
     };
     // An unrecorded Action the View calls may act as someone else, as from an Action: the
@@ -965,7 +975,7 @@ export async function createOwner(
         known(op);
         const who = origin?.actor ?? actor;
         void (async () => {
-          await checkElevation(who, origin?.action, rules, track);
+          await checkElevation(who, origin?.action, rules, track, load);
           const { ops, keep } = await guard([op], who, rules);
           await writeEach(ops, { actor: who, keep, foreign: true });
         })().catch(() => {});
@@ -1081,9 +1091,7 @@ export async function createOwner(
     const values: unknown[] = [];
     for (const op of ops) {
       if (isRead(op)) {
-        const value = staged && inMemory(op)
-          ? await projecting(op, (readOp) => read(staged, readOp))
-          : await answer(tx, op);
+        const value = await answer(tx, op, staged);
         by.saw?.(op, value);
         values.push(value);
       } else if (staged && memoryHooks && inMemory(op)) {
@@ -1098,7 +1106,10 @@ export async function createOwner(
   // Who reaches what: the plugins' rules, as filters (see `Guard`). They read freely, and what
   // they work out over and over (reach) is kept until a commit changes what it read (kept.ts).
   // `track` hears each read, kept or not: an observed View follows what its rules read.
-  function ruling(track?: (dep: Dep) => void): ReadContext {
+  function ruling(
+    track?: (dep: Dep) => void,
+    load?: (op: ReadOp) => Promise<unknown>,
+  ): ReadContext {
     return reading(
       registry,
       (op) => {
@@ -1106,13 +1117,14 @@ export async function createOwner(
           const dep = depOf(op);
           if (dep) track(dep);
         }
-        return answer(store, op as ReadOp);
+        return load ? load(op as ReadOp) : answer(store, op as ReadOp);
       },
       (_, doc) => typeof doc._id === "string" ? doc._id : crypto.randomUUID(),
       metrics,
       outside,
       undefined,
-      (key, work, ctx) => kept ? kept.get(key, (heard) => work(ruling(heard)), track) : work(ctx),
+      (key, work, ctx) =>
+        kept && !load ? kept.get(key, (heard) => work(ruling(heard)), track) : work(ctx),
     );
   }
   const ruleReads = ruling();
@@ -1418,18 +1430,29 @@ export async function createOwner(
 
   // Labels: what each actor's job read, carried to what it then writes (see `Labels`).
   const labelled = new Map<string, Set<string>>();
-  const notice = (job: string, actor: Actor | undefined, op: ReadOp, value: unknown) => {
+  const notice = (
+    job: string,
+    actor: Actor | undefined,
+    op: ReadOp,
+    value: unknown,
+    rules = ruleReads,
+  ) => {
     if (!registry.labels || !actor || actor.kind === "system" || !("collection" in op)) return;
     if (op.op !== "find" && op.op !== "findOne" && op.op !== "nearest") return;
     const docs = (Array.isArray(value) ? value : value ? [value] : []) as Record<string, unknown>[];
     if (!docs.length) return;
-    const found = registry.labels.read(op.collection, docs, ruleReads);
+    const found = registry.labels.read(op.collection, docs, rules);
     if (!found.length) return;
     if (!labelled.has(job)) labelled.set(job, new Set());
     for (const one of found) labelled.get(job)!.add(one);
   };
   /** An actor's inserts and replaces, as the labels have them, given what their job read. */
-  const label = async (ops: StoreOp[], actor: Actor | undefined, job: string) => {
+  const label = async (
+    ops: StoreOp[],
+    actor: Actor | undefined,
+    job: string,
+    rules = ruleReads,
+  ) => {
     const labels = registry.labels;
     if (!labels || !actor || actor.kind === "system") return ops;
     if (!ops.some((op) => op.op === "insert" || op.op === "replace")) return ops;
@@ -1439,14 +1462,14 @@ export async function createOwner(
         return {
           ...op,
           docs: await Promise.all(
-            op.docs.map((doc) => labels.write(actor, op.collection, doc, seen, ruleReads)),
+            op.docs.map((doc) => labels.write(actor, op.collection, doc, seen, rules)),
           ) as typeof op.docs,
         };
       }
       if (op.op === "replace") {
         return {
           ...op,
-          doc: await labels.write(actor, op.collection, op.doc, seen, ruleReads) as typeof op.doc,
+          doc: await labels.write(actor, op.collection, op.doc, seen, rules) as typeof op.doc,
         };
       }
       return op;
@@ -1454,12 +1477,7 @@ export async function createOwner(
   };
 
   // Transactions an executor holds open across several calls, bound to the job that opened them.
-  /** A request to a held transaction, its timer ops already writes. */
-  type HeldRequest = Omit<Extract<OpRequest, { tx: string }>, "ops"> & {
-    ops: StoreOp[];
-    keep?: Map<string, Filter>;
-    saw?: By["saw"];
-  };
+  type HeldRequest = Extract<OpRequest, { tx: string }>;
   type Held = { job: string; send(request: HeldRequest): Promise<unknown> };
   const held = new Map<string, Held>();
   const heldBy = new Map<string, Set<string>>();
@@ -1475,14 +1493,6 @@ export async function createOwner(
     if (!endedBy.has(job)) endedBy.set(job, new Set());
     endedBy.get(job)!.add(id);
   };
-  /** Ends a job's transaction under it, a request in it refused: rolled back, closed to it. */
-  const refuse = async (job: string, id: string) => {
-    ended(job, id);
-    const transaction = held.get(id);
-    if (transaction?.job !== job) return;
-    await transaction.send({ tx: id, ops: [], end: "abort" }).catch(() => {});
-  };
-
   const hold = (id: string, job: string): Held => {
     type Message = {
       request: HeldRequest;
@@ -1492,6 +1502,7 @@ export async function createOwner(
     let wake: (() => void) | undefined;
     let closed = false;
     let idle = false;
+    let refused = false;
     let ending: { reply: PromiseWithResolvers<unknown>; value: unknown } | undefined;
     // Armed only while it waits on its executor: from an answer to the next request.
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1523,24 +1534,23 @@ export async function createOwner(
     commit(
       async (tx, seen, staged) => {
         began = performance.now();
+        const load = (op: ReadOp) => answer(tx, op, staged);
+        const rules = ruling(undefined, load);
         for (;;) {
           const { request, reply } = await next();
+          if (request.end === "abort") {
+            ending = { reply, value: undefined };
+            throw aborted;
+          }
           let value: unknown;
-          // As in MongoDB, a failed op aborts its transaction.
           try {
-            value = await performAll(
-              tx,
-              request.ops,
-              {
-                ...(request.cause ? { cause: request.cause } : {}),
-                ...(request.actor ? { actor: request.actor } : {}),
-                ...(request.keep?.size ? { keep: request.keep } : {}),
-                ...(request.saw ? { saw: request.saw } : {}),
-                foreign: true,
-              },
-              seen,
-              staged,
-            );
+            // A queued write can change who may read the very next op in the same request.
+            for (const op of request.ops) {
+              refused = true;
+              const { ops, by } = await prepareOps({ ...request, ops: [op] }, job, rules, load);
+              refused = false;
+              value = await performAll(tx, ops, by, seen, staged);
+            }
           } catch (error) {
             reply.reject(error);
             throw error;
@@ -1552,7 +1562,6 @@ export async function createOwner(
             continue;
           }
           ending = { reply, value };
-          if (request.end === "abort") throw aborted;
           return;
         }
       },
@@ -1565,7 +1574,7 @@ export async function createOwner(
       (error) => {
         closed = true;
         const outcome = error !== aborted ? "error" : idle ? "idle" : "abort";
-        measured(outcome);
+        measured(refused ? "abort" : outcome);
         if (outcome !== "abort") ended(job, id);
         for (const { reply } of inbox.splice(0)) reply.reject(error);
         if (error === aborted) ending?.reply.resolve(undefined);
@@ -1582,6 +1591,28 @@ export async function createOwner(
     heldBy.get(job)!.add(id);
     return entry;
   };
+
+  async function prepareOps(
+    request: OpRequest,
+    job: string,
+    rules = ruleReads,
+    load?: (op: ReadOp) => Promise<unknown>,
+  ) {
+    await checkElevation(request.actor, request.action ?? acting.get(job), rules, undefined, load);
+    const lowered = request.ops.map((op) => timers.lower(op, request.actor));
+    lowered.forEach(known);
+    const guarded = await guard(lowered, request.actor, rules);
+    return {
+      ops: await label(guarded.ops, request.actor, job, rules),
+      by: {
+        cause: request.cause,
+        actor: request.actor,
+        keep: guarded.keep,
+        saw: (op: ReadOp, value: unknown) => notice(job, request.actor, op, value, rules),
+        foreign: true as const,
+      },
+    };
+  }
 
   const serve = (request: OpRequest, job: string): Promise<unknown> => {
     const started = performance.now();
@@ -1612,36 +1643,15 @@ export async function createOwner(
     if (request.actor?.kind === "system" && request.actor.via) {
       measure.elevated.add(request.ops.length, { grant: request.actor.id });
     }
-    let ops: StoreOp[], keep: Map<string, Filter>;
-    try {
-      await checkElevation(request.actor, request.action ?? acting.get(job));
-      const lowered = request.ops.map((op) => timers.lower(op, request.actor));
-      lowered.forEach(known);
-      const guarded = await guard(lowered, request.actor);
-      keep = guarded.keep;
-      ops = await label(guarded.ops, request.actor, job);
-    } catch (error) {
-      // Refused before it reaches its transaction (by the rules, say), a request ends it, as a
-      // failed op in it does: else the transaction would keep the store's writer, and every
-      // other write would wait, until it sat idle long enough.
-      if ("tx" in request) await refuse(job, request.tx);
-      throw error;
-    }
-    const saw = (op: ReadOp, value: unknown) => notice(job, request.actor, op, value);
     if (!("tx" in request)) {
+      const { ops, by } = await prepareOps(request, job);
       const [first, ...rest] = ops;
       if (!rest.length && isRead(first)) {
         const value = await answer(store, first);
-        saw(first, value);
+        by.saw(first, value);
         return request.outside ? hidden(first, value) : value;
       }
-      return write(ops, {
-        ...(request.cause ? { cause: request.cause } : {}),
-        ...(request.actor ? { actor: request.actor } : {}),
-        ...(keep.size ? { keep } : {}),
-        saw,
-        foreign: true,
-      });
+      return write(ops, by);
     }
     let transaction = held.get(request.tx);
     if (transaction && transaction.job !== job) throw invalid("Not this job's transaction.");
@@ -1650,8 +1660,8 @@ export async function createOwner(
       if (endedBy.get(job)?.has(request.tx)) throw invalid("The transaction is closed.");
       transaction = hold(request.tx, job);
     }
-    const value = await transaction.send({ ...request, ops, keep, saw });
-    const last = ops.at(-1);
+    const value = await transaction.send(request);
+    const last = request.ops.at(-1);
     return request.outside && last && isRead(last) ? hidden(last, value) : value;
   };
 
@@ -2095,7 +2105,8 @@ export async function createOwner(
       ) throw conflict(id);
       if (prior.completed) return prior.result;
     }
-    const { attempt, after, callNumbering } = nextAttempt(prior);
+    const retry = nextAttempt(prior);
+    const { attempt, after, callNumbering } = retry;
     const begun = performance.now();
     const startedAt = new Date().toISOString();
     try {
@@ -2104,9 +2115,7 @@ export async function createOwner(
         action,
         input,
         id,
-        attempt,
-        callNumbering,
-        ...(after ? { after } : {}),
+        ...retry,
         ...(scheduled ? { scheduled } : {}),
         ...(actor ? { actor } : {}),
       }, signal);
@@ -2218,12 +2227,34 @@ export async function createOwner(
   };
 
   const attempts = async (name: string, event: Event, recovered: boolean, stop: AbortSignal) => {
+    let callNumbering: Attempt["callNumbering"] | undefined;
     for (let attempt = 1;; attempt++) {
       try {
+        // Save the version before dispatch. An unmarked event awaiting redelivery may
+        // already have effects from rc.63, even when its Processor never recorded a failure.
+        callNumbering ??= await commit(async (tx) => {
+          const key = { _id: JSON.stringify([name, event.id]) };
+          const previous = recovered ? await tx.findOne("sys.deliveries", key) : null;
+          const callNumbering = previous ? previous.callNumbering : recovered ? 1 : 2;
+          if (callNumbering !== 1 && callNumbering !== 2) {
+            throw invalid(
+              `Unknown call numbering for Processor "${name}" delivering "${event.id}".`,
+            );
+          }
+          if (!previous) {
+            await tx.insert("sys.deliveries", [{ ...key, callNumbering }], { ifAbsent: true });
+          }
+          return callNumbering;
+        });
+        const children = callNumbering === 1
+          ? legacyCalls(await store.related(event.id, ["action.started"]), event.id)
+          : undefined;
         const full = await whole(event);
         await run({
           kind: "process",
           processor: name,
+          callNumbering,
+          legacyCalls: children,
           event: full,
           retry: recovered || attempt > 1,
         }, stop);
@@ -2284,7 +2315,7 @@ export async function createOwner(
    * can be past an event that commits after it.
    */
   function route(event: Event, live = false) {
-    const retry = recovering;
+    const retry = recovering && !live;
     head = Math.max(head, event.seq);
     for (const [name, processor] of Object.entries(registry.processors)) {
       if (!live && event.seq <= (saved.get(name) ?? 0)) continue;

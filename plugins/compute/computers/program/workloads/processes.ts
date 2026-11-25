@@ -11,6 +11,7 @@
  */
 import { spawn } from "node:child_process";
 import { constants } from "node:os";
+import { delimiter, join } from "node:path";
 import process from "node:process";
 import { fail } from "./answer.ts";
 
@@ -51,6 +52,22 @@ export function childEnv(given?: Record<string, string>): Record<string, string>
     if (value !== undefined && !key.startsWith("COPILOTZ_")) env[key] = value;
   }
   return given ? { ...env, ...given } : env;
+}
+
+/**
+ * What work's environment has over the person's when it runs in a home of
+ * its own (a cloud computer's, on its disk: see pool.ts): `HOME`, npm's
+ * global prefix under it, and the folders both put programs in first on the
+ * `PATH`. A CLI installed there (`curl … | bash`, `npm i -g`) is found, and
+ * stays with the disk.
+ */
+export function homeEnv(home: string): Record<string, string> {
+  const bins = [join(home, ".local", "bin"), join(home, ".npm-global", "bin")];
+  return {
+    HOME: home,
+    NPM_CONFIG_PREFIX: join(home, ".npm-global"),
+    PATH: [...bins, ...(process.env.PATH ? [process.env.PATH] : [])].join(delimiter),
+  };
 }
 
 /** Whether process `pid` is running. */

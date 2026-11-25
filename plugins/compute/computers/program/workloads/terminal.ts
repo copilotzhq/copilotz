@@ -90,8 +90,17 @@ function where(folder: string, cwd: string) {
   return path.split(sep).join("/");
 }
 
-/** The shells of every space on this computer, each a `program` (bash, or PowerShell). */
-export function createShells(spaces: Spaces, program: Program, limits: ShellLimits = {}) {
+/**
+ * The shells of every space on this computer, each a `program` (bash, or
+ * PowerShell); `base` is what their environment has over the person's (a
+ * cloud computer's home: homeEnv).
+ */
+export function createShells(
+  spaces: Spaces,
+  program: Program,
+  limits: ShellLimits = {},
+  base?: Record<string, string>,
+) {
   const yieldMs = limits.yieldMs ?? 1000;
   const idleMs = limits.idleMs ?? 5 * 60_000;
   const runtimeMs = limits.runtimeMs ?? 10 * 60_000;
@@ -185,7 +194,7 @@ export function createShells(spaces: Spaces, program: Program, limits: ShellLimi
     const token = randomBytes(8).toString("hex");
     const child = spawn(program.path, shellArgs(program, directory, token), {
       cwd: folder,
-      env: childEnv(env),
+      env: childEnv({ ...base, ...env }),
       stdio: ["pipe", "pipe", "pipe"],
       // Its own process group (see processes.ts): signals reach everything a command starts.
       ...OWN,

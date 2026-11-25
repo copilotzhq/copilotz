@@ -3,12 +3,13 @@
  * functions: the plans (each CLI, the words it's named with and its official
  * install), how one computer stands for one plan (signed in, installed,
  * missing, not checked, or shared with others' agents, so it can't be
- * used), which computer a sign-in goes to first, and a CLI's output and
- * links as they're safe to show.
+ * used), which computer a sign-in goes to first, whether Sign in can
+ * install a missing CLI there first, and a CLI's output and links as
+ * they're safe to show.
  */
 import type { Computer } from "../../collections/computer.ts";
 import type { Desk } from "../../collections/desk.ts";
-import type { EngineName, EngineSeen } from "../../shared/engines.ts";
+import { type EngineName, type EngineSeen, INSTALL } from "../../shared/engines.ts";
 import { say } from "./words.ts";
 
 /** A plan: its engine (the CLI), its provider, and the command that installs the CLI. */
@@ -23,20 +24,17 @@ export type Plan = {
   about: string;
 };
 
-const INSTALL: Record<EngineName, { provider: string; install: string }> = {
-  claude: { provider: "claude-plan", install: "curl -fsSL https://claude.ai/install.sh | bash" },
-  codex: { provider: "codex-plan", install: "npm i -g @openai/codex" },
-  antigravity: {
-    provider: "gemini-plan",
-    install: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
-  },
+const OF: Record<EngineName, { provider: string; install: string }> = {
+  claude: { provider: "claude-plan", install: INSTALL.claude },
+  codex: { provider: "codex-plan", install: INSTALL.codex },
+  antigravity: { provider: "gemini-plan", install: INSTALL.antigravity },
 };
 
 /** The plans, in their order, named in the app's words. */
 export const plans = (): Plan[] => [
   {
     engine: "claude",
-    ...INSTALL.claude,
+    ...OF.claude,
     title: say("claudeTitle"),
     plan: say("claudePlan"),
     cli: say("claudeCli"),
@@ -44,7 +42,7 @@ export const plans = (): Plan[] => [
   },
   {
     engine: "codex",
-    ...INSTALL.codex,
+    ...OF.codex,
     title: say("codexTitle"),
     plan: say("codexPlan"),
     cli: say("codexCli"),
@@ -52,7 +50,7 @@ export const plans = (): Plan[] => [
   },
   {
     engine: "antigravity",
-    ...INSTALL.antigravity,
+    ...OF.antigravity,
     title: say("antigravityTitle"),
     plan: say("antigravityPlan"),
     cli: say("antigravityCli"),
@@ -116,6 +114,15 @@ export function startable(m: Machine, engine: EngineName): boolean {
   const { state } = standingOf(m, engine);
   return reachable(m) && state !== "shared" && state !== "missing";
 }
+
+/**
+ * Whether Sign in can install its missing CLI there first, with its
+ * official installer: reachable, its CLI missing, and not Windows (there,
+ * the person installs it).
+ */
+export const installable = (m: Machine, engine: EngineName): boolean =>
+  reachable(m) && standingOf(m, engine).state === "missing" &&
+  (m.computer.info as { os?: string } | undefined)?.os !== "win32";
 
 /**
  * The computers a sign-in may go to, best first: not shared; reachable
@@ -240,17 +247,19 @@ export type LoginEvent = { step: LoginStep } | { error: unknown };
 /**
  * Signs `engine` in on `computer` (`computer.engine.login`): asks again every
  * `every` ms while it runs, one call at a time, each answer to `on`, until
- * it's done or fails. `send` hands the CLI what the person typed (on the
+ * it's done or fails. `install`: its first call has the CLI installed first
+ * when it's missing there. `send` hands the CLI what the person typed (on the
  * next call, at once when none is under way); `stop` ends it there too;
  * `leave` stops asking without telling it (it's done, or gone).
  */
 export function signingIn(
-  { call, computer, engine, on, every = 1000 }: {
+  { call, computer, engine, on, every = 1000, install = false }: {
     call<R = unknown>(action: string, input?: unknown): Promise<R>;
     computer: string;
     engine: EngineName;
     on(event: LoginEvent): void;
     every?: number;
+    install?: boolean;
   },
 ): { send(text: string): void; stop(): void; leave(): void } {
   let over = false;
@@ -262,12 +271,15 @@ export function signingIn(
     clearTimeout(timer);
     flying = true;
     const input = typed;
+    const installing = install;
     typed = undefined;
+    install = false;
     try {
       const step = await call<LoginStep>("computer.engine.login", {
         computer,
         engine,
         ...(input !== undefined ? { input } : {}),
+        ...(installing ? { install: true } : {}),
       });
       flying = false;
       if (over) return;

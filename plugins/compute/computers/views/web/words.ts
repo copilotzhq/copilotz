@@ -72,6 +72,13 @@ export const say = defineWords("computers", {
   installAnywhere: "In a terminal on that computer, run:",
   installCommand: "The command that installs {cli}",
   installThen: "Then check again here. It's {cli}'s official install.",
+  installAndSignIn: "Install {cli} and sign in",
+  installRuns:
+    "{cli} isn't installed on {computer} yet. Signing in runs {cli}'s official installer there first:",
+  stepInstall: "Installing {cli} on {computer}",
+  installFailedTitle: "{cli} didn't install on {computer}",
+  installFailedText:
+    "Its installer stopped. What it said last is below, and how to install it yourself.",
 
   // A computer shared with others' agents
   sharedTitle: "{computer} is shared with others' agents",

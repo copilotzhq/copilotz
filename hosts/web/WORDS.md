@@ -326,10 +326,14 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.hideInstall` | Hide |
 | `computers.howToFix` | How to use it |
 | `computers.howToInstall` | How to install |
+| `computers.installAndSignIn` | Install {cli} and sign in |
 | `computers.installAnywhere` | In a terminal on that computer, run: |
 | `computers.installCommand` | The command that installs {cli} |
+| `computers.installFailedText` | Its installer stopped. What it said last is below, and how to install it yourself. |
+| `computers.installFailedTitle` | {cli} didn't install on {computer} |
 | `computers.installIn` | In a terminal on {computer}, run: |
 | `computers.installMissing` | {cli} isn't installed on {computer} yet. In a terminal there, run: |
+| `computers.installRuns` | {cli} isn't installed on {computer} yet. Signing in runs {cli}'s official installer there first: |
 | `computers.installThen` | Then check again here. It's {cli}'s official install. |
 | `computers.keepAsIs` | Keep it as it is |
 | `computers.keepBoth` | Keep both |
@@ -396,6 +400,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.start` | Start signing in |
 | `computers.stepCode` | Paste the code it gives you |
 | `computers.stepEnterCode` | Open the sign-in page, sign in with the account that has your plan, and enter this code there: |
+| `computers.stepInstall` | Installing {cli} on {computer} |
 | `computers.stepSaved` | Saved {file} to {path} |
 | `computers.stepSaves` | Saves {file} to {path} |
 | `computers.stepSavesFile` | Saves a file from this chat to {path} |

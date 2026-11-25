@@ -17,7 +17,14 @@
  * empty: but for a native agent's rules (`AGENTS.md`, its instructions),
  * which it has no prompt of its own to replace with.
  *
- * Signing in is the CLI's own, polled like the terminal (`login`).
+ * Signing in is the CLI's own, polled like the terminal (`login`). Given
+ * its official installer (`install`) while the CLI is missing, it runs that
+ * first, in the computer's home, then the sign-in: not on Windows, where the
+ * person installs it.
+ *
+ * CLIs are looked for on the `PATH`, then where each installs, in the home
+ * the computer's work runs in: a cloud computer's, on its disk, so one
+ * installed there is found on its next wake too (see computer.ts's `home`).
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -27,7 +34,7 @@ import { delimiter, join } from "node:path";
 import process from "node:process";
 import type { EngineStatus, LoginInput, LoginState } from "../../shared/workloads.ts";
 import { fail } from "../workloads/answer.ts";
-import { childEnv, OWN, signalGroup, WINDOWS } from "../workloads/processes.ts";
+import { childEnv, homeEnv, OWN, signalGroup, WINDOWS } from "../workloads/processes.ts";
 import { claude } from "./claude.ts";
 import { codex } from "./codex.ts";
 import { agentError, spawnPeer } from "./rpc.ts";
@@ -160,7 +167,10 @@ const SIGNING = 15 * 60_000;
 const YIELD = 1_000;
 
 type Login = {
+  /** What runs now: its installer, then its sign-in. */
   child: ChildProcess;
+  /** What runs once the installer succeeds: its sign-in. */
+  then?: () => Promise<ChildProcess>;
   /** What it wrote since the last answer. */
   output: string;
   url?: string;
@@ -176,6 +186,11 @@ export type EnginesOptions = {
   /** Each engine's CLI, by name: found unless given; null for none. */
   commands?: Record<string, string | null>;
   log: (line: string) => void;
+  /**
+   * The home the computer's work runs in (homeEnv), when it has one of its
+   * own: CLIs are looked for, and installed, there.
+   */
+  home?: string;
 };
 
 export type Engines = {
@@ -193,8 +208,16 @@ export type Engines = {
 
 /** The engines of the computer at `root`. */
 export function createEngines(options: EnginesOptions): Engines {
-  const user = homedir();
+  const user = options.home ?? homedir();
+  const base = options.home ? homeEnv(options.home) : undefined;
   const logins = new Map<string, Login>();
+
+  /** The computer's environment, without any provider's credentials. */
+  const cleanEnv = () => {
+    const env = childEnv(base);
+    for (const key of CREDENTIALS) delete env[key];
+    return env;
+  };
 
   const engineOf = (name: unknown): Engine => {
     if (typeof name !== "string" || !Object.hasOwn(ENGINES, name)) {
@@ -208,7 +231,7 @@ export function createEngines(options: EnginesOptions): Engines {
     const given = options.commands?.[engine.name];
     if (given !== undefined) return given ?? undefined;
     const name = WINDOWS ? `${engine.binary}.exe` : engine.binary;
-    const path = process.env.PATH ?? process.env.Path ?? "";
+    const path = base?.PATH ?? process.env.PATH ?? process.env.Path ?? "";
     for (const dir of path.split(delimiter).filter(Boolean)) {
       if (await runnable(join(dir, name))) return join(dir, name);
     }
@@ -222,9 +245,7 @@ export function createEngines(options: EnginesOptions): Engines {
     const home = join(options.root, ".copilotz", "engines", engine.name);
     await mkdir(home, { recursive: true, mode: 0o700 });
     await engine.prepare?.(home);
-    const env = childEnv();
-    for (const key of CREDENTIALS) delete env[key];
-    return { engine, command, home, env: { ...env, ...engine.homeEnv(home) } };
+    return { engine, command, home, env: { ...cleanEnv(), ...engine.homeEnv(home) } };
   };
 
   /** Runs its CLI with `args` (and `stdin`) in its home, for at most `ASKING`. */
@@ -333,25 +354,35 @@ export function createEngines(options: EnginesOptions): Engines {
       login.wake.add(done);
     });
 
-  const startLogin = (found: Found): Login => {
-    const child = spawn(found.command, found.engine.login, {
+  /** Its CLI's own sign-in. */
+  const signIn = (found: Found) =>
+    spawn(found.command, found.engine.login, {
       cwd: found.home,
       env: found.env,
       stdio: ["pipe", "pipe", "pipe"],
       ...OWN,
     });
+
+  /** Its official installer, in the computer's home (nothing to answer: it reads no input). */
+  const installer = (command: string) =>
+    spawn("/bin/sh", ["-c", command], {
+      cwd: user,
+      env: cleanEnv(),
+      stdio: ["ignore", "pipe", "pipe"],
+      ...OWN,
+    });
+
+  /** A sign-in under way: `first`, then (when it succeeds) what `then` starts, as one output. */
+  const startLogin = (first: ChildProcess, then?: () => Promise<ChildProcess>): Login => {
     let ended!: () => void;
     const login: Login = {
-      child,
+      child: first,
+      then,
       output: "",
       done: false,
       exited: new Promise<void>((resolve) => ended = resolve),
       wake: new Set(),
-      timer: setTimeout(() => signalGroup(child.pid, "SIGTERM"), SIGNING),
-    };
-    const heard = (text: string) => {
-      login.output = (login.output + plain(text)).slice(-64 * 1024);
-      login.url ??= LINK.exec(login.output)?.[0];
+      timer: setTimeout(() => signalGroup(login.child.pid, "SIGTERM"), SIGNING),
     };
     const end = () => {
       if (login.done) return;
@@ -360,18 +391,39 @@ export function createEngines(options: EnginesOptions): Engines {
       for (const wake of [...login.wake]) wake();
       ended();
     };
-    child.stdout!.setEncoding("utf8").on("data", heard);
-    child.stderr!.setEncoding("utf8").on("data", heard);
-    child.stdin!.on("error", () => {});
-    child.once("error", (error) => {
-      heard(`${error.message}\n`);
-      end();
-    });
-    child.once("close", end);
+    /** Follows `child`: its sign-in link is looked for only in the sign-in's own output. */
+    const follow = (child: ChildProcess, signing: boolean) => {
+      login.child = child;
+      let said = "";
+      const heard = (text: string) => {
+        login.output = (login.output + plain(text)).slice(-64 * 1024);
+        if (!signing || login.url) return;
+        said = (said + plain(text)).slice(-64 * 1024);
+        login.url = LINK.exec(said)?.[0];
+      };
+      child.stdout!.setEncoding("utf8").on("data", heard);
+      child.stderr!.setEncoding("utf8").on("data", heard);
+      child.stdin?.on("error", () => {});
+      child.once("error", (error) => {
+        heard(`${error.message}\n`);
+        end();
+      });
+      child.once("close", (code) => {
+        const next = login.then;
+        login.then = undefined;
+        if (code !== 0 || !next) return end();
+        next().then((child) => follow(child, true), (error) => {
+          heard(`${error instanceof Error ? error.message : error}\n`);
+          end();
+        });
+      });
+    };
+    follow(first, !then);
     return login;
   };
 
   const stopLogin = async (login: Login) => {
+    login.then = undefined;
     if (!login.done) {
       signalGroup(login.child.pid, "SIGTERM");
       const timer = setTimeout(() => signalGroup(login.child.pid, "SIGKILL"), 2_000);
@@ -388,15 +440,24 @@ export function createEngines(options: EnginesOptions): Engines {
     async login(input) {
       const engine = engineOf(input?.engine).name;
       if (input.input !== undefined && typeof input.input !== "string") fail("input is text");
+      if (input.install !== undefined && typeof input.install !== "string") {
+        fail("install is a command");
+      }
+      const install = WINDOWS ? undefined : input.install;
       let login = logins.get(engine);
       if (input.stop) {
         if (login) await stopLogin(login);
       } else if (!login) {
         if (input.input) fail("No sign-in is under way: start one first", "not_found");
-        const found = await find(engine).catch((error) => fail(error.message, "missing"));
-        logins.set(engine, login = startLogin(found));
+        // Missing, it's installed first when it may be.
+        const found = await find(engine)
+          .catch((error) => install ? undefined : fail(error.message, "missing"));
+        login = found
+          ? startLogin(signIn(found))
+          : startLogin(installer(install!), () => find(engine).then(signIn));
+        logins.set(engine, login);
       } else if (input.input && !login.done) {
-        login.child.stdin!.write(input.input.endsWith("\n") ? input.input : `${input.input}\n`);
+        login.child.stdin?.write(input.input.endsWith("\n") ? input.input : `${input.input}\n`);
       }
       if (login && !login.done && !input.stop) await settle(login, YIELD);
       const output = login?.output ?? "";

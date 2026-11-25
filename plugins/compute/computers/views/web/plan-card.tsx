@@ -1,9 +1,10 @@
 /**
  * One plan on Connected accounts: what it does, whether it's signed in, and
  * each computer of the person's as it stands for it: signed in (as whom, its
- * CLI's version), installed but not signed in, its CLI missing (its official
- * install, on a tap), not checked yet, or shared with others' agents (why
- * it can't be used, on a tap). Offline, a computer says when it last said
+ * CLI's version), installed but not signed in, its CLI missing (installed
+ * and signed in on a tap, through the sign-in; on Windows, its official
+ * install to run by hand), not checked yet, or shared with others' agents
+ * (why it can't be used, on a tap). Offline, a computer says when it last said
  * so; a cloud computer says its state its kind's way. The one thing to do
  * comes first: Sign in, until it is.
  */
@@ -21,6 +22,7 @@ import {
 import type { IconName } from "../../../../../hosts/web/mod.ts";
 import { ComputerMark } from "./mark.tsx";
 import {
+  installable,
   isShared,
   listed,
   type Machine,
@@ -157,7 +159,13 @@ function Row(
   const at = "at" in standing ? standing.at : undefined;
   const version = "version" in standing ? standing.version : undefined;
   const can = startable(m, plan.engine);
-  const action = standing.state === "missing"
+  const action = standing.state === "missing" && installable(m, plan.engine)
+    ? (
+      <Button size="sm" onClick={signIn}>
+        {say("installAndSignIn", { cli: plan.cli })}
+      </Button>
+    )
+    : standing.state === "missing"
     ? (
       <Button
         size="sm"

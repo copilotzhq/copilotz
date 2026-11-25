@@ -338,7 +338,17 @@ export type StatusInput = { engines?: string[] };
  * first call starts its CLI's sign-in; `input` goes to it (a code pasted
  * after signing in elsewhere); an empty call polls; `stop` ends it.
  */
-export type LoginInput = { engine: string; input?: string; stop?: boolean };
+export type LoginInput = {
+  engine: string;
+  input?: string;
+  stop?: boolean;
+  /**
+   * Its CLI's official installer (a shell command), run first, in the
+   * computer's home, when the CLI is missing; the sign-in follows once it
+   * succeeds. Not on Windows.
+   */
+  install?: string;
+};
 
 export type LoginState = {
   state: "running" | "done";

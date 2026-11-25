@@ -73,6 +73,8 @@ export type JobsOptions = {
   kept?: string;
   /** Where what goes wrong with kept jobs is said. */
   log?: (line: string) => void;
+  /** What every job's environment has over the person's (a cloud computer's home: homeEnv). */
+  env?: Record<string, string>;
 };
 
 /** A port, as a job says it serves one. */
@@ -196,7 +198,7 @@ export function createJobs(spaces: Spaces, shell: Shell, options: JobsOptions = 
     const id = `job-${randomBytes(6).toString("hex")}`;
     const child = spawn(shell.path, commandArgs(shell, input.command), {
       cwd,
-      env: childEnv(env),
+      env: childEnv({ ...options.env, ...env }),
       stdio: ["ignore", "pipe", "pipe"],
       // Its own process group (see processes.ts), so stopping it reaches everything it starts.
       ...OWN,

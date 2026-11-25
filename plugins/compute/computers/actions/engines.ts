@@ -6,13 +6,22 @@
  * On a laptop the CLI opens their browser itself; elsewhere (a cloud
  * computer) it says a link, and the code its page shows goes back to it as
  * `input`. Nothing of the sign-in is kept here: only whether it's done.
+ * Asked to (`install`), it first runs the CLI's official installer there
+ * when the CLI is missing (macOS and Linux; `INSTALL`, never a command from
+ * the caller): the person's click is the consent.
  *
  * Only the person themselves, on their own computers. A computer that
  * sleeps isn't woken to be asked: it shows what it last said.
  */
 import { defineAction, forbidden, inPerson } from "../../../../runtime/mod.ts";
 import type { Computer } from "../collections/computer.ts";
-import { type EngineName, ENGINES, type EngineSeen, sharedWithOthers } from "../shared/engines.ts";
+import {
+  type EngineName,
+  ENGINES,
+  type EngineSeen,
+  INSTALL,
+  sharedWithOthers,
+} from "../shared/engines.ts";
 import { failed } from "../shared/failed.ts";
 import { wake } from "../shared/wake.ts";
 import { type EngineStatus, type LoginState, WORK } from "../shared/workloads.ts";
@@ -97,6 +106,8 @@ export const engineLoginAction = defineAction({
       input: { type: "string", maxLength: 4096 },
       /** Stops a sign-in under way. */
       stop: { type: "boolean" },
+      /** Installs the CLI first, with its official installer, when it's missing there (not on Windows). */
+      install: { type: "boolean" },
     },
     required: ["computer", "engine"],
     additionalProperties: false,
@@ -124,6 +135,7 @@ export const engineLoginAction = defineAction({
       engine: input.engine,
       ...(input.input !== undefined ? { input: input.input } : {}),
       ...(input.stop ? { stop: true } : {}),
+      ...(input.install ? { install: INSTALL[input.engine as EngineName] } : {}),
     });
     const error = failed(answer);
     if (error) throw error;

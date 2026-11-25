@@ -4,7 +4,8 @@
  * per plan (Claude, ChatGPT through Codex, Google AI through Antigravity),
  * each computer of theirs saying whether its CLI is installed and signed in,
  * as whom, and what to do: sign in (a dialog that picks the computer and
- * runs the CLI's own sign-in there), install the CLI (its official command),
+ * runs the CLI's own sign-in there, installing a missing CLI first on macOS
+ * and Linux), install the CLI by hand (its official command, on Windows),
  * or, on a computer others' agents work on as them, why it can't be used and
  * how to change that. With no computer yet, connecting one (or adding a
  * cloud computer, a kind's) comes first.

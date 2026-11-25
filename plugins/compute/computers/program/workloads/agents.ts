@@ -24,13 +24,14 @@ export type AgentsOptions = {
   stepMs?: number;
 };
 
-/** The engines' work, for the computer at `root`. */
+/** The engines' work, for the computer at `root` (its work in `home`, when it has one of its own). */
 export function createAgents(
   root: string,
   log: (line: string) => void,
   options: AgentsOptions = {},
+  home?: string,
 ) {
-  const engines = createEngines({ root, commands: options.commands, log });
+  const engines = createEngines({ root, commands: options.commands, log, home });
   const sessions = createSessions({ engines, log, ...options });
 
   const prompt: WorkerWorkHandler = async ({ input, signal }) => {

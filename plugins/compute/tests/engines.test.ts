@@ -5,6 +5,7 @@
  * step while the CLI waits; the next step sends the result and goes on with
  * the same answer. The next turn goes on in the same session with only
  * what's new. Someone with no plan signed in goes straight to the next model.
+ * Signing in asked to install sends the plan's official installer, and only then.
  */
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { join } from "node:path";
@@ -63,6 +64,8 @@ async function setup(
   fn: (s: {
     rt: Awaited<ReturnType<typeof createRuntime>>;
     asked: PromptInput[];
+    /** What sign-ins the computer was asked for. */
+    logins: Record<string, unknown>[];
     history: (thread: string, actor: Actor) => Promise<Message[]>;
     send: (said: string, actor: Actor, thread?: string) => Promise<string>;
   }) => Promise<void>,
@@ -91,6 +94,7 @@ async function setup(
     transports: [{ type: "in-process", config: { topic } }],
   });
   const asked: PromptInput[] = [];
+  const logins: Record<string, unknown>[] = [];
   const answer = cli(asked);
   try {
     const { space } = await rt.call<{ space: string }>("space.personal", {}, { actor: ana });
@@ -101,6 +105,10 @@ async function setup(
           encoder.encode(JSON.stringify([
             { engine: "claude", installed: true, signedIn: true, account: "ana@example.com" },
           ])),
+        [WORK.agentsLogin]: async ({ input }) => {
+          logins.push(JSON.parse(await new Response(input).text()));
+          return encoder.encode(JSON.stringify({ state: "done", output: "", signedIn: true }));
+        },
         [WORK.agentsPrompt]: async ({ input }) => {
           const events = answer(JSON.parse(await new Response(input).text()) as PromptInput);
           return new ReadableStream<Uint8Array>({
@@ -129,6 +137,7 @@ async function setup(
     await fn({
       rt,
       asked,
+      logins,
       history: (thread, actor) => rt.query<Message[]>("message.history", { thread }, { actor }),
       send: async (said, actor, thread) => {
         const where = actor === ana
@@ -190,6 +199,24 @@ test("someone with no plan signed in goes straight to the next model, and no com
     assertEquals(last.from, "north");
     assertStringIncludes(last.text ?? "", "hello there");
     assertEquals(s.asked.length, 0);
+  });
+});
+
+test("signing in asked to install sends the plan's official installer, and only then", async () => {
+  await setup(async (s) => {
+    const [mine] = await s.rt.call<{ computer: string }[]>("computer.engines", {}, { actor: ana });
+    const login = (more: Record<string, unknown> = {}) =>
+      s.rt.call("computer.engine.login", { computer: mine.computer, engine: "codex", ...more }, {
+        actor: ana,
+      });
+    await login();
+    await login({ install: true });
+    await login({ install: false });
+    assertEquals(s.logins, [
+      { engine: "codex" },
+      { engine: "codex", install: "npm i -g @openai/codex" },
+      { engine: "codex" },
+    ]);
   });
 });
 

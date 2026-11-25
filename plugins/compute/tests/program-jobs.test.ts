@@ -1,7 +1,7 @@
 /**
  * The computer's background jobs: started, listed, read and stopped by whose
  * they are; another agent neither sees nor stops them (its person's panel
- * lists them all).
+ * lists them all). On a laptop, they run in the person's own home, as before.
  */
 import { assert, assertEquals } from "@std/assert";
 import process from "node:process";
@@ -11,6 +11,7 @@ import {
   type JobsLogs,
   type JobsWaited,
   type Scope,
+  type TerminalResult,
   WORK,
 } from "../computers/shared/workloads.ts";
 import { setup, until } from "./program-setup.ts";
@@ -141,5 +142,26 @@ test({
       // Another's job isn't there to wait on.
       const refused = await work<Failed>(WORK.jobsWait, { scope: scope("agent:b"), id: nap.id });
       assertEquals(refused.error.code, "not_found");
+    }),
+});
+
+// The same as rc.64: only a cloud computer's work has a home of its own (program-pool.test.ts).
+test({
+  name: "on a laptop, jobs and the terminal run in the person's own home: HOME and PATH as given",
+  ignore: process.platform === "win32",
+  fn: () =>
+    setup(async ({ work }) => {
+      const said = 'printf "%s\\n" "$HOME" "$PATH" "${NPM_CONFIG_PREFIX-unset}"';
+      const job = await work<Job>(WORK.jobsStart, { scope: scope("agent:a"), command: said });
+      const ended = await work<JobsWaited>(WORK.jobsWait, { scope: scope("agent:a"), id: job.id });
+      const expected = `${process.env.HOME}\n${process.env.PATH}\n${
+        process.env.NPM_CONFIG_PREFIX ?? "unset"
+      }\n`;
+      assertEquals(ended.stdout, expected);
+      const shell = await work<TerminalResult>(WORK.terminal, {
+        scope: scope("agent:a"),
+        stdin: said,
+      });
+      assertEquals(shell.stdout, expected);
     }),
 });

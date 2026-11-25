@@ -21,6 +21,18 @@ import type { Desk } from "../collections/desk.ts";
 export const ENGINES = ["claude", "codex", "antigravity"] as const;
 export type EngineName = (typeof ENGINES)[number];
 
+/**
+ * Each engine's official installer, as its maker gives it (macOS and
+ * Linux): what Sign in runs on a computer whose CLI is missing
+ * (`computer.engine.login` with `install`), and what the web shows to run
+ * by hand.
+ */
+export const INSTALL: Record<EngineName, string> = {
+  claude: "curl -fsSL https://claude.ai/install.sh | bash",
+  codex: "npm i -g @openai/codex",
+  antigravity: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+};
+
 /** What a computer last said of an engine (`computer.engines` keeps it on the computer). */
 export type EngineSeen = {
   installed: boolean;

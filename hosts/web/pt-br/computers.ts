@@ -75,11 +75,17 @@ export const computers: Words = {
   "computers.hideInstall": "Ocultar",
   "computers.howToFix": "Como usar",
   "computers.howToInstall": "Como instalar",
+  "computers.installAndSignIn": "Instalar o {cli} e entrar",
   "computers.installAnywhere": "Num terminal nesse computador, rode:",
   "computers.installCommand": "O comando que instala o {cli}",
+  "computers.installFailedText":
+    "O instalador parou. O que ele disse por último está abaixo, e como instalar você mesmo.",
+  "computers.installFailedTitle": "O {cli} não foi instalado em {computer}",
   "computers.installIn": "Num terminal em {computer}, rode:",
   "computers.installMissing":
     "O {cli} ainda não está instalado em {computer}. Num terminal lá, rode:",
+  "computers.installRuns":
+    "O {cli} ainda não está instalado em {computer}. Para entrar, o instalador oficial do {cli} roda lá antes:",
   "computers.installThen": "Depois verifique de novo aqui. É a instalação oficial do {cli}.",
   "computers.keepAsIs": "Deixar como está",
   "computers.keepBoth": "Manter os dois",
@@ -172,6 +178,7 @@ export const computers: Words = {
   "computers.stepCode": "Cole o código que ela der",
   "computers.stepEnterCode":
     "Abra a página de login, entre com a conta que tem o seu plano, e digite este código lá:",
+  "computers.stepInstall": "Instalando o {cli} em {computer}",
   "computers.stepSaved": "Salvou {file} em {path}",
   "computers.stepSaves": "Salva {file} em {path}",
   "computers.stepSavesFile": "Salva um arquivo desta conversa em {path}",

@@ -3,8 +3,10 @@
  * agent's model call, its events streamed step by step; a tool call ends a
  * step and waits, held, for the next one to answer it; sessions go on in
  * the same process, are loaded again when they're gone, and are fixed to
- * what they were made with. With fake CLIs: Claude Code's stream-json
- * (program-agents-claude.ts), and a native ACP agent (program-agents-acp.ts).
+ * what they were made with. Signing in installs a missing CLI first, with
+ * the installer it's given. With fake CLIs: Claude Code's stream-json
+ * (program-agents-claude.ts), and a native ACP agent (program-agents-acp.ts),
+ * and fake installers (never the network).
  */
 import { assert, assertEquals, assertMatch } from "@std/assert";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -434,6 +436,77 @@ posix(
     });
     assertEquals(none.error.code, "not_found");
   }),
+);
+
+posix(
+  "signing in a missing CLI installs it first, in the computer's home; a failed installer says why",
+  async () => {
+    const dir = tempDir();
+    const home = join(tempDir(), "home");
+    const agy = fakeCli(dir, "agy", "./program-agents-acp.ts", join(dir, "agy.log"));
+    // Antigravity's installer, as a fake: it puts the CLI in ~/.local/bin, saying where.
+    const installer = join(dir, "install.sh");
+    writeFileSync(
+      installer,
+      `#!/bin/sh\necho "Installing into $HOME (from https://example.com/agy.tar.gz)"\n` +
+        `mkdir -p "$HOME/.local/bin" && cp '${agy}' "$HOME/.local/bin/agy"\necho Installed.\n`,
+      { mode: 0o755 },
+    );
+    // So no Antigravity of this machine's is found: only what's installed in the home.
+    const PATH = process.env.PATH;
+    process.env.PATH = "/usr/bin:/bin";
+    try {
+      await setup(async ({ work }) => {
+        const login = (input: Record<string, unknown>) =>
+          work<LoginState>(WORK.agentsLogin, { engine: "antigravity", ...input });
+        const poll = async (state: LoginState, done: (state: LoginState) => boolean) => {
+          let output = state.output;
+          while (!done(state)) output += (state = await login({})).output;
+          return { ...state, output };
+        };
+        const status = async () =>
+          (await work<EngineStatus[]>(WORK.agentsStatus, { engines: ["antigravity"] }))[0];
+
+        // Not asked to install: missing, as before.
+        const missing = await work<{ error: { code: string } }>(WORK.agentsLogin, {
+          engine: "antigravity",
+        });
+        assertEquals(missing.error.code, "missing");
+
+        // An installer that fails: what it said, and still not installed.
+        const failed = await poll(
+          await login({ install: "echo 'curl: (6) Could not resolve host' >&2; exit 6" }),
+          (state) => state.state === "done",
+        );
+        assertEquals([failed.signedIn, failed.url], [false, undefined]);
+        assertMatch(failed.output, /Could not resolve host/);
+        assertEquals((await status()).installed, false);
+
+        // Its installer, then its sign-in: the link is the sign-in's, not the installer's.
+        const linked = await poll(
+          await login({ install: `'${installer}'` }),
+          (state) => !!state.url || state.state === "done",
+        );
+        assertMatch(linked.output, new RegExp(`Installing into ${home}`));
+        assertMatch(linked.output, /Installed\.\nSign in at/);
+        assertEquals([linked.state, linked.url], ["running", "https://agy.example/login"]);
+        const done = await poll(
+          await login({ input: "good-code" }),
+          (state) => state.state === "done",
+        );
+        assertEquals(done.signedIn, true);
+        assertEquals(await status(), {
+          engine: "antigravity",
+          installed: true,
+          version: "1.4.2",
+          signedIn: true,
+        });
+        assert(existsSync(join(home, ".local", "bin", "agy")), "installed in the computer's home");
+      }, { home, agents: { commands: { claude: null, codex: null } } });
+    } finally {
+      process.env.PATH = PATH;
+    }
+  },
 );
 
 posix(

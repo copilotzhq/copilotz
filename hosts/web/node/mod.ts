@@ -31,6 +31,11 @@
  * process asks, so no two processes write the store at once and browsers
  * reconnect to the newer one instead of being fenced.
  *
+ * Both stop when the runtime they serve loses its store to another process
+ * anyway (`runtime.lost`): it has stopped serving (every request gets a 503
+ * to retry), and they stop listening and exit the process with code 1, so
+ * the platform starts a new one. `stopped` says what to do instead.
+ *
  * ```ts
  * import { lease, postgresPool, postgresStore } from "copilotz/stores/postgres";
  * import { serve } from "copilotz/web/node";

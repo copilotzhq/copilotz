@@ -53,6 +53,12 @@ On PostgreSQL there's also a **lease**: one process at a time writes the databas
 waits for it and asks for it. The one holding it stops listening, finishes what's running, and lets
 go.
 
+Run one instance of the salon: on Cloud Run, maximum instances 1. With more, each copy the platform
+adds takes the store from the one before, which hands over and stops. And a process that loses the
+store without handing over (another one opened it without the lease) finds out within seconds,
+answers 503 to everything, and `serve` exits it with code 1, so nothing is taken that can't be kept
+(see [One instance per store](../architecture/topology.md#one-instance-per-store)).
+
 ### Made once
 
 A kept desk is there the next time, and making it again fails with `duplicate_key`. `openDesk` lets
@@ -213,7 +219,8 @@ there, the salon said what the `caller` setting is for. And `npm test`:
 
 - **The same salon, laptop to server.** SQLite or PostgreSQL by one variable, and no change in the
   app.
-- **Deploys without two writers.** `serve` and the lease hand over from one process to the next.
+- **Deploys without two writers.** `serve` and the lease hand over from one process to the next, and
+  a process that loses the store anyway stops at once instead of taking what it can't keep.
 - **Online, honestly.** Customers come in from anywhere. Staff come in by invitation only.
 
 ## Your challenge

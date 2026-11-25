@@ -728,6 +728,8 @@ export async function sqliteStore(options: {
 
   const epochNow = () =>
     Number(one(writer, "SELECT value FROM main.meta WHERE key = 'epoch'")?.value);
+  /** Which store this is, in what a fenced owner logs. */
+  const which = `sqlite ${options.path}`;
 
   return {
     ...reader(committed),
@@ -758,7 +760,7 @@ export async function sqliteStore(options: {
         // The write lock is held from here to COMMIT, so the epoch can't move under us.
         writer.exec("BEGIN IMMEDIATE");
         try {
-          if (epochNow() !== owner) throw fenced();
+          if (epochNow() !== owner) throw fenced(which, epochNow());
           const emitted: Omit<Event, "seq" | "at">[] = [];
           const result = await work(transaction(emitted, options.maintenance ?? false));
           const at = new Date().toISOString();

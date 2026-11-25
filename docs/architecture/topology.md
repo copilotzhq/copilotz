@@ -1,6 +1,6 @@
 ---
 title: "Topology and runtimes"
-description: "Where the owner, its executors, plugins' workers and browsers run, what a turn costs, many runtimes behind one address, and the JavaScript runtimes Copilotz runs on."
+description: "Where the owner, its executors, plugins' workers and browsers run, one instance per store and what a second one does, what a turn costs, many runtimes behind one address, and the JavaScript runtimes Copilotz runs on."
 section: Architecture
 order: 6
 ---
@@ -40,6 +40,45 @@ deno task chat --listen=8787 --executors=0  # owner only; executors connect remo
 deno task executor --port=8787              # …from other terminals, as many as you like
 ```
 
+## One instance per store
+
+A store has one owner, in one process. Executors and workers may be many; the owner may not. On a
+platform that runs copies of a service, run one instance for each store: on Cloud Run, set the
+service's maximum instances to 1. A deploy still starts the new revision beside the old one, and
+`serve` with PostgreSQL's lease hands over between them (see
+[Shipping the salon](../getting-started/10-shipping-the-salon.md)).
+
+When a second process opens the store anyway (an instance the platform added, a deploy without the
+lease, a script), it moves the store's epoch and becomes its owner. The first one finds out at its
+next write, or within 5 seconds while idle: the owner checks its epoch whenever it hasn't committed
+since its last check (`fenceCheck`, in ms, on `createRuntime`; `false` for a store no other process
+can open). Then it stops serving, for good:
+
+- every request gets a 503 with `retry-after: 5`: routes, webhooks, `/connect`, the API, `/health`,
+  and sockets' upgrades;
+- its sockets are moved off: browsers, executors and computers connect again a moment later, to
+  whoever serves the address then;
+- its executors and workers are let go, and its timers and Processors stop;
+- nothing more goes to the store, not even the Processors' last positions (the new owner delivers
+  from the positions saved, at least once, as after any stop);
+- it logs one line, such as
+  `copilotz: This owner was fenced: another owner holds the store (postgres schema "app") at epoch 8. It held epoch 7, and stopped serving: every request gets 503 from now on.`
+
+Then `runtime.lost` resolves with the epoch it held and that line. What's left is the host's.
+`serve` and `listen` from `copilotz/web/node` (serving `runtime.fetch` itself) stop listening and
+exit the process with code 1, so the platform starts a new one; their `stopped` option says what to
+do instead. With `Deno.serve`, say it yourself:
+
+```ts
+Deno.serve({ port: 8080 }, runtime.fetch);
+runtime.lost.then(() => Deno.exit(1));
+```
+
+So a second instance costs seconds and delayed requests, not lost ones: senders that retry a 503
+(webhook providers, browsers reconnecting) get through to the owner. Two instances that both stay up
+still trade the store each time one starts, cutting each other's work, so it's a setting to fix, not
+a way to run.
+
 ## What a turn costs
 
 `deno task bench` measures the runtime's own cost per turn, with a scripted model that answers at
@@ -60,7 +99,9 @@ to see what a turn costs at production latency, and `--postgres=URL` runs it on 
 An app that serves many orgs gives each org a runtime of its own, with its own store and one writer.
 A pool, `runtimes` from `copilotz`, opens one on its first use and closes it after 30 idle minutes,
 and never runs 2 runtimes of one id at once. A directory runtime in front signs people in and sends
-each request to its org's `runtime.fetch`. See
+each request to its org's `runtime.fetch`. An org's runtime that loses its store answers 503 and
+stays so, without exiting the process (its other orgs are still its own), until the pool opens it
+again on its first use 30 minutes after the loss (`idleMs`). See
 [many orgs behind one address](../guides/many-orgs.md) and
 [the tenancy design](../../design/tenancy.md).
 

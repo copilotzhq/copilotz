@@ -10,6 +10,7 @@ export {
   type Bytes,
   createOwner,
   type Feed,
+  type Lost,
   type Owner,
   type Stats,
   type Transport,

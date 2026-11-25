@@ -162,3 +162,5 @@ Deno.serve(
   { port, hostname: "127.0.0.1", onListen: () => console.log(`http://localhost:${port}`) },
   runtime.fetch,
 );
+// Another process opened the same file: this one stopped serving (it said so), and goes.
+void runtime.lost.then(() => Deno.exit(1));

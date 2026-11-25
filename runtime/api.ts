@@ -835,7 +835,8 @@ function refusal(error: unknown, actor: Actor): Response {
     if (/^Unknown (action|query|collection)/.test(message)) {
       return failed(404, "not_found", message);
     }
-    console.error("api:", message);
+    // The store lost is the runtime's to tell, once (see `Owner.lost`); `fetch` answers it.
+    if (code !== "fenced") console.error("api:", message);
     return failed(500, "internal", "Something went wrong.");
   }
   if (status >= 500) console.error("api:", message);

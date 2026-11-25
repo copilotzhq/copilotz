@@ -213,3 +213,19 @@ test("a long Code 128 fits its PNG and PDF when width is omitted", async () => {
   await assertRejects(() => barcodePng(value, { width: 329 }), RangeError, "330");
   assertThrows(() => documentPdf([[{ ...label, width: 329 }]]), RangeError, "330");
 });
+
+test("an omitted barcode width uses the room from x to the receipt edge", () => {
+  const label = { barcode: "A".repeat(25), quiet: true, x: 8, y: 0, height: 10 };
+  assertThrows(() => documentPdf([[label]], { size: "receipt" }), RangeError, "330");
+  // A 330-point symbol fits exactly at x=8 on a 338-point page, quiet margins included.
+  assertThrows(() => documentPdf([[label]], { size: [337, 20] }), RangeError, "330");
+  assertEquals(
+    documentPdf([[label]], { size: [338, 20] }),
+    documentPdf([[{ ...label, width: 330 }]], { size: [338, 20] }),
+  );
+  const small = { ...label, barcode: "POS 12" };
+  assertEquals(
+    documentPdf([[small]], { size: "receipt" }),
+    documentPdf([[{ ...small, width: 219 }]], { size: "receipt" }),
+  );
+});

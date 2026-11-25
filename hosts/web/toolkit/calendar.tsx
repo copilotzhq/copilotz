@@ -147,10 +147,9 @@ export function shortPattern(): string {
  */
 export function parseDay(text: string, format?: DayFormat): string | undefined {
   const pattern = typeof format === "string" ? format : undefined;
-  const read = (by: string) => parsePattern(text, by, lang());
-  const found = read(pattern ?? shortPattern());
+  const found = parsePattern(text, pattern ?? shortPattern(), lang(), pattern === undefined);
   if (found || pattern) return found;
-  return isDay(text.trim()) ? text.trim() : read("yyyy-MM-dd");
+  return isDay(text.trim()) ? text.trim() : parsePattern(text, "yyyy-MM-dd", lang());
 }
 
 /** The start and end a value marks, and the days chosen (its ends, or the day). */

@@ -114,6 +114,14 @@ test("CSV quotes every cell and guards formulas, but not plain numbers", () => {
   assertStringIncludes(toCsv(sheet, { formulas: true }), '"=HYPERLINK(1)"');
 });
 
+test("JSON records keep sparse and missing cells as empty strings and explicit null as null", () => {
+  const row: (string | null)[] = [];
+  row[1] = null;
+  assertEquals(JSON.parse(toJson({ headers: ["Sparse", "Null", "Missing"], rows: [row] })), [
+    { Sparse: "", Null: null, Missing: "" },
+  ]);
+});
+
 test("JSON as records by header, or the table export's shape", () => {
   assertEquals(JSON.parse(toJson(sheet))[1], { Name: "=HYPERLINK(1)", Total: -3.5, Code: "+1" });
   const table = JSON.parse(toJson(sheet, { json: "table" }));

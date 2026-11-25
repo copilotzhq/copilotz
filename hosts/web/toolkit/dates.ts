@@ -271,8 +271,8 @@ export function formatPattern(at: string | Moment, pattern: string, locale = "en
 
 const escaped = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** Words between a pattern's letters, as people type them: any spaces, and a comma or none. */
-const loosely = (text: string): string => escaped(text).replace(/\s+/g, "\\s*").replace(/,/g, ",?");
+/** Unquoted spaces between fields may vary. */
+const spaced = (text: string): string => escaped(text).replace(/\s+/g, "\\s*");
 
 /** The letters that write a time of day. */
 const TIME_LETTERS = new Set(["HH", "H", "hh", "h", "mm", "ss", "a"]);
@@ -322,17 +322,23 @@ export function asciiDigits(text: string, locale: string): string {
  * language's; weekday names are skipped. Hours, minutes and seconds take one or two digits, and
  * seconds may be left out (with the words before them), or typed where the pattern has none.
  */
-function readPattern(text: string, pattern: string, locale: string): Read | undefined {
+function readPattern(
+  text: string,
+  pattern: string,
+  locale: string,
+  localeSeparators: boolean,
+): Read | undefined {
   const order: string[] = [];
   const months = new Map<string, string[]>();
   const tokens = [...pattern.matchAll(TOKENS)];
+  const timed = tokens.some(([token]) => TIME_LETTERS.has(token));
   const seconds = tokens.some(([token]) => token === "ss");
   let source = "";
   let last = 0;
   // Where the words since the last letter start, in `source`: what seconds left out take along.
   let words = 0;
   const literal = (end: number) => {
-    source += loosely(pattern.slice(last, end));
+    source += spaced(pattern.slice(last, end));
   };
   const digits = (kind: string) => {
     source += "(\\p{Nd}{1,2})";
@@ -343,15 +349,16 @@ function readPattern(text: string, pattern: string, locale: string): Read | unde
     last = hit.index + hit[0].length;
     const token = hit[0];
     if (token[0] === "'") {
-      source += loosely(token.slice(1, -1));
+      const quoted = token.slice(1, -1);
+      source += localeSeparators ? spaced(quoted).replace(/,/g, ",?") : escaped(quoted);
       continue;
     }
     if (token === "yyyy") {
       source += "(\\p{Nd}{4})";
       order.push("y");
     } else if (token === "yy") {
-      // Two digits, or the whole year typed.
-      source += "(\\p{Nd}{4}|\\p{Nd}{2})";
+      // A whole year typed into a day-time field must be separate from adjacent digits.
+      source += timed ? "((?<!\\p{Nd})\\p{Nd}{4}(?!\\p{Nd})|\\p{Nd}{2})" : "(\\p{Nd}{2})";
       order.push("yy");
     } else if (token === "MMMM" || token === "MMM") {
       const names = Array.from(
@@ -435,9 +442,14 @@ const dayRead = ({ year, month, day }: Read): string | undefined => {
  * case; weekday names are skipped. A pattern with no year, month or day can't be read, nor one
  * with a time's letters: `parseDayTime` reads those.
  */
-export function parsePattern(text: string, pattern: string, locale = "en"): string | undefined {
+export function parsePattern(
+  text: string,
+  pattern: string,
+  locale = "en",
+  localeSeparators = false,
+): string | undefined {
   if (hasTime(pattern)) return undefined;
-  const read = readPattern(text, pattern, locale);
+  const read = readPattern(text, pattern, locale, localeSeparators);
   return read && dayRead(read);
 }
 
@@ -683,22 +695,28 @@ export function dayTimePattern(locale = "en"): string {
  * `M/d/yyyy h:mm a` is `"2026-11-16 14:30"`. Day and month come in the pattern's order; hours
  * are 0–23 (`HH`), or 1–12 with AM or PM (`hh`, `a`: the language's words, or English's).
  * Seconds may be left out, or typed where the pattern has none; the value has them when the
- * pattern writes them, or when they were typed. Spaces between the parts may differ, and a comma may be
- * left out. Text that isn't a real day and time (February 30th, 25:00, 13 PM) is `undefined`.
+ * pattern writes them, or when they were typed. Spacing between fields can vary. A locale's
+ * generated separators also allow a comma to be left out. Text that isn't a real day and time
+ * (February 30th, 25:00, 13 PM) is `undefined`.
  *
  * With no pattern, it reads the language's own short date and time (`dayTimePattern`), and a
  * day-time as the toolkit keeps one (`2026-11-16 14:30`, or with a `T`). `locale` is the
  * language of month names and AM and PM (English by default; the page's is `lang()`). For the
  * moment it names, `dateOfDayTime`.
  */
-export function parseDayTime(text: string, pattern?: string, locale = "en"): DayTime | undefined {
+export function parseDayTime(
+  text: string,
+  pattern?: string,
+  locale = "en",
+  localeSeparators = pattern === undefined,
+): DayTime | undefined {
   const typed = text.trim();
   if (pattern === undefined) {
     const kept = typed.replace(/^(\d{4}-\d{2}-\d{2})T/, "$1 ");
     if (isDayTime(kept)) return kept;
   }
   const by = pattern ?? dayTimePattern(locale);
-  const read = readPattern(typed, by, locale);
+  const read = readPattern(typed, by, locale, localeSeparators);
   const day = read && dayRead(read);
   if (!read || !day || read.hour === undefined) return undefined;
   let hour = read.hour;

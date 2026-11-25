@@ -27,7 +27,13 @@ test("a server can use web/export declarations without installing React types", 
   const app = join(dir, "app.ts");
   writeFileSync(
     app,
-    `import { exportFile, tableSheet } from "./export.js";
+    `import { documentPdf, type Drawn, exportFile, tableSheet } from "./export.js";
+function barcodeWidth(item: Drawn): number {
+  return "barcode" in item ? item.width : 0;
+}
+const label = { barcode: "123", x: 8, y: 12, height: 20 };
+barcodeWidth({ ...label, width: 200 });
+documentPdf([[label]], { size: "receipt" });
 import { textOf } from "./toolkit/table-sheet.js";
 type Item = { price: number };
 const rows: Item[] = [{ price: 12 }];

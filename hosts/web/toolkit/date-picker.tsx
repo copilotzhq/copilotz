@@ -268,7 +268,9 @@ function DayField(
     const only = parseDay(typed, format);
     if (only || !timed) return only ? { day: only } : undefined;
     const at = parseDayTime(typed, dayTime, lang()) ??
-      (dayTime === undefined ? parseDayTime(typed, `${shortPattern()} HH:mm`, lang()) : undefined);
+      (dayTime === undefined
+        ? parseDayTime(typed, `${shortPattern()} HH:mm`, lang(), true)
+        : undefined);
     return at ? { day: at.slice(0, 10), clock: clockOf(at, START) } : undefined;
   };
   // A day chosen elsewhere (the calendar, a preset) is written; the one being typed stays as typed.

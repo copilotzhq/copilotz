@@ -528,10 +528,14 @@ export type Drawn =
     barcode: string;
     x: number;
     y: number;
-    width?: number;
+    width: number;
     height: number;
     color?: string;
   });
+
+/** documentPdf can size a barcode from its position and the page's width. */
+type BarcodeInput = Omit<Extract<Drawn, { barcode: string }>, "width"> & { width?: number };
+type DocumentItem = Drawn | BarcodeInput;
 
 /** A page's size in points: a name, `[width, height]`, or a width and `"fit"` (as tall as what's on it). */
 export type PageSize =
@@ -554,7 +558,7 @@ const SIZES: Record<string, { width: number; height: number | "fit" }> = {
 const n = (value: number) => String(Math.round(value * 100) / 100);
 
 /** How far down a drawn thing reaches, from the page's top. */
-function bottomOf(drawn: Drawn): number {
+function bottomOf(drawn: DocumentItem): number {
   if ("text" in drawn) {
     const size = drawn.size ?? 10;
     const lines = drawn.width === undefined
@@ -569,7 +573,8 @@ function bottomOf(drawn: Drawn): number {
 
 /** One page's drawing, as a content stream, its places turned to PDF's (from the bottom left). */
 function draw(
-  items: Drawn[],
+  items: DocumentItem[],
+  width: number,
   height: number,
   fonts: Set<PdfFont>,
   images: Map<PdfImage, string>,
@@ -630,7 +635,7 @@ function draw(
         } cm /${name} Do Q`,
       );
     } else {
-      const drawn = bars(item.barcode, item.width, item);
+      const drawn = bars(item.barcode, item.width ?? width - item.x, item);
       // Whole modules, as the screen's: a module is the most whole points that fit.
       ops.push(`${rgb(item.color ?? "#000")} rg`);
       for (const bar of drawn.bars) {
@@ -645,7 +650,7 @@ function draw(
 
 /** A document as PDF bytes: each page's drawing, on pages of one `size` (A4 by default). */
 export function documentPdf(
-  pages: Drawn[][],
+  pages: DocumentItem[][],
   { size = "a4", margin = 12 }: {
     size?: PageSize;
     /** Under what's drawn, on a page whose height fits it. */
@@ -663,7 +668,7 @@ export function documentPdf(
     const height = page.height === "fit"
       ? Math.ceil(Math.max(0, ...items.map(bottomOf)) + margin)
       : page.height;
-    return { width: page.width, height, stream: draw(items, height, fonts, images) };
+    return { width: page.width, height, stream: draw(items, page.width, height, fonts, images) };
   });
   return assemble(drawn, [...fonts], images);
 }

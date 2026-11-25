@@ -320,12 +320,7 @@ each("an action's writes are events caused by its start, committed with it", asy
   // `started` rode on the insert: one commit, consecutive sequence numbers.
   assertEquals(events[0].seq + 1, events[1].seq);
   const { startedAt, inputHash, ...started } = events[0].data;
-  assertEquals(started, {
-    action: "note.add",
-    input: { text: "hello" },
-    attempt: 1,
-    callNumbering: 2,
-  });
+  assertEquals(started, { action: "note.add", input: { text: "hello" }, attempt: 1 });
   assertEquals(inputHash, await fingerprint("note.add", { text: "hello" }));
   assert(Date.parse(String(startedAt)) <= Date.parse(events[0].at));
   assertEquals(events[1].data, { _id: id, doc: { _id: id, text: "hello" } });

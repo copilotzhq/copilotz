@@ -28,6 +28,7 @@ import {
   addDays,
   addMonth,
   addMonths,
+  asciiDigits,
   clampDay,
   formatPattern,
   isDay,
@@ -126,9 +127,9 @@ export function formatDay(day: string, format?: DayFormat): string {
 }
 
 /** The pattern `formatDay`'s short date is written by (`M/d/yyyy`, `dd/MM/yyyy`), read off a sample. */
-function shortPattern(): string {
+export function shortPattern(): string {
   const sample = formatDate(utcDate("2003-04-25"), { timeZone: "UTC" });
-  return sample.split(/(\d+)/).map((part, i) =>
+  return asciiDigits(sample, lang()).split(/(\d+)/).map((part, i) =>
     i % 2 === 0
       ? (part ? `'${part.replaceAll("'", "")}'` : "")
       : part === "2003"

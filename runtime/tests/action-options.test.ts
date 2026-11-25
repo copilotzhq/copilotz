@@ -9,6 +9,7 @@ import {
   inPerson,
   people,
   personOf,
+  type TransactionScope,
 } from "../mod.ts";
 import { READ_VIEW } from "../browsers.ts";
 import { describe } from "../describe.ts";
@@ -337,6 +338,81 @@ for (
       await runtime.close();
     }
   });
+
+  for (const rule of ["sync", "async"]) {
+    test(`${kind}: ${rule} permission changes on retry keep the later sale's receipt`, async () => {
+      const store = await make();
+      let allowed = true;
+      const allow = rule === "sync" ? () => allowed : async () => allowed;
+      const runtime = await createRuntime({
+        store,
+        plugins: [{
+          name: "sales",
+          collections: {
+            sale: { schema: { type: "object", properties: { note: { type: "string" } } } },
+          },
+          actions: {
+            check: defineAction({ atomic: true, allow, run: () => true }),
+            review: defineAction({
+              atomic: true,
+              record: false,
+              allow,
+              run: (ctx) => ctx.call("check"),
+            }),
+            sell: defineAction({
+              transaction: true,
+              run: async (ctx) => (await ctx.db.collection("sale").insertOne({})).insertedId,
+            }),
+            parent: defineAction({
+              allow: people,
+              input: {
+                type: "object",
+                properties: { joined: { type: "boolean" }, check: { type: "string" } },
+                required: ["joined", "check"],
+              },
+              run: async (ctx, { joined, check }) => {
+                const sellAfterCheck = async (scope: Pick<TransactionScope, "call">) => {
+                  if (allowed) assertEquals(await scope.call(check), true);
+                  else await assertRejects(() => scope.call(check), Error, "may not call");
+                  return scope.call("sell");
+                };
+                const sale = joined
+                  ? await ctx.transaction(sellAfterCheck)
+                  : await sellAfterCheck(ctx);
+                if (!ctx.retry) throw new Error("after the sale");
+                return sale;
+              },
+            }),
+          },
+        }],
+      });
+      try {
+        for (const joined of [false, true]) {
+          for (const check of ["check", "review"]) {
+            const options = { id: `${joined}-${check}`, actor: ana };
+            const input = { joined, check };
+            allowed = true;
+            await assertRejects(
+              () => runtime.call("parent", input, options),
+              Error,
+              "after the sale",
+            );
+            const sales = await store.count("sale", {});
+            const started = (await store.related(options.id, ["action.started"]))
+              .find((e) => e.data.action === "sell");
+            assert(started);
+            const [receipt] = await store.related(started.id, ["action.completed"]);
+            allowed = false;
+            const sale = await runtime.call("parent", input, options);
+            assertEquals(sale, receipt.data.result);
+            assertEquals(await store.count("sale", {}), sales);
+          }
+        }
+      } finally {
+        await runtime.close();
+      }
+    });
+  }
 
   test(`${kind}: retries find rc.63 child receipts after synchronous denials`, async () => {
     const store = await make();

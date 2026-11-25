@@ -5,7 +5,7 @@
  * - ops (`core.op` host call): storage operations, alone or in a held transaction.
  */
 import type { Actor, Event } from "./store.ts";
-import type { Op } from "./ops.ts";
+import type { Attempt, Op } from "./ops.ts";
 import type { Scheduled } from "./schedules.ts";
 import { httpError } from "./errors.ts";
 
@@ -32,18 +32,16 @@ export const WORK_MS = 60 * 60_000;
 
 export type Job =
   /** `id` is the call's id; a retried call says why its previous attempt ended. */
-  | {
+  | (Attempt & {
     kind: "call";
     action: string;
     input: unknown;
     id: string;
-    attempt: number;
-    after?: "failed" | "lost";
     /** Time called it: the timer, and the time this occurrence was due. */
     scheduled?: Scheduled;
     /** Who called it: the outside call's actor, or the timer's. */
     actor?: Actor;
-  }
+  })
   /** `retry`: this event may have been handled before (a retried or recovered delivery). */
   | { kind: "process"; processor: string; event: Event; retry: boolean }
   | { kind: "query"; collection: string; query: string; params: unknown; actor?: Actor }

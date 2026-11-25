@@ -145,7 +145,24 @@ export type Outcome = {
   /** What the call was, from its start: to refuse an id reused for another call. */
   action?: string;
   inputHash?: string;
+  /** Present on starts that count every nested call before admission. */
+  callNumbering?: 2;
 };
+
+/** A parent's first start fixes how its children are numbered across retries. */
+export type Attempt = {
+  attempt: number;
+  after?: "failed" | "lost";
+  callNumbering: 1 | 2;
+};
+
+export function nextAttempt(prior?: Outcome): Attempt {
+  return {
+    attempt: (prior?.attempts ?? 0) + 1,
+    ...(prior?.attempts ? { after: prior.lost ? "lost" : "failed" } : {}),
+    callNumbering: prior?.attempts ? prior.callNumbering ?? 1 : 2,
+  };
+}
 
 /**
  * Results whose private fields the log leaves out (see `ActionDef.private`),
@@ -174,7 +191,11 @@ export async function outcome(reader: Reader, call: string): Promise<Outcome> {
     attempts,
     lost: attempts > count("action.failed") + (done ? 1 : 0),
     ...(started
-      ? { action: String(started.data.action), inputHash: started.data.inputHash as string }
+      ? {
+        action: String(started.data.action),
+        inputHash: started.data.inputHash as string,
+        ...(started.data.callNumbering === 2 ? { callNumbering: 2 } : {}),
+      }
       : {}),
   };
 }

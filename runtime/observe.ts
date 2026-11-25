@@ -179,7 +179,7 @@ export function createObservers(env: {
    * before it's made: an op, or what it depends on (a client tracks a read it
    * watches elsewhere by its key, as a collection of its own).
    */
-  reads(track: (read: Op | Dep) => void, actor?: Actor): ReadContext;
+  reads(track: (read: Op | Dep) => void, actor?: Actor, view?: string): ReadContext;
   call(action: string, input: unknown, actor?: Actor): Promise<never>;
   emit(type: string, data: Record<string, unknown> | undefined, actor?: Actor): Promise<void>;
   /** A write from a View's handler, as `actor`'s own (see `ViewCollection`). */
@@ -281,16 +281,20 @@ export function createObservers(env: {
     return p;
   };
 
-  const fresh = (actor?: Actor): Run => {
+  const fresh = (part: Part): Run => {
     const deps: Dep[] = [];
     return {
       slots: new Map(),
       pending: [],
       deps,
-      source: env.reads((read) => {
-        const dep = "op" in read ? depOf(read) : read;
-        if (dep) deps.push(dep);
-      }, actor),
+      source: env.reads(
+        (read) => {
+          const dep = "op" in read ? depOf(read) : read;
+          if (dep) deps.push(dep);
+        },
+        part.actor,
+        part.name,
+      ),
       used: new Map(),
       counts: new Map(),
       nested: new Map(),
@@ -372,12 +376,12 @@ export function createObservers(env: {
       !same(child.hints, hints);
     if (changed && !nested && child.slots?.size) {
       // Shown with something new: it runs once what it read last time is in again.
-      nested = { part: child, run: fresh(child.actor), item, hints };
+      nested = { part: child, run: fresh(child), item, hints };
       reread(child.slots, nested.run, nested.run.source);
       run.nested.set(key, nested);
       run.pending.push(...nested.run.pending);
     } else if (changed) {
-      nested ??= { part: child, run: fresh(child.actor), item, hints };
+      nested ??= { part: child, run: fresh(child), item, hints };
       nested.item = item;
       nested.hints = hints;
       run.nested.set(key, nested);
@@ -502,7 +506,7 @@ export function createObservers(env: {
       do {
         p.again = false;
         const generation = ++p.generation;
-        const run = fresh(p.actor);
+        const run = fresh(p);
         if (p.slots) {
           reread(p.slots, run, run.source);
           await Promise.all(run.pending);

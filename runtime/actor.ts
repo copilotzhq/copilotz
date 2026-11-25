@@ -39,6 +39,7 @@
  *
  * Everyone who needs the person behind an actor asks here.
  */
+import type { AllowContext } from "./define.ts";
 import type { Actor } from "./store.ts";
 
 /**
@@ -70,12 +71,39 @@ export function allows<I>(
   allow: (actor: Actor, input: I) => boolean,
   actor: Actor,
   input: I,
-): boolean {
-  if (!allow(actor, input)) return false;
-  const behalf = actor.kind === "agent" && actor.for && typeof actor.for === "object"
-    ? actor.for as Actor
-    : undefined;
-  return !behalf || allows(allow, behalf, input);
+): boolean;
+export function allows<I>(
+  allow: (actor: Actor, input: I, ctx: AllowContext) => boolean | Promise<boolean>,
+  actor: Actor,
+  input: I,
+  reads: (who: Actor) => AllowContext,
+): boolean | Promise<boolean>;
+export function allows<I>(
+  allow: (actor: Actor, input: I, ctx: AllowContext) => boolean | Promise<boolean>,
+  actor: Actor,
+  input: I,
+  reads?: (who: Actor) => AllowContext,
+): boolean | Promise<boolean> {
+  const check = (who: Actor, as: Actor): boolean | Promise<boolean> => {
+    const ctx: AllowContext = {
+      actor: as,
+      in: whereOf(as),
+      get db() {
+        if (!reads) throw new Error("A database-backed allow needs a caller's reads");
+        return reads(as).db;
+      },
+    };
+    const yes = allow(who, input, ctx);
+    const behalf = who.kind === "agent" && who.for && typeof who.for === "object"
+      ? who.for as Actor
+      : undefined;
+    if (!behalf || !yes) return yes;
+    // A principal's permission is read within their reach, in the caller's place.
+    // Carry via for the owner's job authority check.
+    const next = () => check(behalf, acting(as, behalf)!);
+    return typeof yes === "boolean" ? next() : yes.then((ok) => ok && next());
+  };
+  return check(actor, actor);
 }
 
 /**

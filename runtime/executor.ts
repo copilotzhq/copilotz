@@ -17,14 +17,21 @@ import {
   invalid,
   json,
   merge,
+  runAction,
   unknown,
   unprivate,
 } from "./registry.ts";
 import { presenter } from "./views.ts";
 import { refuseBlobKeys } from "./blobs.ts";
-import { querying as queryingOver, reading as readingOver, type RunAs } from "./reads.ts";
+import {
+  querying as queryingOver,
+  reading as readingOver,
+  type Recorder,
+  type RunAs,
+} from "./reads.ts";
 import { type Metrics, noMetrics } from "./metrics.ts";
-import type { Actor, Doc, Edge, Event } from "./store.ts";
+import type { Actor, Edge, Event } from "./store.ts";
+import { actionInput } from "./action-input.ts";
 import { acting, allows, whereOf } from "./actor.ts";
 import { forbidden } from "./errors.ts";
 import {
@@ -61,7 +68,7 @@ type Reach = {
     signal: AbortSignal,
   ): ReturnType<HostCaller>;
   /** Appends to a records collection with the job's next write (see `Context.record`). */
-  record: Context["record"];
+  record: Recorder;
   frame(channel: string, data: unknown): void;
   signal: AbortSignal;
   /** This job may repeat earlier work: a retried call or delivery. */
@@ -71,10 +78,13 @@ type Reach = {
 };
 
 /** For whom ops in a held transaction go: what their writes answer to, as whom, in whose code. */
-type Who = { cause?: string; actor?: Actor; action?: string };
+type Who = { cause?: string; actor?: Actor; action?: string; outside?: true };
 
 /** An op waiting to go in a held transaction, and for whom. */
 type Sent = { op: Op; who: Who };
+
+/** The owner's id and retry information when it dispatches a call. */
+type Attempt = { id: string; attempt: number; after?: "failed" | "lost"; scheduled?: Scheduled };
 
 /** An atomic Action asked for in a transaction, checked: its declaration and its input. */
 type Asked = { name: string; def: ActionDef; input: unknown };
@@ -96,7 +106,7 @@ type Held = {
 /** Whether ops for `a` and `b` may go in one request. */
 const alike = (a: Who, b: Who) =>
   a === b ||
-  (a.cause === b.cause && a.action === b.action &&
+  (a.cause === b.cause && a.action === b.action && a.outside === b.outside &&
     canonical(a.actor ?? null) === canonical(b.actor ?? null));
 
 /** Ops in order, in runs of the same `Who`: a request each. */
@@ -259,11 +269,31 @@ export function createExecutor(
         const runs = byWho(rest);
         if (begun || runs.length > 1) {
           begun = true;
-          await send(rest, "commit");
+          try {
+            await send(rest, "commit");
+          } catch (error) {
+            // A later run may be refused before reaching the owner-held transaction.
+            await job.send({ tx: id, ops: [], end: "abort", ...opener }).catch(() => {});
+            throw error;
+          }
         } else if (runs.length) await job.send({ ops: runs[0].ops, ...runs[0].who });
       },
       abort,
     };
+  };
+
+  /** A synchronous refusal has no place in the call sequence, as in rc.63. */
+  const admit = (
+    { name, def, input }: Asked,
+    actor: Actor | undefined,
+    reads: (as: Actor) => ReadContext,
+  ): void | Promise<void> => {
+    if (!def.allow || !actor || actor.kind === "system") return;
+    const check = (ok: boolean) => {
+      if (!ok) throw forbidden(`${actor.kind} ${actor.id} may not call "${name}".`);
+    };
+    const ok = allows(def.allow, actor, input, reads);
+    return typeof ok === "boolean" ? check(ok) : ok.then(check);
   };
 
   /**
@@ -279,11 +309,22 @@ export function createExecutor(
     numbering: string | undefined,
   ): TransactionScope => {
     const run: Run = (op, options) => held.run(op, who, options);
-    const runAs: RunAs = (as) => (op, options) => held.run(op, { ...who, actor: as }, options);
+    const runAs: RunAs = (as, action = who.action) => (op, options) =>
+      held.run(op, { ...who, actor: as, action }, options);
     let turn: Promise<unknown> = Promise.resolve();
     return {
       db: {
-        collection: (name) => collection(name, run, querying(run, job.record, who.actor, runAs)),
+        collection: (name) =>
+          collection(
+            name,
+            run,
+            querying(
+              run,
+              (name, doc, origin) => job.record(name, doc, origin ?? who),
+              who.actor,
+              runAs,
+            ),
+          ),
       },
       graph: {
         link: (from, type, to, data) =>
@@ -305,40 +346,51 @@ export function createExecutor(
       unschedule: (timer) => held.queue({ op: "unschedule", timer }, who),
       call: <R>(action: string, input?: unknown): Promise<R> => {
         let asked: Asked;
+        let admission: void | Promise<void>;
         try {
           held.ensure();
-          asked = atomicOf(action, input, who.actor);
+          asked = atomicOf(action, input);
+          // Permission reads see the effects of earlier calls on this scope.
+          const before = turn;
+          admission = admit(
+            asked,
+            who.actor,
+            (as) =>
+              reading(
+                (op) => before.then(() => held.run(op, { ...who, actor: as, outside: true })),
+                job.record,
+                as,
+              ),
+          );
         } catch (error) {
           return Promise.reject(error);
         }
         const position = asked.def.record !== false && numbering ? job.next(numbering) : 0;
-        const result = turn.then(() => atomic<R>(job, held, asked, who, numbering, position));
-        turn = result.catch(() => {});
+        const result = Promise.all([turn, admission]).then(() =>
+          atomic<R>(job, held, asked, who, numbering, position)
+        );
+        turn = Promise.allSettled([turn, result]);
         return result;
       },
     };
   };
 
   /**
-   * An atomic Action a transaction may call, checked before anything of it
-   * runs, as `ctx.call` checks: declared, atomic, its input, and its `allow`
-   * for `actor`. A refusal here ends nothing: none of the Action ran.
+   * An atomic Action a transaction may call, checked before anything of it runs.
+   * Its allow is checked on its turn, over reads in the transaction.
    */
-  const atomicOf = (name: string, input: unknown, actor: Actor | undefined): Asked => {
+  const atomicOf = (name: string, input: unknown): Asked => {
     const def = registry.actions[name];
     if (!def) throw unknown("action", name, Object.keys(registry.actions));
-    if (!def.atomic) {
+    if (!def.atomic && !def.transaction) {
       throw invalid(
-        `"${name}" isn't atomic: a transaction calls only Actions declared \`atomic: true\`. ` +
+        `"${name}" isn't atomic: a transaction calls only Actions declared \`atomic: true\` or \`transaction: true\`. ` +
           "Call it once the transaction has committed, or have it hear an event the transaction emits.",
       );
     }
-    const normalized = json(input);
+    const normalized = json(actionInput(def, input));
     inputs[name]?.(normalized);
     refuseBlobKeys(normalized);
-    if (def.allow && actor && actor.kind !== "system" && !allows(def.allow, actor, normalized)) {
-      throw forbidden(`${actor.kind} ${actor.id} may not call "${name}".`);
-    }
     return { name, def, input: normalized };
   };
 
@@ -357,23 +409,40 @@ export function createExecutor(
     who: Who,
     numbering: string | undefined,
     position: number,
+    own?: { given?: Attempt },
   ): Promise<R> => {
     const { actor } = who;
     // Closed before its turn came (a call before it failed): it never ran.
     held.ensure();
+    const run = (its: Who, count?: string) => {
+      const ctx = joined(job, held, { ...its, action: name }, count, own?.given?.scheduled);
+      return runAction<R>(
+        registry,
+        name,
+        ctx,
+        input,
+        (actor, action) => held.run({ op: "elevate" }, { ...its, actor, action }),
+      );
+    };
     if (def.record === false) {
       const its: Who = { ...who, action: name };
-      return await held.join(async () =>
-        await def.run(joined(job, held, its, who.cause), input) as R
-      );
+      return await held.join(async () => {
+        const result = await run(its, who.cause);
+        if (own) await held.commit();
+        return result;
+      });
     }
     const inputHash = await fingerprint(name, input);
-    const id = numbering ? `${numbering}.${position}.${inputHash}` : crypto.randomUUID();
-    let attempt = 1;
-    let after: "failed" | "lost" | undefined;
-    if (who.cause && job.retry) {
+    const id = own?.given?.id ??
+      (numbering ? `${numbering}.${position}.${inputHash}` : crypto.randomUUID());
+    let attempt = own?.given?.attempt ?? 1;
+    let after = own?.given?.after;
+    if (!own?.given && who.cause && job.retry) {
       const prior = await held.run({ op: "outcome", call: id }, who) as Outcome;
-      if (prior.completed) return prior.result as R;
+      if (prior.completed) {
+        if (own) await held.commit();
+        return prior.result as R;
+      }
       attempt = prior.attempts + 1;
       if (prior.attempts) after = prior.lost ? "lost" : "failed";
     }
@@ -411,7 +480,7 @@ export function createExecutor(
     job.frame("action", { type: "started", id, action: name, attempt });
     try {
       for (const mark of marks) held.queue(mark, its);
-      const result = await def.run(joined(job, held, its, id), input) as R;
+      const result = await run(its, id);
       const whole = json(result) ?? null;
       refuseBlobKeys(whole);
       const logged = unprivate(whole, hidden);
@@ -438,6 +507,7 @@ export function createExecutor(
           ifAbsent: true,
         }, its);
       }
+      if (own) await held.commit();
       return result;
     } catch (error) {
       await held.abort();
@@ -462,12 +532,31 @@ export function createExecutor(
    * Actions, in it too. What can't be rolled back, or waits on the world,
    * throws: streams, `fetch`, workers, cancelling, ending browsers.
    */
-  const joined = (job: Reach, held: Held, who: Who, numbering: string | undefined): Context => {
+  const joined = (
+    job: Reach,
+    held: Held,
+    who: Who,
+    numbering: string | undefined,
+    scheduled?: Scheduled,
+  ): Context => {
     const { actor } = who;
+    const record: Recorder = (name, doc, origin) => {
+      if (!records[name]) throw invalid(`"${name}" is not a records collection`);
+      const { _id, ...fields } = json(doc);
+      records[name](fields);
+      const id = typeof _id === "string" ? _id : crypto.randomUUID();
+      held.queue({ op: "insert", collection: name, docs: [{ ...fields, _id: id }] }, {
+        ...who,
+        ...origin,
+      });
+      return id;
+    };
+    job = { ...job, record };
     const tx = scoped(job, held, who, numbering);
     const run: Run = (op, options) => held.run(op, who, options);
     // Reads as someone else, in the transaction, for an unrecorded Action a read calls (`ctx.as`).
-    const runAs: RunAs = (as) => (op, options) => held.run(op, { ...who, actor: as }, options);
+    const runAs: RunAs = (as, action = who.action) => (op, options) =>
+      held.run(op, { ...who, actor: as, action }, options);
     const refused = (what: string) => () => {
       throw invalid(
         `${what} isn't for an atomic Action: it does only what commits with its transaction`,
@@ -481,12 +570,13 @@ export function createExecutor(
       transaction: (work) => held.join(() => work(tx)),
       stream: refused("ctx.stream"),
       call: (action, input) => tx.call(action, input),
-      branch: (key) => joined(job, held, who, `${numbering ?? crypto.randomUUID()}/${key}`),
+      branch: (key) =>
+        joined(job, held, who, `${numbering ?? crypto.randomUUID()}/${key}`, scheduled),
       ...(actor ? { actor } : {}),
       ...(where !== undefined ? { in: where } : {}),
       as: (other) => {
         const as = acting(actor, other);
-        return joined(job, held, { ...who, ...(as ? { actor: as } : {}) }, numbering);
+        return joined(job, held, { ...who, ...(as ? { actor: as } : {}) }, numbering, scheduled);
       },
       schedule: async (action, input, when) => tx.schedule(action, input, when),
       unschedule: async (timer) => Number(await run({ op: "unschedule", timer })) > 0,
@@ -494,13 +584,14 @@ export function createExecutor(
       disconnect: refused("ctx.disconnect"),
       render: presenter(registry.views, () => reading(run, job.record, actor, runAs)),
       kept: (_key, work) => work(ctx),
-      record: job.record,
+      record: (name, doc) => job.record(name, doc),
       metrics,
       fetch: refused("ctx.fetch"),
       resources: registry.resources,
       adapters: registry.adapters,
       describe: () => described(registry),
       workers: { dispatch: refused("ctx.workers"), call: refused("ctx.workers") },
+      ...(scheduled ? { scheduled } : {}),
       retry: job.retry,
       signal: job.signal,
     };
@@ -525,10 +616,17 @@ export function createExecutor(
     const run: Run = (op) =>
       job.send({ ops: [op], cause, ...(actor ? { actor } : {}), ...(action ? { action } : {}) });
     // Reads as someone else, for an unrecorded Action a read calls (`ctx.as`).
-    const runAs: RunAs = (as) => (op) =>
-      job.send({ ops: [op], cause, ...(as ? { actor: as } : {}), ...(action ? { action } : {}) });
+    const runAs: RunAs = (as, callee = action) => (op) =>
+      job.send({
+        ops: [op],
+        cause,
+        ...(as ? { actor: as } : {}),
+        ...(callee ? { action: callee } : {}),
+      });
+    const record: Recorder = (name, doc, origin) =>
+      job.record(name, doc, { cause, ...(origin ?? { actor, action }) });
     const ctx: Context = {
-      db: { collection: (name) => collection(name, run, querying(run, job.record, actor, runAs)) },
+      db: { collection: (name) => collection(name, run, querying(run, record, actor, runAs)) },
       graph: {
         link: (from, type, to, data) =>
           run({ op: "link", edge: { from, type, to, data } }).then(() => {}),
@@ -573,10 +671,10 @@ export function createExecutor(
             },
           }),
         ),
-      render: presenter(registry.views, () => reading(run, job.record, actor, runAs)),
+      render: presenter(registry.views, () => reading(run, record, actor, runAs)),
       // Kept only in the owner, for its rules: here it's worked out each time.
       kept: (_key, work) => work(ctx),
-      record: job.record,
+      record: (name, doc) => record(name, doc),
       metrics,
       fetch: outside,
       resources: registry.resources,
@@ -628,7 +726,7 @@ export function createExecutor(
     when: ScheduleOptions,
   ): Extract<TimerOp, { op: "schedule" }> => {
     if (!registry.actions[action]) throw unknown("action", action, Object.keys(registry.actions));
-    const normalized = json(input);
+    const normalized = json(actionInput(registry.actions[action], input));
     inputs[action]?.(normalized);
     const { id, ...rest } = json(when ?? {}) as ScheduleOptions;
     const timer = id ?? (cause ? `${cause}:timer.${job.next(`${cause}:timer`)}` : undefined);
@@ -654,36 +752,66 @@ export function createExecutor(
     name: string,
     input?: unknown,
     parent?: string,
-    given?: { id: string; attempt: number; after?: "failed" | "lost"; scheduled?: Scheduled },
+    given?: Attempt,
     numbering = parent,
     actor?: Actor,
   ): Promise<R> => {
     const action = registry.actions[name];
     if (!action) throw unknown("action", name, Object.keys(registry.actions));
-    const normalized = json(input);
+    const normalized = json(actionInput(action, input));
     inputs[name]?.(normalized);
     // An Action's input may hold no `$blob` key (see blobs.ts), as the owner checks outside calls'.
     refuseBlobKeys(normalized);
     // Code acting for someone calls what lets them, as they would from outside (an agent, for
     // whom it works for too); what has no `allow` is internal, code's to call. Going on where
     // they couldn't is a grant of the system's (`ctx.as`), on record as one.
-    if (
-      action.allow && actor && actor.kind !== "system" && !allows(action.allow, actor, normalized)
-    ) {
-      throw forbidden(`${actor.kind} ${actor.id} may not call "${name}".`);
+    const asked = { name, def: action, input: normalized };
+    const who: Who = { cause: parent, actor };
+    const held = action.transaction ? holding(job, who) : undefined;
+    const admission = admit(
+      asked,
+      actor,
+      (as) =>
+        reading(
+          (op) =>
+            held
+              ? held.run(op, { ...who, actor: as, outside: true })
+              : job.send({ ops: [op], actor: as, outside: true }),
+          job.record,
+          as,
+        ),
+    );
+    // Reserve before waiting on a database-backed rule, even for concurrent calls.
+    const position = !given && numbering && action.record !== false ? job.next(numbering) : 0;
+    if (held) {
+      try {
+        if (admission) await admission;
+        return await atomic(
+          job,
+          held,
+          asked,
+          who,
+          numbering,
+          position,
+          { given },
+        );
+      } catch (error) {
+        await held.abort();
+        throw error;
+      }
     }
+    if (admission) await admission;
+    const checkGrant = (actor: Actor, action: string) =>
+      job.send({ ops: [{ op: "elevate" }], actor, action });
     if (action.record === false) {
-      return await action.run(
-        context(job, parent, undefined, given?.scheduled, parent, actor, name),
-        normalized,
-      ) as R;
+      const ctx = context(job, parent, undefined, given?.scheduled, parent, actor, name);
+      return await runAction<R>(registry, name, ctx, normalized, checkGrant);
     }
 
     // A nested call's id comes from its cause, its place among the calls made
     // under it (taken before any await, so parallel calls number stably) and
     // what it does: a retry finds it again, and changed code makes a new call.
     // It hashes the whole input, private fields too, though the log never holds them.
-    const position = !given && numbering ? job.next(numbering) : 0;
     const inputHash = await fingerprint(name, normalized);
     const hidden = action.private ?? [];
     let { id, attempt, after } = given ?? {
@@ -760,59 +888,66 @@ export function createExecutor(
       reach.send({
         ops: [{ op: "emit", event: { type, data, cause: id } }, ...more],
         cause: id,
+        action: name,
         ...(actor ? { actor } : {}),
       });
 
     job.frame("action", { type: "started", id, action: name, attempt });
-    let result: R;
-    let recorded: unknown;
     try {
-      result = await action.run(
-        context(reach, id, undefined, given?.scheduled, id, actor),
-        normalized,
-      ) as R;
+      const ctx = context(reach, id, undefined, given?.scheduled, id, actor, name);
+      // The call starts as its caller even when its first write is made as the grant.
+      if (action.as) {
+        await job.send({ ops: marks, cause: id, actor });
+        pending = false;
+      }
+      const result = await runAction<R>(registry, name, ctx, normalized, checkGrant);
       // What it answers goes on record: one the owner would refuse fails the call, on record.
-      recorded = json(result) ?? null;
-      refuseBlobKeys(recorded);
+      const whole = json(result) ?? null;
+      refuseBlobKeys(whole);
+      // A result with private fields is logged without them, and kept whole apart
+      // in the same commit, so a retry answers with all of it.
+      const logged = unprivate(whole, hidden);
+      const apart = logged !== whole && JSON.stringify(logged) !== JSON.stringify(whole);
+      await finish(
+        "action.completed",
+        {
+          action: name,
+          result: logged,
+          ms: elapsed(),
+          attempt,
+          ...(apart ? { private: true } : {}),
+        },
+        apart
+          ? [{
+            op: "insert",
+            collection: RESULTS,
+            docs: [{ _id: id, result: whole }],
+            ifAbsent: true,
+          }]
+          : [],
+      );
+      return result;
     } catch (error) {
       await finish("action.failed", { action: name, error: failure(error), ms: elapsed(), attempt })
         .catch(() => {});
       throw error;
     }
-    // A result with private fields is logged without them, and kept whole apart
-    // in the same commit, so a retry answers with all of it.
-    const whole = recorded;
-    const logged = unprivate(whole, hidden);
-    const apart = logged !== whole && JSON.stringify(logged) !== JSON.stringify(whole);
-    await finish(
-      "action.completed",
-      { action: name, result: logged, ms: elapsed(), attempt, ...(apart ? { private: true } : {}) },
-      apart
-        ? [{
-          op: "insert",
-          collection: RESULTS,
-          docs: [{ _id: id, result: whole }],
-          ifAbsent: true,
-        }]
-        : [],
-    );
-    return result;
   };
 
   const reading = (
     run: Run,
-    record: Context["record"],
+    record: Recorder,
     actor?: Actor,
     runAs?: RunAs,
   ): ReadContext => readingOver(registry, run, record, metrics, outside, actor, undefined, runAs);
-  const querying = (run: Run, record: Context["record"], actor?: Actor, runAs?: RunAs): Query =>
+  const querying = (run: Run, record: Recorder, actor?: Actor, runAs?: RunAs): Query =>
     queryingOver(registry, run, record, metrics, outside, actor, runAs);
   /**
    * How a job's read reads as someone else, for an unrecorded Action it calls that acts as them
    * (`ctx.as`): as trusted code does, not as the caller's own read.
    */
-  const readingAs = (job: Reach): RunAs => (actor) => (op) =>
-    job.send({ ops: [op], ...(actor ? { actor } : {}) });
+  const readingAs = (job: Reach): RunAs => (actor, action) => (op) =>
+    job.send({ ops: [op], actor, action });
 
   const execute = (job: Reach, request: Job): unknown => {
     switch (request.kind) {
@@ -912,22 +1047,7 @@ export function createExecutor(
         // Records wait for the job's next write that commits on its own, and go
         // first in it; if it fails they wait again (an id kept twice is kept
         // once). What's left goes when the job ends.
-        const pending = new Map<string, Record<string, unknown>[]>();
-        const riding = () => {
-          const ops: Op[] = [...pending].map(([collection, docs]) => ({
-            op: "insert",
-            collection,
-            docs: docs as Doc[],
-          }));
-          pending.clear();
-          return ops;
-        };
-        const requeue = (ops: Op[]) => {
-          for (const op of ops) {
-            if (op.op !== "insert") continue;
-            pending.set(op.collection, [...op.docs, ...pending.get(op.collection) ?? []]);
-          }
-        };
+        const pending: Sent[] = [];
         const timed = async (body: OpRequest) => {
           const started = performance.now();
           try {
@@ -939,33 +1059,60 @@ export function createExecutor(
           }
         };
         const send = async (body: OpRequest) => {
-          if (!pending.size || "tx" in body || body.ops.every(isRead)) return timed(body);
-          const carried = riding();
+          if (!pending.length || "tx" in body || body.ops.every(isRead)) return timed(body);
+          const carried = pending.splice(0);
           try {
-            return await timed({ ...body, ops: [...carried, ...body.ops] });
+            const runs = byWho(carried);
+            const last = runs.at(-1)!;
+            const rides = alike(last.who, body);
+            if (rides) runs.pop();
+            for (const { ops, who } of runs) await timed({ ops, ...who });
+            return await timed(rides ? { ...body, ops: [...last.ops, ...body.ops] } : body);
           } catch (error) {
-            requeue(carried);
+            // If a refused record kept the failure receipt from committing, write the receipt
+            // on its own. Other actors' records may still be accepted under their own authority.
+            if (body.ops.some((op) => op.op === "emit" && op.event.type === "action.failed")) {
+              for (const { ops, who } of byWho(carried)) {
+                await timed({ ops, ...who }).catch(() => {});
+              }
+              return timed(body);
+            }
+            // Stable record ids make replay of an already delivered group idempotent.
+            pending.unshift(...carried);
             throw error;
           }
         };
-        // What's left goes as the job's own actor: the owner checks every op against it.
         const own = request.kind === "process" ? request.event.actor : request.actor;
         const flush = async () => {
-          if (pending.size) await timed({ ops: riding(), ...(own ? { actor: own } : {}) });
+          let first: unknown;
+          for (const { ops, who } of byWho(pending.splice(0))) {
+            try {
+              await timed({ ops, ...who });
+            } catch (error) {
+              first ??= error;
+            }
+          }
+          if (first !== undefined) throw first;
         };
         const job: Reach = {
           send,
           dispatch: (to, input, signal) =>
             callHost({ workload: DISPATCH, metadata: to, body: encode(input), signal }),
-          record(collection, doc) {
+          record(collection, doc, who = { actor: own }) {
             const check = records[collection];
             if (!check) throw invalid(`"${collection}" is not a records collection`);
             const { _id, ...fields } = json(doc);
             check(fields);
             const id = typeof _id === "string" ? _id : crypto.randomUUID();
-            const docs = pending.get(collection);
-            if (docs) docs.push({ _id: id, ...fields });
-            else pending.set(collection, [{ _id: id, ...fields }]);
+            const entry = { _id: id, ...fields };
+            const last = pending.at(-1);
+            if (
+              last?.op.op === "insert" && last.op.collection === collection && alike(last.who, who)
+            ) {
+              last.op.docs.push(entry);
+            } else {
+              pending.push({ op: { op: "insert", collection, docs: [entry] }, who });
+            }
             return id;
           },
           frame: (channel, data) => out.write({ frame: { channel, data } }),

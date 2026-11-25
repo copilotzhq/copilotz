@@ -1,8 +1,9 @@
 {
   "name": "@copilotz/copilotz",
-  "version": "1.0.0-rc.63",
+  "version": "1.0.0-rc.64",
   "exports": {
     ".": "./runtime/mod.ts",
+    "./gen": "./cli/mod.ts",
     "./stores/memory": "./stores/memory/mod.ts",
     "./stores/sqlite": "./stores/sql/sqlite/mod.ts",
     "./stores/postgres": "./stores/sql/postgres/mod.ts",
@@ -118,10 +119,12 @@
     ]
   },
   "exclude": [
-    "dist/"
+    "dist/",
+    "testing/fixtures/compiler/"
   ],
   "publish": {
     "exclude": [
+      "docs/_staging/",
       "bench/",
       "packages/",
       "**/tests/",

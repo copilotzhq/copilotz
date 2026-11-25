@@ -104,13 +104,23 @@ export type SendmailSettings = {
 /** The `email` resource: how the app sends email. */
 export type EmailSettings = {
   /**
-   * Which adapter sends: `resend` (Resend's API), `smtp` (a mail server, on
+   * Which adapter sends: `capture` (keeps messages for tests), `resend` (Resend's API), `smtp` (a mail server, on
    * Node, Deno and Bun), `sendmail` (a sendmail program, on Node, Deno and
    * Bun), or `console` on a laptop, which writes each message
    * to the log (refused where the app's `links` origin is public: a code in a
    * log is a way in).
    */
   adapter: string;
+  /**
+   * Set `directory` to save captured messages as .eml files and `allowPublicOrigin: true`
+   * to capture mail in a test with a public `links.origin`.
+   */
+  capture?: {
+    /** Also write each captured message as an .eml file in this directory. */
+    directory?: string;
+    /** Allow a test with a public links.origin to capture mail locally. */
+    allowPublicOrigin?: boolean;
+  };
   /** Who messages are from: `"Example <noreply@example.com>"`. */
   from?: string;
   /**

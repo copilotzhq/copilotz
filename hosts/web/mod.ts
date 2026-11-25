@@ -123,7 +123,7 @@ export { Heading, Text, type TextTone } from "./toolkit/text.tsx";
 export { AppBar, type AppBarItem, TopBar } from "./toolkit/app-bar.tsx";
 export { type Tile, TileGrid } from "./toolkit/tile-grid.tsx";
 // Tables: rows to read, find and act on, their pages, and their files.
-export { DataTable, type ExportChoice } from "./toolkit/data-table.tsx";
+export { DataTable, type ExportChoice, TableExportFormats } from "./toolkit/data-table.tsx";
 export { Pagination } from "./toolkit/pagination.tsx";
 export {
   type Column,
@@ -135,11 +135,17 @@ export {
 export { tableAddress, tableQuery, tableState } from "./table-address.ts";
 export {
   download,
+  downloadTableFile,
   EXPORT_FORMATS,
+  type ExportCell,
   exportFile,
   type ExportFormat,
   type ExportOptions,
+  exportTableFile,
   type Sheet,
+  type TableExportFormat,
+  type TableExportOptions,
+  type TableExportSheet,
   toCsv,
   toExcel,
   toJson,
@@ -150,11 +156,13 @@ export {
 } from "./toolkit/export.ts";
 export {
   documentPdf,
+  drawDocumentPdf,
   type Drawn,
   type PageSize,
   type PdfFont,
   type PdfOptions,
   tablePdf,
+  type TablePdfOptions,
   textWidth,
   wrapText,
 } from "./toolkit/pdf.ts";
@@ -210,8 +218,11 @@ export {
 export { type Binding, shortcutLabel, useShortcuts } from "./toolkit/shortcuts.ts";
 export { NoPrint, PrintOnly } from "./toolkit/print.tsx";
 // Barcodes: Code 128, drawn, and as bars for a document made elsewhere.
-export { Barcode } from "./toolkit/barcode.tsx";
-export { bars, code128 } from "./toolkit/code128.ts";
+export { Barcode, ProductBarcode } from "./toolkit/barcode.tsx";
+export { barcodePng } from "./toolkit/barcode-png.ts";
+export { code39, ean13, ean8, eanDigits } from "./toolkit/retail-barcodes.ts";
+export { type PdfImage, pdfImage } from "./toolkit/pdf-image.ts";
+export { barcodeBars, type BarcodeOptions, bars, code128 } from "./toolkit/code128.ts";
 // Pages and details.
 export { Page } from "./toolkit/page.tsx";
 export { type Detail, DetailList } from "./toolkit/detail-list.tsx";
@@ -244,3 +255,5 @@ export { clock } from "./toolkit/clock.ts";
 export { type Client, type ClientLink, connect, type Known } from "../../runtime/client.ts";
 // What a route is handed of the app's widgets (the server's half, `copilotz/web/server`).
 export type { Widgets } from "./widgets.ts";
+
+export { tableSheet } from "./toolkit/table.ts";

@@ -260,6 +260,58 @@ one line, and the turn goes on without it. But a fake should speak every part of
 app uses, or each run prints an error that isn't one. And since recall's call lands in `asked` too,
 the test looks for the title among the `/responses` calls only.
 
+## Mail in tests: the capture adapter
+
+Use the email plugin's unrecorded `email.send` Action from trusted app code for invoices, receipts
+and sign-in messages. A test can give the in-process executors one mailbox and inspect exactly what
+the app sent.
+
+```ts
+import assert from "node:assert/strict";
+import { createRuntime } from "copilotz";
+import { captureEmail, email, mime } from "copilotz/plugins/access/email";
+import { memoryStore } from "copilotz/stores/memory";
+
+const inbox = captureEmail();
+const runtime = await createRuntime({
+  store: memoryStore(),
+  plugins: [email, {
+    name: "test-mail",
+    adapters: { email: { capture: inbox } },
+    resources: { email: { adapter: "capture", from: "billing@example.com" } },
+  }],
+});
+try {
+  await runtime.call("email.send", {
+    to: "ana@example.com",
+    subject: "Invoice 42",
+    text: "Your invoice.",
+    html: "<p>Your invoice.</p>",
+    attachments: [{ filename: "invoice.txt", content: "NDI=" }],
+  });
+  const [sent] = inbox.messages;
+  assert.equal(sent.to, "ana@example.com");
+  assert.equal(sent.attachments?.[0].content, "NDI=");
+  const { source } = mime(sent, sent.from);
+  assert.match(source, /Subject: Invoice 42/);
+  inbox.clear();
+} finally {
+  await runtime.close();
+}
+```
+
+Each capture holds the recipient, effective sender and reply address, subject, text, HTML and base64
+attachments. `inbox.clear()` empties that instance. For local development, setting `resources.email`
+to `{ adapter: "capture", from: "billing@example.com", capture: { directory: "./mail" } }` uses the
+built-in adapter and saves each message as an `.eml` file you can open. Separate executor processes
+have their own memory. They can write to the same mail folder. Clearing a mailbox leaves its files
+on disk. To build the MIME source in your own adapter, use the exported `mime(message, from)`. See
+the [email plugin](../../reference/plugins/email.md).
+
+Capture never sends. An app whose `links` origin is public refuses to start with it, so sign-in
+codes can't vanish in production; a test that needs a public-looking origin sets
+`email.capture.allowPublicOrigin: true`.
+
 ## Run it
 
 ```text

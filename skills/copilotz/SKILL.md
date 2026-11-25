@@ -51,20 +51,20 @@ differ, it wins. When you're unsure of a name, read the package's types
 
 ## Set up
 
-There's no project generator. On Node 24 or newer:
+On Node 24 or newer, start a checked app with the compiler:
 
 ```sh
-mkdir my-app && cd my-app
-npm init -y && npm pkg set type=module
-npm install copilotz@next react@19 react-dom@19
-npm install -D typescript @types/node @types/react @types/react-dom esbuild
+npx copilotz@next init orders
+cd orders
+npm run check
+npm run dev
 ```
 
-Release candidates are on npm's `next` tag; plain `npm install copilotz` gets an early one. On Deno,
-run `deno add jsr:@copilotz/copilotz` and map `"copilotz"` to it in `deno.json`, so imports read the
-same. Node runs `.ts` files as they are, with no build step. Then add the `tsconfig.json`, the
-`test` and `check` scripts, the layout and the project's own `AGENTS.md`, as
-[the walkthrough](references/plugin-walkthrough.md) shows.
+Give each declaration a file with a default export. Type the Action's input on `run` and the
+document on `defineCollection<T>`. `copilotz gen` writes the schemas, assembles each host's plugins
+and records the app's names. Keep React components in `lib/web/`. Use the “Find it” index in
+`node_modules/copilotz/AGENTS.md` for the API and `node_modules/copilotz/llms.txt` for all installed
+guides. [The compiler](https://copilotz.com/docs/guides/the-compiler.md).
 
 ## The loop: test offline, with a scripted model
 
@@ -101,19 +101,20 @@ Each one, with why and code: [rules](references/rules.md).
 2. **Rules at the data, `shared` first.** Name the collection in the `shared` resource; what it
    can't say goes in the plugin's `guard`. Don't filter by who's asking inside an Action. Every
    write keeps to the collection's schema, updates included.
-3. **Say `allow` on every Action outsiders call,** by kind: `people`, `contacts`,
-   `peopleOrContacts`, `publicCallers`, or `inPerson` for what only the person decides. An Action
-   without `allow` is internal.
+3. **Declare callers once** in `defaults.allow` and override per Action or named query. An async
+   rule may read as the caller before admission. Use `inPerson` for what only the person may decide.
+   Without a rule or default, an Action is internal.
 4. **A View for whatever anyone reads, a model included.** Each tool gets a `tool:<name>` View:
    short text, with ids the model can act on. Views write only from their handlers.
 5. **Errors for callers are `failure(code, message, { public: true })`.** Only a public failure's
    words reach a caller outside, or a model.
 6. **Settings are resources, not code.** `app.ts` reads no environment, and agents name a model
    alias that the app sets.
-7. **Writes that must agree go in one `ctx.transaction`.**
+7. **Writes that must agree go in one transaction.** Use `transaction: true` for the whole Action or
+   `ctx.transaction` for part of it.
 8. **Who acts is `personOf(ctx.actor)`, not `ctx.actor.id`; where is `ctx.in`.**
-9. **Going past the actor's reach is a named grant,** `ctx.as(grant("…"))`. Keys stay in code: never
-   in Action inputs, never with a model.
+9. **Going past the actor's reach is a named grant.** Use `as` for the whole Action or
+   `ctx.as(grant("…"))`. Keys stay in code: never in Action inputs, never with a model.
 10. **The audience rule: an agent tells a conversation only what everyone in it could see.** Its
     work reads only what both its asker and the place its answer goes reach. Writing where those
     readers don't all reach is refused with `needs_approval`, and the turn asks its person: don't
@@ -126,8 +127,8 @@ Each one, with why and code: [rules](references/rules.md).
 
 ## Where to find more
 
-- [references/plugin-walkthrough.md](references/plugin-walkthrough.md): the project, its layout, and
-  a plugin built step by step (collection, Actions, rules, Views, a tool, an agent, `app.ts`).
+- [references/plugin-walkthrough.md](references/plugin-walkthrough.md): a hand-written plugin built
+  step by step (collection, Actions, rules, Views, a tool, an agent, `app.ts`).
 - [references/rules.md](references/rules.md): the rules above, each with its reason and code.
 - [references/testing.md](references/testing.md): the test kit, and testing refusals, time, outside
   calls and HTTP.

@@ -15,6 +15,16 @@
  * ```
  */
 
+import { code39, ean13, ean8 } from "./retail-barcodes.ts";
+
+/** Selects the barcode drawn on screen, paper, or as a PNG. Code 128 is the default. */
+export type BarcodeOptions = {
+  format?: "code128" | "code39" | "ean8" | "ean13";
+  set?: "auto" | "B";
+  check?: boolean;
+  quiet?: boolean;
+};
+
 /** The 107 patterns (values 0–105, then STOP), as module widths: bar, space, bar, space, bar, space(, bar). */
 const PATTERNS = [
   "212222",
@@ -196,25 +206,46 @@ export function code128(text: string, options?: { set?: "auto" | "B" }): number[
 }
 
 /**
- * The bars of `text`, drawn `width` pixels wide at most with whole pixels per
+ * The bars of `text`, drawn to a preferred `width` with whole pixels per
  * module (so they stay sharp; at least one): each bar's `x` and `w`, the
  * module's size and the barcode's whole width, in pixels. `quiet` adds the
- * blank margin scanners need at each end (ten modules).
+ * blank margins scanners need (ten modules for Code 128 and Code 39).
+ * With no width, use 300 units or the minimum for one unit per module, whichever is wider.
  */
-export function bars(
+export function barcodeBars(
   text: string,
   width = 300,
-  options: { set?: "auto" | "B"; quiet?: boolean } = {},
+  options: BarcodeOptions = {},
 ): { module: number; width: number; bars: { x: number; w: number }[] } {
-  const widths = code128(text, options);
-  const margin = options.quiet ? 10 : 0;
-  const modules = widths.reduce((a, b) => a + b, 0) + 2 * margin;
+  const widths = options.format === "code39"
+    ? code39(text, options)
+    : options.format === "ean8"
+    ? ean8(text)
+    : options.format === "ean13"
+    ? ean13(text)
+    : code128(text, options);
+  const retail = options.format === "ean13" || options.format === "ean8";
+  const left = !options.quiet ? 0 : options.format === "ean13" ? 11 : retail ? 7 : 10;
+  const right = !options.quiet ? 0 : retail ? 7 : 10;
+  const modules = widths.reduce((a, b) => a + b, 0) + left + right;
+  if (options.format !== undefined && !Number.isFinite(width)) {
+    throw new RangeError("Barcode width must be finite.");
+  }
   const module = Math.max(1, Math.floor(width / modules));
   const out: { x: number; w: number }[] = [];
-  let x = margin;
+  let x = left;
   widths.forEach((w, i) => {
     if (i % 2 === 0) out.push({ x: x * module, w: w * module });
     x += w;
   });
   return { module, width: modules * module, bars: out };
+}
+
+/** Code 128 bars, using the selected code set and quiet margins. */
+export function bars(
+  text: string,
+  width = 300,
+  { set, quiet }: { set?: "auto" | "B"; quiet?: boolean } = {},
+): { module: number; width: number; bars: { x: number; w: number }[] } {
+  return barcodeBars(text, width, { set, quiet });
 }

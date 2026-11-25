@@ -33,9 +33,12 @@
  * ```
  */
 import {
+  type Context,
+  createContext,
   Fragment,
   type MouseEvent,
   type ReactNode,
+  useContext,
   useEffect,
   useId,
   useMemo,
@@ -47,12 +50,16 @@ import { Button } from "./button.tsx";
 import { Checkbox } from "./checkbox.tsx";
 import { cx } from "./cx.ts";
 import {
-  download,
+  downloadTableFile,
   EXPORT_FORMATS,
+  type ExportCell,
   type ExportFormat,
   type ExportOptions,
-  type Sheet,
+  fileOptions,
+  type TableExportFormat,
+  type TableExportOptions,
 } from "./export.ts";
+import { pdfColumn, usesTableLayout } from "./pdf.ts";
 import { Icon } from "./icon.tsx";
 import { Input } from "./input.tsx";
 import { Menu } from "./menu.tsx";
@@ -67,6 +74,7 @@ import {
   type Key,
   PAGE_SIZES,
   sortedBy,
+  tableSheet,
   type TableState,
   tableView,
   textOf,
@@ -76,7 +84,13 @@ import { say } from "./words.ts";
 export { type Column, type Key, PAGE_SIZES, type TableState };
 
 /** A format in the export menu: by name, or with the menu's own words for it. */
-export type ExportChoice = ExportFormat | { format: ExportFormat; label: string };
+type FormatChoice<F extends string> = F | { format: F; label: string };
+export type ExportChoice = FormatChoice<ExportFormat>;
+
+/** Provide named formats around the app's screens. A table may add or replace them locally. */
+export const TableExportFormats: Context<Record<string, TableExportFormat>> = createContext<
+  Record<string, TableExportFormat>
+>({});
 
 const CELL = "var(--table-cell-padding, 10px 12px)";
 const LINE = "var(--table-border-color, var(--border))";
@@ -186,7 +200,7 @@ const ownClick = (event: MouseEvent) => !!(event.target as Element).closest?.(OW
 
 const ALIGN = { left: undefined, right: "copilotz-table-right", center: "copilotz-table-center" };
 
-export function DataTable<R>(props: {
+type DataTableProps<R> = {
   columns: Column<R>[];
   rows: R[];
   rowKey(row: R): Key;
@@ -201,6 +215,8 @@ export function DataTable<R>(props: {
   pageSize?: number;
   /** The page sizes to choose from (10, 25, 50, 100; `false`: no choosing). */
   pageSizes?: number[] | false;
+  /** Keep the page-size menu when only one size is offered. */
+  showSinglePageSize?: boolean;
   /** A box to tick per row: yes when there are `actions`. */
   selectable?: boolean;
   /** The toolbar's start: the page's actions, given the ticked rows' keys (Delete, Email…). */
@@ -211,12 +227,20 @@ export function DataTable<R>(props: {
   chooseColumns?: boolean;
   /** The export menu's formats (CSV, Excel, PDF); `false`: none. */
   exports?: ExportChoice[] | false;
+  /** Ordered menu choices including custom format names. */
+  exportChoices?: FormatChoice<string>[];
   /** An export's file name, without its extension ("export"). */
   exportName?: string;
   /** Export every row that matches (searched and sorted), not only the page shown. */
   exportAll?: boolean;
   /** How the files are made (see `export.ts`). */
   exportOptions?: ExportOptions;
+  /** Settings for table files. When given, these take the place of exportOptions. */
+  tableExportOptions?: TableExportOptions;
+  /** Additional or replacement formats for this table, keyed by name. */
+  formats?: Record<string, TableExportFormat>;
+  /** Totals by column key, shown below the body and included in each file. */
+  footerRows?: Record<string, ExportCell>[];
   /** What it says when no row shows ("Nothing to show"). */
   empty?: ReactNode;
   loading?: boolean;
@@ -234,13 +258,34 @@ export function DataTable<R>(props: {
    * (by the columns' `width`s, the rest shared evenly; cells never widen their column).
    */
   layout?: "auto" | "fixed";
-  /** The toolbar, and the pages under the rows (both, by default). */
+  /** A button or filter beside the built-in tools. */
+  toolbarContent?: ReactNode;
+  /** Show the toolbar (the default). */
   toolbar?: boolean;
   pagination?: boolean;
   /** The table element's id. */
   id?: string;
   className?: string;
-}): ReactNode {
+};
+
+let warnedFooterRows = false;
+
+function isFooterRows(value: unknown): value is Record<string, ExportCell>[] {
+  if (!Array.isArray(value)) return false;
+  for (const row of value) {
+    if (Object.prototype.toString.call(row) !== "[object Object]") return false;
+    if (
+      !Object.values(row).every((cell) =>
+        cell === null || typeof cell === "number" || typeof cell === "string" ||
+        typeof cell === "boolean"
+      )
+    ) return false;
+  }
+  return true;
+}
+
+/** Lists, searches and exports the visible columns of a page or a client-side list. */
+export function DataTable<R>(props: DataTableProps<R>): ReactNode {
   const {
     columns,
     rows,
@@ -248,10 +293,18 @@ export function DataTable<R>(props: {
     actions,
     search = true,
     chooseColumns = true,
-    exports = ["csv", "xlsx", "pdf"],
+    exports,
     toolbar = true,
     pagination = true,
   } = props;
+  let { footerRows } = props;
+  if (footerRows !== undefined && !isFooterRows(footerRows)) {
+    footerRows = undefined;
+    if (!warnedFooterRows) {
+      warnedFooterRows = true;
+      console.warn("DataTable: footerRows isn't an array of rows; ignored");
+    }
+  }
   const selectable = props.selectable ?? actions !== undefined;
   const server = props.total !== undefined;
   const base = useId();
@@ -307,19 +360,46 @@ export function DataTable<R>(props: {
 
   const titled = columns.filter((column) => !isLinks(column as Column<unknown>));
   const visibleTitled = visible.filter((column) => !isLinks(column as Column<unknown>));
-  const sheetOf = (): Sheet => ({
-    headers: visibleTitled.map((column) => column.title),
-    rows: (props.exportAll ? matching : page).map((row) =>
-      visibleTitled.map((column) => textOf(column, row))
-    ),
+  const sharedFormats = useContext(TableExportFormats);
+  const options: TableExportOptions = props.tableExportOptions ?? fileOptions(props.exportOptions);
+  const definitions = { ...sharedFormats, ...options.formats, ...props.formats };
+  const choices = exports === false ? false : props.exportChoices ?? exports ??
+    [...new Set(["csv", "xlsx", "pdf", ...Object.keys(definitions)])];
+  const warned = useRef(new Set<string>());
+  const unknown = new Set<string>();
+  const formats = (choices || []).flatMap((choice) => {
+    const format = typeof choice === "string" ? choice : choice.format;
+    const definition = Object.hasOwn(definitions, format)
+      ? definitions[format]
+      : EXPORT_FORMATS.find((entry) => entry.format === format);
+    if (!definition) {
+      if (!warned.current.has(format)) unknown.add(format);
+      return [];
+    }
+    return [typeof choice === "string" ? { format, label: definition.label } : choice];
   });
-  const formats = exports === false
-    ? []
-    : exports.map((choice) =>
-      typeof choice === "string"
-        ? EXPORT_FORMATS.find((f) => f.format === choice) ?? { format: choice, label: choice }
-        : choice
+  if (unknown.size) {
+    console.warn(`Unknown table export formats: ${[...unknown].join(", ")}`);
+    for (const format of unknown) warned.current.add(format);
+  }
+  const save = (format: string) => {
+    const sheet = tableSheet(
+      visibleTitled,
+      props.exportAll ? matching : page,
+      footerRows,
+      options.values,
     );
+    const pdf = options.pdf;
+    const columns = visibleTitled.map((column, i) => ({
+      align: column.align,
+      ...pdfColumn(pdf?.columns, column.key, i),
+    }));
+    downloadTableFile(format, sheet, props.exportName ?? "export", {
+      ...options,
+      formats: definitions,
+      pdf: usesTableLayout(pdf, footerRows) ? { ...pdf, columns } : pdf,
+    });
+  };
   const always = props.detailOpen === true;
   const toggles = !!props.detail && !always;
   const span = visible.length + (selectable ? 1 : 0) + (toggles ? 1 : 0);
@@ -334,8 +414,9 @@ export function DataTable<R>(props: {
     column.width === undefined
       ? undefined
       : { width: typeof column.width === "number" ? `${column.width}px` : column.width };
-  const showsToolbar = toolbar &&
-    (actions !== undefined || search || (chooseColumns && titled.length > 1) || formats.length > 0);
+  const showsToolbar = toolbar !== false &&
+    (props.toolbarContent != null || actions !== undefined || search ||
+      (chooseColumns && titled.length > 1) || formats.length > 0);
 
   return (
     <div className={cx("copilotz-table", props.className)}>
@@ -343,7 +424,10 @@ export function DataTable<R>(props: {
       {showsToolbar
         ? (
           <div className="copilotz-table-toolbar">
-            <div className="copilotz-table-actions">{actions?.(selected, clear)}</div>
+            <div className="copilotz-table-actions">
+              {props.toolbarContent}
+              {actions?.(selected, clear)}
+            </div>
             <div className="copilotz-table-tools">
               {search
                 ? (
@@ -401,13 +485,7 @@ export function DataTable<R>(props: {
                     )}
                     items={formats.map(({ format, label }) => ({
                       label,
-                      onSelect: () =>
-                        download(
-                          format,
-                          sheetOf(),
-                          props.exportName ?? "export",
-                          props.exportOptions,
-                        ),
+                      onSelect: () => save(format),
                     }))}
                   />
                 )
@@ -573,7 +651,26 @@ export function DataTable<R>(props: {
                 );
               })}
           </tbody>
-          {props.footer ? <tfoot>{props.footer}</tfoot> : null}
+          {props.footer || footerRows?.length
+            ? (
+              <tfoot>
+                {footerRows?.map((row, i) => (
+                  <tr key={i}>
+                    {toggles && <td />}
+                    {selectable && <td />}
+                    {visible.map((column) => (
+                      <td key={column.key} className={cellClass(column)}>
+                        {column.title && Object.hasOwn(row, column.key)
+                          ? String(row[column.key] ?? "")
+                          : ""}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+                {props.footer}
+              </tfoot>
+            )
+            : null}
         </table>
       </div>
       {pagination && total > 0
@@ -583,6 +680,7 @@ export function DataTable<R>(props: {
             state={state}
             onState={setState}
             sizes={props.pageSizes ?? PAGE_SIZES}
+            showSinglePageSize={props.showSinglePageSize}
           />
         )
         : null}

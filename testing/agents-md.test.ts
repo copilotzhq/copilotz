@@ -13,6 +13,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "./mod.ts";
+import { llmsTxt } from "../scripts/llms.ts";
+import { checkDocLinks } from "../scripts/npm/docs.ts";
 
 const ROOT = normalize(join(dirname(fileURLToPath(import.meta.url)), ".."));
 const read = (path: string) => readFileSync(join(ROOT, path), "utf8");
@@ -62,12 +64,17 @@ test("AGENTS.md links docs pages that exist, and files in the repository", () =>
   type Manifest = { sections: { items: { slug: string }[] }[] };
   const manifest = JSON.parse(read("docs/manifest.json")) as Manifest;
   const slugs = new Set(manifest.sections.flatMap((section) => section.items.map((i) => i.slug)));
-  const linked = [...guide.matchAll(/https:\/\/copilotz\.com\/docs\/([^\s)`]+?)\.md/g)]
+  const linked = [...guide.matchAll(/\]\((?:https:\/\/copilotz\.com\/)?docs\/([^\s)#]+?)\.md/g)]
     .map(([, slug]) => slug).filter((slug) => !slug.includes("<"));
   assertNotEquals(linked.length, 0);
   assertEquals(linked.filter((slug) => !slugs.has(slug)), [], "not in docs/manifest.json");
-  const files = [...guide.matchAll(/\]\((?!https?:)([^)]+)\)/g)].map(([, path]) => path);
-  assertEquals(files.filter((path) => !existsSync(join(ROOT, path))), []);
+  checkDocLinks(ROOT, "AGENTS.md");
+});
+
+test("the package reading list follows the docs manifest and links to its pages", () => {
+  // Git may check the file out with CRLF line endings (Windows).
+  assertEquals(read("llms.txt").replaceAll("\r\n", "\n"), llmsTxt());
+  checkDocLinks(ROOT, "llms.txt");
 });
 
 test("AGENTS.md installs this version", () => {

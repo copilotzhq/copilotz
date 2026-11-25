@@ -76,6 +76,6 @@ test("bars: whole-pixel modules as wide as fit, with the scanners' margin when a
   const quiet = bars("POS 12", 300, { set: "B", quiet: true });
   assertEquals(quiet.module, Math.floor(300 / (modules + 20)));
   assertEquals(quiet.bars[0].x, 10 * quiet.module);
-  // Never under a pixel, however narrow.
   assertEquals(bars("POS 12", 10).module, 1);
+  assertEquals(bars("SKU-12345", 120, { quiet: true }).width, 143);
 });

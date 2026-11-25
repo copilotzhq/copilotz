@@ -1,6 +1,6 @@
 {
   "name": "copilotz",
-  "version": "1.0.0-rc.63",
+  "version": "1.0.0-rc.64",
   "private": true,
   "type": "module",
   "description": "The open-source runtime that makes your app usable by people, your own agents and their assistants.",
@@ -9,6 +9,7 @@
   },
   "exports": {
     ".": "./runtime/mod.ts",
+    "./gen": "./cli/mod.ts",
     "./stores/memory": "./stores/memory/mod.ts",
     "./stores/sqlite": "./stores/sql/sqlite/mod.ts",
     "./stores/postgres": "./stores/sql/postgres/mod.ts",
@@ -101,6 +102,7 @@
     "@types/react-dom": "19.3.0",
     "copilotz": "file:.",
     "esbuild": "0.28.2",
+    "happy-dom": "21.0.4",
     "typescript": "6.0.3"
   }
 }

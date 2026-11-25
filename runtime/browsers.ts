@@ -50,6 +50,7 @@
  * - **Ended** (signed out, erased: `end`): an actor's connections close, its
  *   resume credentials go, and a connection let in before is never ready.
  */
+import type { AppName, LocalQuery } from "./names.ts";
 import type { JsonObject, WorkInput } from "@oxian/oxian-js";
 import { holderOf } from "./actor.ts";
 import type { ViewContext } from "./define.ts";
@@ -91,11 +92,14 @@ export type Push = { key: string } & Answer;
 /** Makes the read it's given, as whoever observes it. */
 export function readView(remote: Remote, ctx: ViewContext): unknown {
   if ("query" in remote) {
-    return ctx.db.collection(remote.collection).query(remote.query, remote.params).value;
+    return ctx.db.collection(remote.collection as AppName<"collections">).query(
+      remote.query as LocalQuery,
+      remote.params,
+    ).value;
   }
   const { op } = remote;
-  if (op.op === "edges" || op.op === "outcome") throw new Error(`A browser can't read ${op.op}`);
-  const collection = ctx.db.collection(op.collection);
+  if (!("collection" in op)) throw new Error(`A browser can't read ${op.op}`);
+  const collection = ctx.db.collection(op.collection as AppName<"collections">);
   switch (op.op) {
     case "find":
       return collection.find(op.filter, op.options).value;
@@ -297,7 +301,12 @@ export function createBrowsers(env: {
   /** An actor's own write to a collection, as theirs: admitted, within their reach. */
   write(actor: Actor, op: WriteOp): Promise<unknown>;
   /** Whether a query lets an actor run it (its `allow`, and the actor's scope). */
-  askable(actor: Actor, collection: string, query: string, params: unknown): boolean;
+  askable(
+    actor: Actor,
+    collection: string,
+    query: string,
+    params: unknown,
+  ): boolean | Promise<boolean>;
   /** Calls an Action as an actor; with `id`, the caller's own id for it (theirs alone). */
   call(action: string, input: unknown, actor: Actor, id?: string): Promise<unknown>;
   emit(type: string, data: Record<string, unknown>, actor: Actor): Promise<void>;
@@ -511,7 +520,7 @@ export function createBrowsers(env: {
           // A named query runs when it lets the person (its own reads keep to the rules);
           // read directly, a collection must be one the rules speak for.
           if ("query" in read) {
-            if (!env.askable(actor, read.collection, read.query, read.params ?? null)) {
+            if (!await env.askable(actor, read.collection, read.query, read.params ?? null)) {
               return refused(
                 key,
                 `${actor.kind} ${actor.id} may not run "${read.collection}.${read.query}".`,

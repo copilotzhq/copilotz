@@ -316,12 +316,17 @@
         {
           "title": "The web toolkit",
           "slug": "guides/the-web-toolkit",
-          "description": "The pieces web front ends are made of, laid out and themed without CSS: layout, forms, tables and their files, dates, bars, toasts, shortcuts, printing, PDFs, barcodes, a route's own page and a sign-in (`Screen`), and every token a theme sets."
+          "description": "The pieces web front ends are made of, laid out and themed without CSS: layout, forms, table exports and totals, dates, bars, toasts, shortcuts, printing, PDF logos, Code 39, Code 128 and EAN barcodes, a route's own page and a sign-in (`Screen`), and every token a theme sets."
         },
         {
           "title": "A business app's screens",
           "slug": "guides/a-business-apps-screens",
-          "description": "The screens back-office apps are made of, the Copilotz way: one View per file, Views that read and Actions that write, an app's own frame and home, lists with search, filters, paging and exports, forms in dialogs, dates, sign-in, printed documents, shortcuts and files, all from the toolkit with no CSS."
+          "description": "The screens back-office apps are made of, the Copilotz way: one View per file, the app's own shared components in lib/, Views that read and handlers that save, an app's own frame and home, lists with search, filters, paging and exports, forms in dialogs, dates, sign-in, printed documents, shortcuts and files, all from the toolkit with no CSS."
+        },
+        {
+          "title": "The compiler: plugins from folders",
+          "slug": "guides/the-compiler",
+          "description": "Start an app with copilotz init. Generate plugin entry points, Action inputs and collection schemas from TypeScript. Get checked names, watch for changes, check the build or take over a plugin by hand."
         }
       ]
     },

@@ -140,3 +140,9 @@ test("a barcode is a picture named by its value, its caption hidden from readers
   );
   assert(/<path d="M\d+ 0h\d+v50h-\d+z/.test(code));
 });
+
+test("Code 128 grows to its minimum width with an omitted or narrow width", () => {
+  const value = "A".repeat(25);
+  assertStringIncludes(html(<Barcode value={value} />), 'viewBox="0 0 330 50"');
+  assertStringIncludes(html(<Barcode value="SKU-12345" width={120} />), 'viewBox="0 0 143 50"');
+});

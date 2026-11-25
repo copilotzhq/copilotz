@@ -8,7 +8,7 @@
 #
 # A page is any Markdown file under docs/ with a `section` in its frontmatter; docs/_staging/ is
 # never one. A section the list below doesn't name stops the script, so no page goes missing.
-import glob, json, os, re, sys
+import glob, json, os, re, subprocess, sys
 
 SECTIONS = ["Getting Started", "Build Compass", "Guides", "Operations", "Reference", "Architecture"]
 # The tracks whose chapters are listed on their index page, and shown as "Ch <n>: <title>".
@@ -103,4 +103,5 @@ for name in SECTIONS:
 with open("docs/manifest.json", "w", encoding="utf-8") as out:
     json.dump({"sections": sections}, out, indent=2, ensure_ascii=False)
     out.write("\n")
+subprocess.run(["node", "scripts/llms.ts"], check=True)  # The same reading list ships on npm and JSR.
 print(", ".join(f"{s['title']}: {len(s['items'])}" for s in sections))

@@ -1,6 +1,6 @@
 ---
 title: "A business app's screens"
-description: "The screens back-office apps are made of, the Copilotz way: one View per file, Views that read and Actions that write, an app's own frame and home, lists with search, filters, paging and exports, forms in dialogs, dates, sign-in, printed documents, shortcuts and files, all from the toolkit with no CSS."
+description: "The screens back-office apps are made of, the Copilotz way: one View per file, the app's own shared components in lib/, Views that read and handlers that save, an app's own frame and home, lists with search, filters, paging and exports, forms in dialogs, dates, sign-in, printed documents, shortcuts and files, all from the toolkit with no CSS."
 section: Guides
 order: 9
 ---
@@ -10,7 +10,7 @@ order: 9
 A back-office app is mostly screens: lists to search and export, forms that add and change records,
 dates, a home page of places, a printed document or two. This guide builds them for the salon's
 staff: its customers, their visits, and the services it offers. Each recipe is whole files, in the
-place they go, and each compiles against `copilotz@1.0.0-rc.54`.
+place they go, and each compiles against `copilotz@1.0.0-rc.64`.
 
 The pieces themselves (every prop, every token) are in [the web toolkit](the-web-toolkit.md). This
 guide is how to put them together.
@@ -27,10 +27,12 @@ guide is how to put them together.
   rule speaks for (the `shared` resource, or a `guard`); any other answers `forbidden`, and the part
   says "You can't see this here". A named query with an `allow` (`people`) runs on the server, as
   whoever asks, and answers just what the screen shows: every read below is one.
-- **One View per file.** A plugin's front end is `plugins/<name>/views/web/`, a file per View and
-  its components beside them. `plugins/<name>/web.tsx` only names the Views, as `mod.ts` assembles
-  the server side. The data's side is a folder per primitive: `collections/` (each with its schema,
-  its type and its named queries), `actions/` for business logic.
+- **One View per file.** A plugin's front end is `plugins/<name>/views/web/`, a file per View. Give
+  each View a default export. `copilotz gen` assembles the web entry point. React components aren't
+  Views: they live in `lib/`, the plugin's for its own screens and the app's for what every plugin's
+  screens share ([shared UI](#shared-ui-an-apps-own-components)). The data's side is a folder per
+  primitive: `collections/` (each with its schema, its type and its named queries), `actions/` for
+  business logic.
 - **The toolkit, and no CSS.** Screens are made of `copilotz/web`'s pieces, layout included (`Page`,
   `Stack`, `Grid`, `Toolbar`, `Split`, `Card`). The look is the app's theme. No stylesheet, no
   `style={{…}}` for looks, no rules on the toolkit's `.copilotz-*` classes. A printed document's
@@ -44,23 +46,25 @@ guide is how to put them together.
 
 ## Files and names
 
+Start with `copilotz init`. In a generated customers plugin the files go here:
+
 ```text
-app.ts                   the server's plugins
-server.ts                the web host: the page, its code, its theme
-front.ts                 the browser's plugins, in order
-browser.tsx              the page's code: web({ root, plugins: front })
-plugins/
-  look/                  the theme, the words and the formats, for the page and the server
-  frame/views/web/shell.tsx  the app's frame: the web.shell View
-  customers/
-    mod.ts contract.ts
-    collections/customer.ts  its schema, its type and its named queries
-    web.tsx              names the Views, and nothing else
-    views/web/
-      customers-screen.tsx   screen:customers
-      customer-dialog.tsx    dialog:customer
-      customer-form.tsx      a React component the dialog draws
+app.ts                                lists #copilotz/plugins/customers/mod.ts on the server
+front.ts                              lists #copilotz/plugins/customers/web.ts in the browser
+lib/web/status-badge.tsx              a React component any plugin can import
+plugins/customers/
+  plugin.ts                           defaults.allow, requires and the guard
+  contract.ts                         types another plugin may import
+  collections/customer.ts             defineCollection<Customer> with its named queries
+  views/web/screen/customers.tsx       screen:customers
+  views/web/dialog/customer.tsx        dialog:customer
+  lib/web/customer-form.tsx          a component used by the dialog
 ```
+
+Type an Action's input on `run`. Use a document type in `defineCollection<T>` and put named queries
+beside it. The [compiler guide](the-compiler.md) shows the declarations and generated imports. The
+worked salon recipes below use the hand-written alternative. In a generated plugin, use the paths
+above and default-export the View functions in those recipes.
 
 A View's name says where it shows:
 
@@ -73,6 +77,51 @@ A View's name says where it shows:
 Names are conventions, not a router: the frame below turns `/customers/…` into `screen:customers`.
 Under Copilotz's own shell (`webShell`), an address `/<kind>/<id>` shows the View named `<kind>`, or
 `web.<kind>`, given `{ _id }`; this guide's apps draw their own frame instead.
+
+### Shared UI: an app's own components
+
+Screens share more than the toolkit's pieces: a status badge every list shows, a table with the
+app's page sizes and exports, a form section (an address's fields) several dialogs hold. Those are
+the app's own components, made of the toolkit's pieces, and they live in `lib/`:
+
+- **A plugin's `lib/web/`** for what its own screens share, and for a component one View draws (a
+  screen's keyboard shortcuts need one: the visits board below).
+- **The app's `lib/web/`**, beside `plugins/`, for what every plugin's screens share. It isn't a
+  plugin, so any plugin imports it; `boundaries()` checks imports between plugins only.
+
+Files in `lib/` are never read as declarations: they're plain modules, and export what they like.
+Views stay one per file, in `views/web/`: don't group Views in a file, or put components among them.
+A shared component composes the toolkit and leaves the look to the theme, as a screen does.
+
+```tsx
+// lib/web/status-badge.tsx
+import { Badge, type Tone } from "copilotz/web";
+import type { ReactNode } from "react";
+
+const TONES: Record<string, Tone> = {
+  open: "info",
+  paid: "success",
+  overdue: "warning",
+  void: "neutral",
+};
+
+/** An invoice's or an order's status, the same on every screen that shows one. */
+export function StatusBadge({ status }: { status: string }): ReactNode {
+  return <Badge tone={TONES[status] ?? "neutral"}>{status}</Badge>;
+}
+```
+
+A list's column shows it, from any plugin:
+
+```tsx
+import { StatusBadge } from "../../../../lib/web/status-badge.tsx";
+
+const status: Column<Invoice> = {
+  key: "status",
+  title: "Status",
+  render: (invoice) => <StatusBadge status={invoice.status} />,
+};
+```
 
 ```tsx
 // plugins/customers/web.tsx
@@ -533,7 +582,7 @@ import { Dialog, go, todayIn } from "copilotz/web";
 import type { ReactNode } from "react";
 import { formatsOf } from "../../../look/contract.ts";
 import type { Customer } from "../../contract.ts";
-import { CustomerForm } from "./customer-form.tsx";
+import { CustomerForm } from "../../lib/web/customer-form.tsx";
 
 /** `dialog:customer`: a customer's form over the list (`_id` "new" for a new one). */
 export const customerDialog = (
@@ -567,7 +616,7 @@ export const customerDialog = (
 ```
 
 ```tsx
-// plugins/customers/views/web/customer-form.tsx
+// plugins/customers/lib/web/customer-form.tsx
 import { Button, DatePicker, Dialog, Field, Form, Input, Stack, toast } from "copilotz/web";
 import { type ReactNode, useState } from "react";
 import type { Customer } from "../../contract.ts";
@@ -669,20 +718,18 @@ export function CustomerForm({ customer, today, dayFormat, save, close, visits }
 Where its errors come from:
 
 - **The browser's own checks** run first: `required`, `type="email"`.
-- **The Action's checks** are the ones that count, for a page, a script and a model alike. It throws
-  `failure(code, message, { public: true })`, and `ctx.call` rejects with that message. Thrown from
-  `Form`'s `onSubmit`, it shows at the form's top, as an alert.
-- **A refusal about one field** carries it in `detail` (`refusal()` in `contract.ts` above): the
-  form catches it and gives its words to that `Field`'s `error`. A `Field` whose child is a function
-  of its control (`{(control) => <Input {...control} />}`) ties the error to the field for screen
-  readers too (`aria-invalid`, `aria-describedby`).
-- **The Action's `input` schema** checks the shape. Its messages are for developers, not people:
-  check what people get wrong in `run`, with words of your own.
+- **The collection schema checks the save** for every caller. When it refuses a field, the error
+  names it in `detail.field`. The customer form catches the error and passes a message to that
+  `Field`'s `error`. A `Field` whose child is a function of its control
+  (`{(control) => <Input {...control} />}`) ties the error to the field for screen readers too
+  (`aria-invalid`, `aria-describedby`).
+- **A form that calls an Action** can also receive a public `failure` from the Action. When
+  `onSubmit` throws, `Form` shows the message at its top as an alert.
 
-The dialog closes, and says "saved" with a `toast`, only after the Action answered. A row `Field`
-(`layout="row"`) puts its label in a column beside its control: `labelWidth` and `controlWidth` are
-each a share of the whole row (`"33.33%"` and `"66.67%"` fill it). The footer's Save button submits
-the form by its id (`form="customer"`), since a dialog's footer is outside it.
+The dialog closes and shows a `toast` after the save succeeds. A row `Field` (`layout="row"`) puts
+its label in a column beside its control: `labelWidth` and `controlWidth` are each a share of the
+whole row (`"33.33%"` and `"66.67%"` fill it). The footer's Save button submits the form by its id
+(`form="customer"`), since a dialog's footer is outside it.
 
 ## A View inside a View
 
@@ -808,7 +855,7 @@ import type { DateRange, Where } from "copilotz/web";
 import type { ReactNode } from "react";
 import { formatsOf } from "../../../look/contract.ts";
 import type { Visit } from "../../contract.ts";
-import { VisitsBoard } from "./visits-board.tsx";
+import { VisitsBoard } from "../../lib/web/visits-board.tsx";
 
 /** `screen:visits`, at `/visits`: the visits in a range of days, and a visit's dialog over them. */
 export const visitsScreen = (where: Where, ctx: ViewContext<ReactNode>): ReactNode => {
@@ -844,7 +891,7 @@ export const visitsScreen = (where: Where, ctx: ViewContext<ReactNode>): ReactNo
 ```
 
 ```tsx
-// plugins/visits/views/web/visits-board.tsx
+// plugins/visits/lib/web/visits-board.tsx
 import {
   Button,
   DataTable,
@@ -934,7 +981,7 @@ import type { PickerOption } from "copilotz/web";
 import type { ReactNode } from "react";
 import { formatsOf } from "../../../look/contract.ts";
 import type { Visit } from "../../contract.ts";
-import { VisitForm } from "./visit-form.tsx";
+import { VisitForm } from "../../lib/web/visit-form.tsx";
 
 /** `dialog:visit`: a visit's form over the list (`_id` "new" for a new one). */
 export const visitDialog = (
@@ -964,7 +1011,7 @@ export const visitDialog = (
 ```
 
 ```tsx
-// plugins/visits/views/web/visit-form.tsx
+// plugins/visits/lib/web/visit-form.tsx
 import { Button, DateTimePicker, Dialog, Field, Form, Input, Picker, toast } from "copilotz/web";
 import type { PickerOption } from "copilotz/web";
 import { type ReactNode, useState } from "react";
@@ -1111,7 +1158,7 @@ export const save = defineAction({
 ```ts
 // plugins/visits/mod.ts
 import { definePlugin, type Plugin } from "copilotz";
-import { save } from "./actions.ts";
+import { save } from "./actions/save.ts";
 import { between, ofCustomer, one } from "./queries.ts";
 
 export const visits: Plugin = definePlugin({
@@ -1296,7 +1343,7 @@ export const save = defineAction({
 ```
 
 ```tsx
-// plugins/services/views/web/service-form.tsx
+// plugins/services/lib/web/service-form.tsx
 import { Avatar, Button, Dialog, Field, FileInput, Form, Input, Stack, toast } from "copilotz/web";
 import { type ReactNode, useEffect, useState } from "react";
 
@@ -1441,7 +1488,7 @@ export const picture: Route = async (_request, { runtime, actor, params }) => {
 ```ts
 // plugins/services/mod.ts
 import { definePlugin, type Plugin } from "copilotz";
-import { save } from "./actions.ts";
+import { save } from "./actions/save.ts";
 import { list } from "./queries.ts";
 import { picture } from "./routes.ts";
 
@@ -1518,10 +1565,12 @@ export const servicesScreen = (_where: Where, ctx: ViewContext<ReactNode>): Reac
 
 Compose the toolkit's pieces first: `Grid` and `Stack` place anything, `Card` and `ListGroup` make
 panels and lists, `RowsEditor` edits repeating rows, `Picker search` is a choice from a long list,
-`Split` sets a main column beside a summary, `Tabs` and `Menu` the rest. If a screen still needs
-what no piece or token does, it's a gap: say what's missing in the smallest example, and keep the
-screen to the toolkit until it's there. Don't write a UI kit of the app's own, override
-`.copilotz-*` classes, or copy a workaround written for an older release without checking this one:
+`Split` sets a main column beside a summary, `Tabs` and `Menu` the rest. What several screens share
+is a component of the app's own in `lib/`, made of those pieces
+([shared UI](#shared-ui-an-apps-own-components)). If a screen still needs what no piece or token
+does, it's a gap: say what's missing in the smallest example, and keep the screen to the toolkit
+until it's there. Don't restyle the toolkit (a stylesheet of the app's own, overrides of
+`.copilotz-*` classes), or copy a workaround written for an older release without checking this one:
 rc.54 has `Screen`, typed range ends, seconds in day-times, `hidden` on layout pieces, fields that
 fit table cells, `detailOpen`, `Toolbar grow`, a file field's own words and previews.
 

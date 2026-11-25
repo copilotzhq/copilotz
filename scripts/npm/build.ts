@@ -29,12 +29,13 @@
  *   node scripts/npm/build.ts --package=work   # one package, once the core is built
  *   cd dist/npm && npm pack                    # what npm would publish
  */
-import { copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { llmsTxt } from "../llms.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const arg = (name: string) =>
@@ -66,6 +67,7 @@ const FILES = [
   "README.md",
   "AGENTS.md",
   "CHANGELOG.md",
+  "CONTRIBUTING.md",
   "LICENSE",
   "hosts/web/theme/files/OFL-Manrope.txt",
   "hosts/web/theme/files/OFL-SpaceGrotesk.txt",
@@ -164,6 +166,10 @@ function emit(program: ts.Program): string[] {
   }
   const written: string[] = [];
   const emitted = program.emit(undefined, (file, text) => {
+    // The CLI exports only its executable entry. Its private build helpers use
+    // the app's TypeScript devDependency, which the runtime package needn't install.
+    const output = relative(program.getCompilerOptions().outDir!, file).split(sep).join("/");
+    if (output.startsWith("cli/") && output.endsWith(".d.ts") && output !== "cli/mod.d.ts") return;
     const code = /\.(js|d\.ts)$/.test(file)
       ? renamed(file.endsWith(".d.ts") ? declared(text) : text)
       : text;
@@ -263,6 +269,13 @@ async function buildCore(out: string) {
     await copyFile(join(ROOT, file), join(out, file));
   }
 
+  const docs = join(ROOT, "docs");
+  await cp(docs, join(out, "docs"), {
+    recursive: true,
+    filter: (path) => path !== join(docs, "_staging"),
+  });
+  await writeFile(join(out, "llms.txt"), llmsTxt());
+
   const used = packagesOf(await specifiersIn(written));
   const unknown = [...used].filter((name) => !versions.has(name) && !(name in OPTIONAL));
   if (unknown.length) fail(`imported, but not in deno.json's imports: ${unknown.join(", ")}`);
@@ -306,6 +319,7 @@ async function buildCore(out: string) {
     type: "module",
     engines: root.engines,
     sideEffects: false,
+    bin: { copilotz: js(deno.exports["./gen"]) },
     types: types(deno.exports["."]),
     exports: {
       ...Object.fromEntries(
@@ -317,6 +331,7 @@ async function buildCore(out: string) {
       ...new Set(
         written.map((file) => relative(out, file).split(sep)[0]).concat(
           FILES.map((file) => file.split("/")[0]),
+          ["docs", "llms.txt"],
         ),
       ),
     ].sort(),

@@ -41,6 +41,7 @@
  * It loads front ends only (their Views, and their resources): the plugins
  * they build on live with the owner.
  */
+import type { AppDocument, AppName, LocalQuery } from "./names.ts";
 import { createWorker } from "@oxian/oxian-js";
 import {
   type Answer,
@@ -102,7 +103,10 @@ export type Watcher<T> = (rows: WithId<T>[], error?: Error & { code?: string }) 
  * A collection, from outside: spelled as plugin code's `ctx.db.collection`,
  * each operation the person's own (see the module's header).
  */
-export type ClientCollection<T = Record<string, unknown>> = {
+export type ClientCollection<
+  T = Record<string, unknown>,
+  C extends string = AppName<"collections">,
+> = {
   find(filter?: Filter, options?: FindOptions): Cursor<T>;
   findOne(filter?: Filter, options?: FindOptions): Promise<WithId<T> | null>;
   countDocuments(filter?: Filter): Promise<number>;
@@ -116,7 +120,7 @@ export type ClientCollection<T = Record<string, unknown>> = {
   replaceOne(filter: Filter, doc: T, options?: { upsert?: boolean }): Promise<UpdateResult>;
   deleteOne(filter: Filter): Promise<DeleteResult>;
   /** Runs one of the collection's named queries. */
-  query<R = unknown>(name: string, params?: unknown): Promise<R>;
+  query<R = unknown>(name: LocalQuery<C>, params?: unknown): Promise<R>;
   /**
    * The rows `find(filter, options)` finds, now and after each commit that
    * changes them: `onChange` hears each. It returns how to stop.
@@ -132,7 +136,12 @@ export type Client = {
   /** Observes a View here, as the person: its reads come from the owner, and follow its changes. */
   observe: Observers["observe"];
   /** Collections, as the person reads and writes them (see the module's header). */
-  db: { collection<T = Record<string, unknown>>(name: string): ClientCollection<T> };
+  db: {
+    collection<
+      T = unknown,
+      C extends AppName<"collections"> = AppName<"collections">,
+    >(name: C): ClientCollection<AppDocument<C, T>, C>;
+  };
   /**
    * Calls an Action on the owner, as the person. With `id` (theirs alone),
    * sent again it answers what the first did, without doing it twice. With
@@ -141,7 +150,7 @@ export type Client = {
    * there.
    */
   call<R = unknown>(
-    action: string,
+    action: AppName<"actions">,
     input?: unknown,
     options?: { id?: string; in?: string },
   ): Promise<R>;
@@ -512,7 +521,7 @@ function open(options: ClientOptions): Client {
   };
 
   /** A collection, as the person reads and writes it from here. */
-  const collectionOf = <T>(name: string): ClientCollection<T> => {
+  const collectionOf = <T, C extends string>(name: C): ClientCollection<T, C> => {
     const write = (op: WriteOp) => ask<unknown>(WRITE, { op });
     const watch = (
       filter: Filter,

@@ -1,3 +1,115 @@
+## 1.0.0-rc.64 — 2026-11-25
+
+Start a business app with `copilotz init`. Give each declaration a file and write its types once.
+The compiler assembles the plugin and checks the names the app uses. The web toolkit now covers
+table exports, printed invoices and barcode labels. The guides ship with the runtime.
+
+**Breaking:**
+
+- Code that calls an `ActionDef` or named query's `allow` directly must pass the caller's
+  `AllowContext` and await the result. A query may inherit the rule from its plugin. Existing
+  synchronous rules still work when the runtime calls them.
+
+**New:**
+
+- **Plugins from folders.** `copilotz init [dir]` makes a working orders app with a TSX loader,
+  checks and a test. `copilotz gen` builds server, web and terminal entry points and writes
+  `copilotz-env.d.ts`. Action, collection and query names are checked against the plugins in
+  `app.ts`. View names complete in the editor. Use `--watch` during development, `--check` in CI and
+  `--eject` to take over a plugin's assembly.
+- **Schemas from TypeScript.** Type an Action's second parameter on `run`, or declare a collection
+  with `defineCollection<Order>({ indexes, queries })`. The compiler turns local and imported types
+  into runtime checks. Field comments describe tool inputs, tags such as `@minimum 1` constrain
+  them, and a named collection read knows the document and its string id.
+- **Shorter Actions.** A plugin's `defaults.allow` covers its Actions and named queries. Each can
+  override it. An async `allow(actor, input, ctx)` can read the caller's permissions before a
+  declared grant (`as`) takes effect. `transaction: true` opens or joins a transaction and rolls
+  back the writes together on failure. An Action with no parameters can omit `input`. An explicit
+  schema types both `run` and `allow`.
+- **Table files.** `tableSheet` projects the exported columns and totals into a `TableExportSheet`
+  of `ExportCell` values. `exportTableFile` builds the file and `downloadTableFile` saves it in the
+  browser. `TableExportOptions` sets `values` (raw or displayed), the SQL `tableName` and the `csv`
+  dialect (`quote`, `delimiter`, `lineEnding`, `finalNewline`, `header`).
+- **Table controls.** Give `DataTable` the file settings in `tableExportOptions` and totals by
+  column key in `footerRows`. Supply a `TableExportFormat` through `formats` or share formats
+  through `TableExportFormats`. `exportChoices` orders the available menu entries. `toolbarContent`
+  adds a button or filter. `showSinglePageSize` keeps a lone page size visible on `DataTable` and
+  `Pagination`.
+- **Printed invoices and labels.** `TablePdfOptions` adds `size`, `titleLines`, `subtitle`,
+  `headerImage` and `columns` with widths and alignment by key or in exported order. `pdfImage`
+  prepares a reusable `PdfImage` from PNG or JPEG. `drawDocumentPdf` places images and vector
+  barcodes on a page. `ProductBarcode`, `barcodeBars` and `barcodePng` draw the symbol selected by
+  `BarcodeOptions.format`. `code39` supports Mod 43 with `check`, `ean8` and `ean13` encode retail
+  symbols, and `eanDigits` completes or verifies the check digit.
+- **Mail in tests.** `captureEmail()` keeps messages and attachments sent through `email.send`.
+  Inspect `messages` and reset with `clear()`. The capture adapter can also write MIME messages as
+  `.eml` files.
+
+**Fixed:**
+
+- Grant checks inside a held transaction see staged membership changes. Database-backed permission
+  rules use the same transaction reader on memory, SQLite and PGlite.
+- The final record flush attempts each identity's appends in order and reports the first refusal.
+- Dot-path updates resolve a field's `$ref` in its original schema resource, including embedded
+  collection schemas generated from TypeScript.
+- JSON records keep sparse cells as `""` and explicit `null` as `null`. Table-shaped JSON with raw
+  values preserves each cell's type.
+- XLSX exports with `values: "raw"` keep numeric-looking strings as text, preserving their digits.
+- `tableSheet` accepts inline `DataTable` columns with `align` and `render` and infers the row type.
+- PDF column widths and alignments follow the visible columns. A minimal-quoted CSV keeps a row with
+  one empty field (`""`). `copilotz/web/export`'s types need no React.
+- A barcode with no `width` grows to fit its whole modules and quiet margins on screen and in PNG.
+  In `drawDocumentPdf`, an omitted width uses the space from `x` to the page edge. An undersized
+  explicit width grows to the minimum of one unit per module. Printed bars must fit on the page.
+  Their quiet margins may extend past the edge. `documentPdf` and `Drawn` keep their rc.63 page and
+  barcode types.
+
+**Fixed, here since rc.63 or before:**
+
+- **Security: a declared grant's reads are checked for the conversation's audience on every path.**
+  An unrecorded Action reading as a grant, called from a named query or a watched query, skipped the
+  check a direct call makes, so a staff grant could read into a conversation shared with a contact.
+- **A transaction holds its `durable: false` writes until the durable commit,** so a failed write no
+  longer leaves durable data committed behind an error (`ctx.transaction` and `transaction: true`).
+- **A `ctx.record` append is kept as the identity that made it,** a declared grant included; one the
+  owner refuses at completion fails the Action on the record.
+
+**Fixed in this release's own work:** an Action input embedding `Infer<typeof schema>` keeps its
+`$ref`s; `gen` resolves Deno import-map aliases; the `copilotz` command runs on Node 24.0 and 24.1;
+and the capture mail adapter refuses a public `links` origin unless a test sets
+`email.capture.allowPublicOrigin: true`.
+
+**Known issues:**
+
+- If permission for a nested call changes between attempts, a retried Action can run a later
+  completed nested call again, as in rc.63.
+- Two Processors that make the same first nested call with the same input for the same event share
+  its record. After a crash, one Processor can receive the result from the other's record, as in
+  rc.63.
+
+A coming release will fix both issues with nested-call IDs that name their caller.
+
+**Docs:**
+
+- The “Find it” index in `AGENTS.md` links each job to an API and a guide. The npm and JSR packages
+  include those pages and a root `llms.txt` with the full reading list. The compiler, toolkit and
+  mail guides cover the new declarations, screens and files.
+
+**Upgrading:**
+
+- Existing plugins can keep their hand-written entry points and JSON Schemas. To generate a plugin,
+  give each declaration a default export, move React components into `lib/web/`, and install
+  TypeScript as a dev dependency. Keep `_id` out of document types and use a string tagged
+  `@format date-time` for a JSON timestamp. An explicit `schema` or `input` takes precedence. Commit
+  `copilotz-env.d.ts` and generate the host modules before type-checking.
+- A `ctx.record` made by an unrecorded Action that a watched query or View calls is now written as
+  the viewer, under the collection's rules, as the call's other writes are (rc.63 wrote it as the
+  system). One the rules refuse isn't kept, and the process logs it. An atomic Action's records now
+  commit or roll back with the transaction it joined.
+- CSV, TXT and XLS exports write numeric text (`-12.5`, `-1e-7`, `+1`) as it is; rc.63 put an
+  apostrophe before a leading `+` or `-`. Text that looks like a formula (`=SUM(…)`, `@cmd`) is
+  still guarded.
+
 ## 1.0.0-rc.63 — 2026-11-24
 
 Chats can be renamed, the models catalog knows GPT-6.2 Astra and Sol, and rc.62's `"moderate"`

@@ -3,7 +3,9 @@
  * read calls it too, read-only, as when an Action calls it. It used to be left
  * as the reader, quietly reading less than it asked for.
  */
-import { assertEquals } from "@std/assert";
+import { labels } from "../../plugins/access/spaces/shared/labels.ts";
+import { READ_VIEW } from "../browsers.ts";
+import { assertEquals, assertRejects } from "@std/assert";
 import {
   type Actor,
   createRuntime,
@@ -11,6 +13,7 @@ import {
   defineCollection,
   definePlugin,
   grant,
+  people,
   type Runtime,
   type Store,
 } from "../mod.ts";
@@ -71,6 +74,154 @@ for (const [kind, make] of Object.entries(stores)) {
       assertEquals(await rt.call("secret.count", {}, { actor: ana }), 3);
       // From her query, the same.
       assertEquals(await rt.query("secret.counted", {}, { actor: ana }), 3);
+    } finally {
+      await rt.close();
+    }
+  });
+}
+
+for (const [kind, make] of Object.entries(stores)) {
+  test(`${kind}: every granted query read consults the callee's elevation policy`, async () => {
+    const calls: string[] = [];
+    let entered = 0;
+    const rt = await createRuntime({
+      store: await make(),
+      plugins: [{
+        ...probe,
+        labels: {
+          read: () => [],
+          write: (_who, _collection, doc) => doc,
+          elevate: async (who, allow) => {
+            calls.push(who.id);
+            return !allow || await allow({ kind: "contact", id: "reader" }, {});
+          },
+        },
+        actions: {
+          report: defineAction({
+            allow: () => true,
+            run: (ctx) => ctx.db.collection("secret").query("counted"),
+          }),
+          preview: defineAction({
+            allow: () => true,
+            transaction: true,
+            run: (ctx) => ctx.db.collection("secret").query("counted"),
+          }),
+          "secret.count": defineAction({
+            as: "count",
+            allow: people,
+            record: false,
+            run: (ctx) => {
+              entered++;
+              return ctx.db.collection("secret").countDocuments({});
+            },
+          }),
+        },
+      }],
+    });
+    try {
+      const actor = { kind: "agent", id: "staff", for: ana };
+      for (const action of ["secret.count", "report", "preview"]) {
+        await assertRejects(() => rt.call(action, {}, { actor }), Error, "secret.count");
+      }
+      await assertRejects(() => rt.query("secret.counted", {}, { actor }), Error, "secret.count");
+      const watching = rt.observe(READ_VIEW, { collection: "secret", query: "counted" }, { actor });
+      try {
+        const value = await watching.ready;
+        assertEquals(value.status, "failed");
+        if (value.status === "failed") {
+          assertEquals((value.error as { code: string }).code, "forbidden");
+        }
+      } finally {
+        watching.close();
+      }
+      assertEquals(calls, ["staff", "staff", "staff", "staff", "staff"]);
+      assertEquals(entered, 0);
+    } finally {
+      await rt.close();
+    }
+  });
+}
+
+for (const [kind, make] of Object.entries(stores)) {
+  test(`${kind}: a grant checks the conversation and its caller rule inside the held transaction`, async () => {
+    const store = await make();
+    const rt = await createRuntime({
+      store,
+      // A cold PGlite read must use the held connection. The other stores also exercise a warm cache.
+      cache: kind === "pglite" ? false : undefined,
+      plugins: [{
+        ...probe,
+        labels,
+        collections: {
+          ...probe.collections,
+          member: {
+            schema: {
+              type: "object",
+              properties: {
+                space: { type: "string" },
+                member: { type: "string" },
+                approved: { type: "boolean" },
+              },
+              required: ["space", "member"],
+            },
+          },
+        },
+        actions: {
+          preview: defineAction({
+            allow: people,
+            transaction: true,
+            run: async (ctx, input) => {
+              const members = ctx.db.collection("member");
+              await members.insertOne({
+                space: "thread:one",
+                member: "contact:guest",
+                approved: input.approved,
+              });
+              await members.countDocuments({}); // Force the writer open before asking for the grant.
+              return ctx.db.collection("secret").query("counted");
+            },
+            input: {
+              type: "object",
+              properties: { approved: { type: "boolean" } },
+              required: ["approved"],
+            },
+          }),
+          shareAndRead: defineAction({
+            as: "count",
+            allow: people,
+            transaction: true,
+            run: async (ctx) => {
+              // The insert and read ride in a single request from the same grant.
+              await ctx.db.collection("member").insertOne({
+                space: "thread:one",
+                member: "contact:guest",
+              });
+              return ctx.db.collection("secret").countDocuments({});
+            },
+          }),
+          "secret.count": defineAction({
+            as: "count",
+            record: false,
+            allow: async (who, _input, ctx) =>
+              people(who) ||
+              !!await ctx.db.collection("member").findOne({ space: "thread:one", approved: true }),
+            run: () => "staff result",
+          }),
+        },
+      }],
+    });
+    const actor = { kind: "agent", id: "staff", for: ana, thread: "one" };
+    try {
+      assertEquals(await rt.call("secret.count", {}, { actor }), "staff result");
+      await assertRejects(
+        () => rt.call("preview", { approved: false }, { actor }),
+        Error,
+        "goes beyond",
+      );
+      await assertRejects(() => rt.call("shareAndRead", {}, { actor }), Error, "goes beyond");
+      assertEquals(await store.count("member", {}), 0);
+      assertEquals(await rt.call("preview", { approved: true }, { actor }), "staff result");
+      assertEquals(await store.count("member", {}), 1);
     } finally {
       await rt.close();
     }

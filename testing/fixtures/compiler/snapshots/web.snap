@@ -1,0 +1,9 @@
+import { definePlugin } from "copilotz";
+import viewScreenOrders from "../../../../plugins/orders/views/web/screen/orders.tsx";
+
+export default definePlugin({
+  name: "orders-web",
+  views: {
+    "screen:orders": viewScreenOrders,
+  },
+});

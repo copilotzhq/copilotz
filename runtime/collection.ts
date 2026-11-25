@@ -2,9 +2,13 @@
  * The MongoDB collection API. Every call becomes one op for the owner, which
  * translates it onto the storage adapter. Nothing is filtered here.
  */
+import type { AppName, LocalQuery } from "./names.ts";
 import type { Pipeline } from "./aggregate.ts";
 import type { Op } from "./ops.ts";
 import type { Doc, Filter, FindOptions, Update } from "./store.ts";
+
+/** A type-only declaration before gen supplies its collection schema. */
+export const missingCollectionSchema = { not: {} } as const;
 
 export type WithId<T> = T & { _id: string };
 
@@ -36,7 +40,7 @@ export type Unacknowledged = { acknowledged: false };
 export type WriteOptions = { writeConcern?: { w?: number } };
 type Unanswered = { writeConcern: { w: 0 } };
 
-export type Collection<T> = {
+export type Collection<T, C extends string = AppName<"collections">> = {
   insertOne(doc: T & { _id?: string }): Promise<{ acknowledged: true; insertedId: string }>;
   insertMany(docs: (T & { _id?: string })[]): Promise<{
     acknowledged: true;
@@ -95,7 +99,7 @@ export type Collection<T> = {
     options?: NearestOptions,
   ): Promise<(WithId<T> & { _score: number })[]>;
   /** Runs one of the collection's named queries. */
-  query<R = unknown>(name: string, params?: unknown): Promise<R>;
+  query<R = unknown>(name: LocalQuery<C>, params?: unknown): Promise<R>;
 };
 
 /** `field` names the vector field when the collection has several. Ten results by default. */
@@ -137,7 +141,11 @@ const plain = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 /** Runs a collection's named query; the executor supplies it. */
 export type Query = (collection: string, name: string, params: unknown) => Promise<unknown>;
 
-export function collection<T>(name: string, run: Run, query?: Query): Collection<T> {
+export function collection<T, C extends string = AppName<"collections">>(
+  name: C,
+  run: Run,
+  query?: Query,
+): Collection<T, C> {
   const prepare = (doc: Record<string, unknown>): Doc => {
     const { _id, ...fields } = plain(doc);
     return { ...fields, _id: typeof _id === "string" ? _id : crypto.randomUUID() };
@@ -227,5 +235,5 @@ export function collection<T>(name: string, run: Run, query?: Query): Collection
       query
         ? query(name, queryName, params)
         : Promise.reject(new Error(`Queries can't run here (${name}.${queryName})`)),
-  } as Collection<T>;
+  } as Collection<T, C>;
 }

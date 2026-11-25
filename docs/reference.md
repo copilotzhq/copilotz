@@ -13,22 +13,27 @@ plugin Copilotz ships has [a page of its own](reference/plugins.md), read from t
 
 ## Install
 
+Start a new app with `npx copilotz@1.0.0-rc.64 init orders`. The starter includes the compiler, a
+plugin, a web page and tests. [Start an app](guides/the-compiler.md#start-an-app).
+
+To add the runtime to an existing project:
+
 ```sh
 npm install copilotz@next                      # Node 24+ (npm, pnpm, yarn)
 bun add copilotz@next                          # Bun
-deno add jsr:@copilotz/copilotz@^1.0.0-rc.63   # Deno 2.9+ (or `deno add npm:copilotz@next`)
+deno add jsr:@copilotz/copilotz@^1.0.0-rc.64   # Deno 2.9+ (or `deno add npm:copilotz@next`)
 ```
 
 Until 1.0, the release candidates are on npm's `next` tag, and a plain `npm install copilotz` or
 `deno add jsr:@copilotz/copilotz` gets an older version. At 1.0, stable installs drop `@next` and
 the version.
 
-On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.63"`), and the
+On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.64"`), and the
 imports read the same everywhere. 3 pieces need a package of their own, installed beside it:
 `esbuild` to bundle the page's code on Node (`bundle`), `@electric-sql/pglite` for PostgreSQL in the
 process, and `@types/react` for the front ends' types. A product's plugins are packages of their own
 too, at Copilotz's version (`npm install @copilotz/work@next`,
-`deno add jsr:@copilotz/work@^1.0.0-rc.63`): see [Product packages](#product-packages).
+`deno add jsr:@copilotz/work@^1.0.0-rc.64`): see [Product packages](#product-packages).
 
 ## Entry points
 
@@ -72,7 +77,7 @@ The same names on npm (`copilotz/…`) and JSR (`@copilotz/copilotz/…`).
 | `copilotz/web/server`                  | the page's server half: `webPage` (the page, as a plugin), `widgetsOf`, `routePage` (a route's own page in the app's look)                                |
 | `copilotz/web/widget`                  | the widget host: an app's web Views inside an outside assistant (MCP Apps, ChatGPT)                                                                       |
 | `copilotz/web/theme`                   | `themeOf(plugins)`: the app's theme, for the page's first paint                                                                                           |
-| `copilotz/web/export`                  | the toolkit's files without React, on a server too: `exportFile` (CSV, `.xlsx`, PDF…), `documentPdf`, Code 128's `bars`                                   |
+| `copilotz/web/export`                  | table and document files on a server or in a browser: `exportFile`, `tablePdf`, `documentPdf`, `pdfImage`, `bars`, `barcodePng`                           |
 | `copilotz/web/node`                    | `listen` (serves `runtime.fetch` on Node and Bun, sockets included), `bundle` (the browser's code, with esbuild)                                          |
 | `copilotz/terminal`                    | the terminal host, `terminal({ runtime, me })`, and its toolkit                                                                                           |
 | `copilotz/exporters`                   | `otlp`, `exposition`: metrics out, the OpenTelemetry way                                                                                                  |
@@ -90,7 +95,7 @@ same plugin, with less code in the server's memory.
 ## Product packages
 
 What a product does its own way, rather than what every app needs, is a package of its own, released
-with Copilotz at its version: `@copilotz/work@1.0.0-rc.63` goes with `copilotz@1.0.0-rc.63`. Each
+with Copilotz at its version: `@copilotz/work@1.0.0-rc.64` goes with `copilotz@1.0.0-rc.64`. Each
 has the same entry points, its plugins (`@copilotz/work`), their front ends (`@copilotz/work/web`)
 and their shapes, for plugins built on them (`@copilotz/work/contract`), with the same names on npm
 and JSR.
@@ -169,7 +174,10 @@ From `copilotz`:
 
 ## Who may call: `allow`
 
-An Action's `allow(actor, input)` says who may call it. The runtime asks it wherever an actor calls.
+An Action's `allow(actor, input, ctx)` says who may call it. It may return a boolean or a promise of
+one. The runtime asks it wherever an actor calls. `ctx.db` reads as the caller, before any grant.
+When checking an agent and its principal, each check reads as the actor being checked, in the
+caller's place. The table uses the Action's own rule or the default its plugin declares.
 
 | Where the call comes from                                                         | `allow` asked | Without an `allow`           |
 | --------------------------------------------------------------------------------- | ------------- | ---------------------------- |
@@ -261,7 +269,8 @@ run: async (input, ctx) => await ctx.as(grant("availability")).call("slots.all",
 ```
 
 Queries and events have an `allow` too, asked only from outside. A query declared as a bare function
-is the system's. No actor emits an event without `allow` from outside, and a key emits none.
+uses its plugin's default, or is the system's when there is none. No actor emits an event without
+`allow` from outside, and a key emits none.
 
 ## A plugin
 
@@ -272,6 +281,7 @@ A plugin is a plain object. `definePlugin` only types it.
 | `name`        | its name                                                                                     |
 | `requires`    | the plugins it builds on, by name: the runtime doesn't start without them                    |
 | `collections` | its collections, and indexes it adds to another's (`{ usage: { indexes: [["tags.app"]] } }`) |
+| `defaults`    | `{ allow }` supplies the rule for this plugin's Actions and named queries that omit one      |
 | `actions`     | what can be done                                                                             |
 | `events`      | the events it emits, beyond its collections' changes and its Actions' lifecycle              |
 | `processors`  | what happens when events happen                                                              |
@@ -294,13 +304,30 @@ replaces). A later View, adapter or route replaces an earlier one of its name. E
 
 ### Collections
 
-Documents with a JSON Schema, read and written with MongoDB's collection API. `defineCollection`
-types its documents and queries from the schema.
+Give `defineCollection` the type of one document. In a plugin assembled by `copilotz gen`, the
+compiler writes the JSON Schema that checks writes through the MongoDB collection API.
+
+```ts
+import { defineCollection } from "copilotz";
+
+interface Order {
+  customerId: string;
+  /** @minimum 1 */
+  quantity: number;
+}
+
+export default defineCollection<Order>({ indexes: [["customerId"]] });
+```
+
+Queries and reads of `ctx.db.collection("order")` see `Order & { _id: string }`. Leave `_id` to the
+runtime. An explicit schema wins, and `Infer<typeof schema>` names its document type. Use `string`
+with `/** @format date-time */` for timestamps. The compiler refuses `Date` because documents travel
+as JSON. [A collection from its type](guides/the-compiler.md#a-collection-from-its-type).
 
 | Field     | What it does                                                                                |
 | --------- | ------------------------------------------------------------------------------------------- |
 | `schema`  | the JSON Schema every write keeps to: inserts, replaces, and what updates set and leave     |
-| `queries` | named reads: a function, or `{ allow, description?, input?, run }` for actors from outside  |
+| `queries` | named reads: a function, or `{ allow?, description?, input?, run }` for actors from outside |
 | `vectors` | fields holding embeddings, kept as the store's vectors and searched with `nearest`          |
 | `indexes` | lists of scalar fields to find by (`[["thread", "at"]]`), made as the store opens           |
 | `private` | fields only trusted code reads: an actor's queries and Views get the documents without them |
@@ -364,22 +391,161 @@ write's statement and params, so a secret is written through an Action, never th
 
 ### Actions
 
-What can be done, by name. `defineAction` types `run`'s input from the schema.
+An Action names something a caller can do. In a plugin built by `copilotz gen`, type the second
+parameter of `run`.
 
-| Field         | What it does                                                                                     |
-| ------------- | ------------------------------------------------------------------------------------------------ |
-| `input`       | the JSON Schema a call's input must match                                                        |
-| `allow`       | who may call it (see [Who may call](#who-may-call-allow)); none: it's internal                   |
-| `run`         | `(ctx, input) => result`: what it does                                                           |
-| `description` | what it does, for people and for tools that list Actions                                         |
-| `record`      | `false`: unrecorded. It runs inline in its caller's job, with no events and no commit of its own |
-| `private`     | fields its calls are recorded without, as dot paths, in its input and its result                 |
-| `atomic`      | `true`: it does only what commits with a transaction, so another's `tx.call` runs it there       |
+```ts
+import { defineAction } from "copilotz";
+
+export default defineAction({
+  description: "Calculate an order line's total in cents.",
+  run: (_ctx, input: {
+    /** @minimum 1 */
+    quantity: number;
+    /** @integer */
+    unitPrice: number;
+  }) => input.quantity * input.unitPrice,
+});
+```
+
+The generator puts the JSON Schema in the plugin's `mod.ts`. Each caller gets the same input check,
+and tools see the field descriptions. The app needs `typescript` as a devDependency to generate the
+schema. The annotation also types the input in `allow(actor, input, ctx)`. Generation refuses
+`Date`; use `string` with `/** @format date-time */` for a JSON timestamp.
+[An Action’s input from its type](guides/the-compiler.md#an-actions-input-from-its-type). A
+hand-written `input` always wins. With a hand-written `mod.ts`, supply `input` yourself.
+
+| Field         | What it does                                                                                                          |
+| ------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `input`       | JSON Schema, inferred in `run` and `allow`. Omit it for an empty call or a compiler-generated input                   |
+| `allow`       | who may call it (see [Who may call](#who-may-call-allow)); falls back to the plugin's `defaults.allow`, then internal |
+| `run`         | `(ctx, input) => result`: what it does                                                                                |
+| `description` | what it does, for people and for tools that list Actions                                                              |
+| `record`      | `false`: unrecorded. It runs inline in its caller's job, with no events and no commit of its own                      |
+| `private`     | fields its calls are recorded without, as dot paths, in its input and its result                                      |
+| `atomic`      | `true`: it does only what commits with a transaction, so another's `tx.call` runs it there                            |
+| `as`          | a named system grant for `run`, e.g. `"inventory-adjust"`                                                             |
+| `transaction` | `true` runs the whole Action in one transaction and allows `tx.call` to join it                                       |
 
 Every recorded call is on the record (`action.started`, then `action.completed` or `action.failed`),
 retryable by id, and everything it causes is its caller's, where its caller is. Queries, Views and
 startup checks may call unrecorded Actions, read-only. One that acts as someone else (`ctx.as`)
 reads as them there too, as when an Action calls it; a startup check, which reads nothing, refuses.
+
+#### Actions with no parameters
+
+Omit `input` to accept either `runtime.call("order.expire")` or `runtime.call("order.expire", {})`.
+Extra fields, arrays and `null` fail the input check. Tools see a closed, empty object schema.
+
+```ts
+const expire = defineAction({
+  run: (ctx) =>
+    ctx.db.collection("order").updateMany(
+      { status: "draft", expires: { $lt: new Date().toISOString() } },
+      { $set: { status: "expired" } },
+    ),
+});
+```
+
+#### One permission check for Actions and queries
+
+A plugin can set `defaults: { allow: people }` in `definePlugin`, or in the default export of its
+`plugin.ts`. `people` lets in a signed-in person and what acts for them (their keys, agents and
+routines); use `inPerson` for the person themselves only (see [Who may call](#who-may-call-allow)).
+This applies to its own Actions and named queries, including bare query functions. An explicit
+`allow` replaces the default. Plugin code calling a collection's query directly keeps the existing
+query rules. A query's `allow` controls callers from outside.
+
+For inventory staff, put the check in the plugin's `lib/`. Each permission document names the
+person, module and space. Its collection's guard controls who can read or change it.
+
+```ts
+import { type Actor, type AllowContext, people, personOf } from "copilotz";
+
+export const canUse = (module: string) => async (actor: Actor, _: unknown, ctx: AllowContext) =>
+  people(actor) && !!ctx.in && !!await ctx.db.collection("permission").findOne({
+    person: personOf(actor),
+    module,
+    in: ctx.in,
+  });
+```
+
+#### A grant and a transaction for the whole Action
+
+Consider issuing one unit of a product. With an explicit check, grant and transaction the Action
+reads like this (`input` is the schema shown below).
+
+```ts
+const issue = defineAction({
+  input,
+  allow: people,
+  run: async (ctx, { product }) => {
+    if (ctx.actor && !await canUse("inventory")(ctx.actor, {}, ctx)) {
+      throw forbidden("Inventory access required");
+    }
+    return ctx.as(grant("inventory-adjust")).transaction(async (tx) => {
+      const { matchedCount } = await tx.db.collection("product").updateOne(
+        { _id: product, in: ctx.in, stock: { $gte: 1 } },
+        { $inc: { stock: -1 } },
+      );
+      if (!matchedCount) throw failure("invalid", "No stock here.", { public: true });
+      await tx.db.collection("movement").insertOne({ product, quantity: -1, in: ctx.in });
+    });
+  },
+});
+```
+
+With the same schema and stock rule, the plugin can share its admission check. TypeScript infers
+`product` as a string. For a schema kept in its own variable, use `as const` to keep its literals.
+
+```ts
+import { defineAction, definePlugin, failure } from "copilotz";
+import { canUse } from "./lib/can-use.ts";
+
+const input = {
+  type: "object",
+  properties: { product: { type: "string" } },
+  required: ["product"],
+  additionalProperties: false,
+} as const;
+
+const issue = defineAction({
+  input,
+  as: "inventory-adjust",
+  transaction: true,
+  run: async (ctx, { product }) => {
+    const { matchedCount } = await ctx.db.collection("product").updateOne(
+      { _id: product, in: ctx.in, stock: { $gte: 1 } },
+      { $inc: { stock: -1 } },
+    );
+    if (!matchedCount) throw failure("invalid", "No stock here.", { public: true });
+    await ctx.db.collection("movement").insertOne({ product, quantity: -1, in: ctx.in });
+  },
+});
+
+export const inventory = definePlugin({
+  name: "inventory",
+  defaults: { allow: canUse("inventory") },
+  actions: { "stock.issue": issue },
+});
+```
+
+The literal in `as` declares the grant, just as `grant("inventory-adjust")` names it in code. The
+Action's lifecycle events name the caller. Its writes name the system grant, with the caller in
+`via`, the place in `in`, and the Action's call id as their cause.
+
+`transaction: true` opens a transaction on a direct call and joins an existing one through
+`tx.call`. A throw rolls back the writes. A recorded failure still has its own failure record.
+Nested `ctx.transaction` joins it. Inside it, `ctx.call` can call Actions declaring either
+`transaction: true` or `atomic: true`. Streams, fetches and worker calls are refused there. Use
+`atomic: true` alone to let an Action join a caller's transaction while keeping ordinary calls as
+they were. A read-only query or View can't start a transactional Action.
+
+A transaction also holds writes to collections declared `durable: false`: its reads see them, and
+they take effect only when the durable commit does, so a failed write rolls back both kinds (with
+`transaction: true` and `ctx.transaction` alike). A declared grant's reads are checked for the
+conversation's audience on every path (a direct call, a named query, a watched query), and a
+`ctx.record` append is kept as the identity that made it, the grant included.
 
 ### Processors
 
@@ -596,14 +762,14 @@ The rest of `copilotz`:
 The log records what happened, with no bookkeeping tables beside it. Every event has its `type`,
 `data`, `cause`, commit time (`at`) and actor, with `for` and `in`.
 
-| Event                                          | When                                               | Its data                                              |
-| ---------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------- |
-| `<collection>.created`, `.updated`, `.deleted` | a write changes a document, in its commit          | `_id`, `doc`; an update also `changed`, `removed`     |
-| `action.started`                               | a recorded call starts                             | `action`, `input`, `startedAt`, `attempt`             |
-| `action.completed`, `action.failed`            | it ends                                            | `action`, `result` or `error`, `ms`, `attempt`        |
-| `action.retried`                               | a call runs again                                  | `attempt`, `after`: `failed` or `lost`                |
-| `processor.retried`, `processor.failed`        | a delivery failed; the last one is the dead letter | `attempt` or `attempts`, `error`; `actor` on the last |
-| a declared event                               | code emits it                                      | what its schema says                                  |
+| Event                                          | When                                               | Its data                                               |
+| ---------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------ |
+| `<collection>.created`, `.updated`, `.deleted` | a write changes a document, in its commit          | `_id`, `doc`; an update also `changed`, `removed`      |
+| `action.started`                               | a recorded call starts                             | `action`, `input`, `inputHash`, `startedAt`, `attempt` |
+| `action.completed`, `action.failed`            | it ends                                            | `action`, `result` or `error`, `ms`, `attempt`         |
+| `action.retried`                               | a call runs again                                  | `attempt`, `after`: `failed` or `lost`                 |
+| `processor.retried`, `processor.failed`        | a delivery failed; the last one is the dead letter | `attempt` or `attempts`, `error`; `actor` on the last  |
+| a declared event                               | code emits it                                      | what its schema says                                   |
 
 - **Collection writes:** the document after the write, the last version for a delete, without
   private fields. A write that changes nothing records nothing. `sys.` collections never record.
@@ -612,8 +778,9 @@ The log records what happened, with no bookkeeping tables beside it. Every event
 - **Retries:** `runtime.call(action, input, { id })` is retryable. An id that completed answers its
   recorded result without running. One still running is joined. Otherwise the call runs again. An id
   reused for another action or input is refused (`id_conflict`). A call whose executor died fails
-  with `executor_lost`. A nested call's id comes from its cause, its place, and its input, so a
-  retried delivery finds the calls it already made.
+  with `executor_lost`. A nested call's id comes from its cause, its place, and its input. A
+  synchronous permission refusal takes no place. An asynchronous check reserves the recorded call's
+  place before it waits.
 - **Timers:** an occurrence is the call `<timer>@<due time>`, and a failed one runs again as that
   same call.
 - **Causes:** every event names its cause, so the log is a tree you walk from any event back to the
@@ -707,6 +874,42 @@ Action inputs name models and never carry keys, because inputs are recorded. A p
 adapter under `adapters.llm`, `adapters.embeddings`, `adapters.transcription` or `adapters.image`,
 named by the protocol it speaks. The [models page](reference/plugins/models.md) lists its Actions.
 
+## Table exports, PDF images and barcodes
+
+| API                                                                                     | What an app gives it                                                                                                                                                                                                                                                                                       |
+| --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DataTable` from `copilotz/web`                                                         | `formats` adds or replaces named serializers. `exportChoices` chooses a menu with custom names, `exportName` the file's base name, and `exportAll` all matching rows available to the table. `footerRows` holds totals by column key.                                                                      |
+| `TableExportFormats` from `copilotz/web`                                                | A React context. Its `value` is the app's record of named formats. A table's `formats` takes precedence.                                                                                                                                                                                                   |
+| `DataTable.toolbarContent`, `showSinglePageSize`                                        | A React node places controls beside the built-ins. `toolbar={false}` hides the toolbar. The page-size flag also works on `Pagination`.                                                                                                                                                                     |
+| `exportFile(format, sheet, name, options?)`                                             | Gives `{ file, type, content }`. A `TableExportFormat` supplies `label`, `extension`, MIME `type` and `serialize(sheet, name, options)` returning text or bytes. Use `exportTableFile` with `options.formats` for custom names or raw scalar cells. Use `downloadTableFile` to save the file in a browser. |
+| `TableExportOptions` (DataTable’s `tableExportOptions`)                                 | `csv` sets `quote`, `delimiter`, `lineEnding`, `finalNewline` and `header`. `json` takes `"records"` or `"table"`. `tableName` names the SQL table. `values: "raw"` reads a table's field values in place of column text. `pdf` holds `TablePdfOptions`.                                                   |
+| `tableSheet(columns, rows, footerRows?, values?)`                                       | Pass the chosen columns in order. Gives `{ headers, keys, rows, footerRows }` for the serializers, with untitled columns omitted. Sheets made by hand need only `headers` and `rows`.                                                                                                                      |
+| `exportTableFile("pdf", sheet, name, { pdf })`                                          | The file's content holds PDF bytes. Set `size`, `orientation`, `title`, `titleLines`, `subtitle`, `headerImage`, `columns` (width in points and alignment by key or in exported order), `fontSize`, `headerColor`, `headerText` and `stripeColor`. Totals come from the sheet.                             |
+| `pdfImage(bytesOrDataUrl)`                                                              | Resolves to a reusable `PdfImage`. In `drawDocumentPdf` draw `{ image, x, y, width, height }`. In a table header use `{ image, width, height }`.                                                                                                                                                           |
+| `ProductBarcode`, `barcodeBars(value, width?, options?)`, `barcodePng(value, options?)` | SVG, vector bars or PNG bytes. Each takes `format` of `"code128"` (default), `"code39"`, `"ean8"` or `"ean13"`. The same options work on a `drawDocumentPdf` barcode. `barcodePng` is async.                                                                                                               |
+| `code128`, `code39`, `ean8`, `ean13`, `eanDigits`                                       | The first four give alternating bar and space widths in modules. `code39(value, { check: true })` includes Mod 43. `eanDigits(value, length)` (8 or 13) completes or verifies an EAN.                                                                                                                      |
+
+An Action can make the same product file as the screen. The file functions live in
+`copilotz/web/export`, with no React or browser setup.
+
+```ts
+import { exportTableFile } from "copilotz/web/export";
+
+const stock = {
+  headers: ["Product", "Units"],
+  rows: [["Coffee", 12]],
+  footerRows: [["Total", 12]],
+};
+const file = exportTableFile("sql", stock, "stock-count", { tableName: "products" });
+// stock-count.sql, with one INSERT into products per row, including the total.
+```
+
+The toolkit guide has examples of a custom file format, toolbar buttons, an invoice with a logo, and
+product labels. [Exporting a table](guides/the-web-toolkit.md#exporting-a-table) ·
+[A toolbar of your own](guides/the-web-toolkit.md#a-toolbar-of-your-own) ·
+[Printing a table](guides/the-web-toolkit.md#printing-a-table) ·
+[Images and barcodes in a document](guides/the-web-toolkit.md#images-and-barcodes-in-a-document).
+
 ## The web's look and words
 
 - **The theme:** the web host owns a vocabulary of tokens and its defaults, which are Copilotz's
@@ -717,8 +920,9 @@ named by the protocol it speaks. The [models page](reference/plugins/models.md) 
   Copilotz's values as defaults. The default fonts are served under `/assets/copilotz/`. A theme's
   own come from Google Fonts or from the app's `page.assets`.
 - **The toolkit:** front ends compose the host's pieces (`Button`, `DataTable`, `DateRangePicker`,
-  `Dialog`, `Stack`, `Grid`…) and write no CSS: the theme is their look. A route's own page uses
-  them too (`routePage` from `copilotz/web/server`, with `Screen` to centre a card in the window).
+  `Dialog`, `Stack`, `Grid`…) and write no CSS: the theme is their look. An app's own components,
+  made of them, live in `lib/`. A route's own page uses them too (`routePage` from
+  `copilotz/web/server`, with `Screen` to centre a card in the window).
   [The web toolkit](guides/the-web-toolkit.md) shows every piece and lists every token.
 - **Words:** every word the web front ends show is English by key (`chat.send`), and an app changes
   any with a `words` resource. The keys and their English are in

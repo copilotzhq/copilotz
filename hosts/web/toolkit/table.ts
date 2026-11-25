@@ -11,6 +11,9 @@
  * ```
  */
 import type { ReactNode } from "react";
+import { textOf } from "./table-sheet.ts";
+
+export { tableSheet, textOf } from "./table-sheet.ts";
 
 /** A row's identity: what `rowKey` gives, and what ticked rows are. */
 export type Key = string | number;
@@ -67,13 +70,6 @@ export const isLinks = (column: Column<unknown>): boolean => column.title === ""
 /** Whether its header sorts by it. */
 export const isSortable = (column: Column<unknown>): boolean =>
   !isLinks(column) && column.sortable !== false;
-
-/** A cell as text: its column's `text`, or `row[key]`. */
-export function textOf<R>(column: Column<R>, row: R): string {
-  if (column.text) return column.text(row);
-  const value = (row as Record<string, unknown>)?.[column.key];
-  return value === undefined || value === null ? "" : String(value);
-}
 
 /** Text as search compares it: lower case, without accents. */
 export const fold = (text: string): string =>

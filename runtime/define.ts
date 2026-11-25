@@ -2,7 +2,10 @@
  * What a plugin declares. Everything here is plain data; the runtime gives it
  * meaning only as primitives. It never knows what a plugin is for.
  */
+import type { AppDocument, AppName, LocalQuery, ViewName } from "./names.ts";
 import type { FromSchema, JSONSchema } from "json-schema-to-ts";
+import { emptyInput } from "./action-input.ts";
+import { missingCollectionSchema } from "./collection.ts";
 import type { Pipeline } from "./aggregate.ts";
 import type { Metrics } from "./metrics.ts";
 import type { Scheduled, ScheduleDef, ScheduleOptions, SchedulePatch } from "./schedules.ts";
@@ -51,7 +54,12 @@ export type Graph = {
  * Another plugin's Action joins it through `call`, when it's `atomic`.
  */
 export type TransactionScope = {
-  db: { collection<T = Record<string, unknown>>(name: string): Collection<T> };
+  db: {
+    collection<
+      T = unknown,
+      C extends AppName<"collections"> = AppName<"collections">,
+    >(name: C): Collection<AppDocument<C, T>, C>;
+  };
   graph: Omit<Graph, "edges">;
   emit(type: string, data?: Record<string, unknown>, options?: { id?: string }): void;
   /** Sets a timer with the transaction's writes, and returns its id (see `Context.schedule`). */
@@ -59,7 +67,7 @@ export type TransactionScope = {
   /** Removes a timer with the transaction's writes. */
   unschedule(id: string): void;
   /**
-   * Calls an atomic Action (`atomic: true`), this plugin's or another's, in
+   * Calls an atomic Action (`atomic: true` or `transaction: true`), this plugin's or another's, in
    * this transaction: its reads see the transaction's writes, and what it
    * writes, emits and schedules commits with them, or rolls back with them.
    * Checked as `ctx.call` is, as this code's actor: its `allow` and its
@@ -70,19 +78,24 @@ export type TransactionScope = {
    * it again, and one after a commit answers from the record. Calls run one
    * at a time, in the order they're made.
    */
-  call<R = unknown>(action: string, input?: unknown): Promise<R>;
+  call<R = unknown>(action: AppName<"actions">, input?: unknown): Promise<R>;
 };
 
 export type Context = {
   /** MongoDB-style collections. Each write commits on its own. */
-  db: { collection<T = Record<string, unknown>>(name: string): Collection<T> };
+  db: {
+    collection<
+      T = unknown,
+      C extends AppName<"collections"> = AppName<"collections">,
+    >(name: C): Collection<AppDocument<C, T>, C>;
+  };
   graph: Graph;
   /** Commits an event. Inside `transaction`, events commit with the writes. */
   emit(type: string, data?: Record<string, unknown>, options?: { id?: string }): Promise<void>;
   transaction<R>(work: (tx: TransactionScope) => Promise<R>): Promise<R>;
   /** Live, non-durable frames for subscribers (for example tokens being generated). */
   stream(channel: string): { write(data: unknown): void };
-  call<R = unknown>(action: string, input?: unknown): Promise<R>;
+  call<R = unknown>(action: AppName<"actions">, input?: unknown): Promise<R>;
   /**
    * This context, with the calls and timers it starts numbered apart, under
    * `key`. For work run concurrently (each of a step's tool calls): a retry
@@ -182,7 +195,12 @@ export type Context = {
 
 /** What a query (and, read-only, anything rendering) can reach: reads, never writes. */
 export type ReadContext = {
-  db: { collection<T = Record<string, unknown>>(name: string): ReadCollection<T> };
+  db: {
+    collection<
+      T = unknown,
+      C extends AppName<"collections"> = AppName<"collections">,
+    >(name: C): ReadCollection<AppDocument<C, T>, C>;
+  };
   /** What the app's plugins declare (as `Context.describe`): its Actions' inputs, its Views. */
   describe(): Description;
   graph: Pick<Graph, "edges">;
@@ -214,7 +232,7 @@ export type ReadContext = {
    * but anything it writes fails. How a query or View uses what another
    * plugin does (an embedding) without importing its code.
    */
-  call<R = unknown>(action: string, input?: unknown): Promise<R>;
+  call<R = unknown>(action: AppName<"actions">, input?: unknown): Promise<R>;
 };
 
 /**
@@ -241,7 +259,7 @@ export type Merged = {
   /** Every plugin's Actions, by name: whether one a declaration names is there. */
   actions: Readonly<Record<string, ActionDef>>;
   /** Calls an unrecorded Action, as a read does (another plugin's check: `models.check`). */
-  call<R = unknown>(action: string, input?: unknown): Promise<R>;
+  call<R = unknown>(action: AppName<"actions">, input?: unknown): Promise<R>;
 };
 
 /**
@@ -283,13 +301,13 @@ export type Read<T> =
   | { status: "ready"; value: T };
 
 /** A collection's reads inside a View: the same reads, answered as `Read`s. */
-export type ViewCollection<T> = {
+export type ViewCollection<T, C extends string = AppName<"collections">> = {
   find(filter?: Filter, options?: FindOptions): Read<WithId<T>[]>;
   findOne(filter?: Filter, options?: FindOptions): Read<WithId<T> | null>;
   countDocuments(filter?: Filter): Read<number>;
   aggregate<R = Record<string, unknown>>(pipeline: Pipeline): Read<R[]>;
   nearest(vector: number[], options?: NearestOptions): Read<(WithId<T> & { _score: number })[]>;
-  query<R = unknown>(name: string, params?: unknown): Read<R>;
+  query<R = unknown>(name: LocalQuery<C>, params?: unknown): Read<R>;
   /**
    * From a handler (a click, a form's submit), a write of the viewer's own,
    * as REST and the socket write: under the rules (a rule must speak for the
@@ -309,7 +327,12 @@ export type ViewCollection<T> = {
 
 /** What a View gets. `Shown` is what showing another View returns (text, an element). */
 export type ViewContext<Shown = unknown> = {
-  db: { collection<T = Record<string, unknown>>(name: string): ViewCollection<T> };
+  db: {
+    collection<
+      T = unknown,
+      C extends AppName<"collections"> = AppName<"collections">,
+    >(name: C): ViewCollection<AppDocument<C, T>, C>;
+  };
   resources: Resources;
   /** What the app's plugins declare (as `Context.describe`); a View the runtime runs has it. */
   describe?(): Description;
@@ -327,19 +350,19 @@ export type ViewContext<Shown = unknown> = {
    * undefined when there is none. Observed, the shown View is a part of its own: it runs
    * again on its own when what it read changes (see `Owner.observe`).
    */
-  show(name: string, item: unknown, hints?: Record<string, unknown>): Shown;
+  show(name: ViewName, item: unknown, hints?: Record<string, unknown>): Shown;
   /**
    * Calls an Action, from a handler in what the View returns (a key, a
    * click). A View being observed can; one rendered once has no handlers.
    */
-  call<R = unknown>(action: string, input?: unknown): Promise<R>;
+  call<R = unknown>(action: AppName<"actions">, input?: unknown): Promise<R>;
   /** Commits an event, from a handler, as `call` does: for Processors to react to. */
   emit(type: string, data?: Record<string, unknown>): Promise<void>;
 };
 
 /** A collection's reads, with its named queries. */
-export type ReadCollection<T> = Pick<
-  Collection<T>,
+export type ReadCollection<T, C extends string = AppName<"collections">> = Pick<
+  Collection<T, C>,
   "find" | "findOne" | "countDocuments" | "aggregate" | "nearest" | "query"
 >;
 
@@ -356,12 +379,12 @@ export type QueryFn<T = any> = (
  * A named read declared on a collection. Plugin code runs any of them (as
  * whom it acts for, under the rules). From outside (a host acting for a
  * person, a browser), an actor runs only one that lets them (`allow`), as
- * with Actions: a bare function is the system's.
+ * with Actions. A bare function uses the plugin's default allow, or is internal.
  */
 // deno-lint-ignore no-explicit-any
 export type QueryDef<T = any> = QueryFn<T> | {
   // deno-lint-ignore no-explicit-any
-  allow(actor: Actor, params: any): boolean;
+  allow?(actor: Actor, params: any, ctx: AllowContext): boolean | Promise<boolean>;
   /** What it answers, in a line: `GET /api/` and `describe()` list it. */
   description?: string;
   /** Its params' JSON Schema: checked for callers from outside, and listed with it. */
@@ -420,6 +443,10 @@ export type CollectionDef = {
   vectors?: string[];
 };
 
+/** The caller and its guarded collection reads, for a permission check before an Action or query. */
+export type AllowContext = Pick<ReadContext, "db" | "actor" | "in">;
+
+/** A named operation, its admission rule and the code every caller runs. */
 export type ActionDef = {
   /**
    * Who may call it: an actor's call runs only if this says yes, from
@@ -428,9 +455,10 @@ export type ActionDef = {
    * it works for too (`for`). Without it, it's internal: actors can't call
    * it from outside, and code may, as whoever it acts for. Code that goes on
    * where the actor couldn't acts as a grant of the system's (`ctx.as`).
-   * Which documents a call reaches is the rules' business, not this.
+   * A plugin's defaults.allow supplies a missing rule. The check may await
+   * reads in the caller's reach before the Action takes its grant.
    */
-  allow?(actor: Actor, input: unknown): boolean;
+  allow?(actor: Actor, input: unknown, ctx: AllowContext): boolean | Promise<boolean>;
   /** What it does, for people and tools that list Actions. */
   description?: string;
   input?: JSONSchema;
@@ -461,6 +489,10 @@ export type ActionDef = {
    * any Action does.
    */
   atomic?: boolean;
+  /** Run as this named system grant after checking the caller. Writes record the grant via the caller. */
+  as?: string;
+  /** Run in one transaction, joining the caller's when it already holds one. */
+  transaction?: boolean;
   // deno-lint-ignore no-explicit-any
   run(ctx: Context, input: any): unknown;
 };
@@ -540,6 +572,8 @@ export type Workers = {
 
 export type Plugin = {
   name: string;
+  /** Who may call this plugin's Actions and named queries unless they declare their own allow. */
+  defaults?: { allow?: ActionDef["allow"] };
   /**
    * The plugins it builds on, by name: their contracts are what it imports,
    * their Actions, collections and events what it uses. The runtime doesn't
@@ -644,9 +678,9 @@ export type Route =
 export type WhoContext = {
   resources: Resources;
   /** Runs a named query as the system, kept a few seconds per query and params. */
-  query<R = unknown>(name: string, params?: unknown): Promise<R>;
+  query<R = unknown>(name: AppName<"queries">, params?: unknown): Promise<R>;
   /** Calls an Action as the system: what a credential's use changes (a key's last use). */
-  call<R = unknown>(action: string, input?: unknown): Promise<R>;
+  call<R = unknown>(action: AppName<"actions">, input?: unknown): Promise<R>;
   /** The request's cookies, by their plain names (see `Cookies`). */
   cookies: Pick<Cookies, "get">;
 };
@@ -682,7 +716,7 @@ export type Labels = {
   ): Record<string, unknown> | Promise<Record<string, unknown>>;
   elevate?(
     actor: Actor,
-    allow: ((actor: Actor, input: unknown) => boolean) | undefined,
+    allow: ((actor: Actor, input: unknown) => boolean | Promise<boolean>) | undefined,
     ctx: ReadContext,
   ): boolean | Promise<boolean>;
 };
@@ -740,32 +774,45 @@ export const byCollection = (rules: Record<string, Guard>): Guard => (actor, ope
     ? rules[operation.collection](actor, operation, ctx)
     : undefined;
 
-/** A collection whose documents (and queries' collection) are typed from its JSON Schema. */
-export const defineCollection = <const S extends JSONSchema>(
-  def: {
-    schema: S;
-    events?: boolean;
-    records?: boolean;
-    durable?: false;
-    indexes?: string[][];
-    private?: string[];
-    queries?: Record<string, QueryDef<Infer<S> & { _id: string }>>;
-    vectors?: string[];
-  },
-) => def;
+/** The document type of a type-first collection declaration, for the app's generated names. */
+export type DocumentOf<D> = D extends CollectionOptions<infer T> ? DocumentFields<T> : never;
 
-/** An Action whose `input` type comes from its JSON Schema. */
-export const defineAction = <const S extends JSONSchema, R>(
-  def: {
-    description?: string;
-    input: S;
-    record?: boolean;
-    private?: string[];
-    atomic?: boolean;
-    allow?(actor: Actor, input: Infer<S>): boolean;
-    run(ctx: Context, input: Infer<S>): R | Promise<R>;
-  },
-): ActionDef => def as ActionDef;
+// _id belongs to the runtime. Reads add it, inserts may supply it, even when a
+// shared document type includes it. Distribute over unions to keep variant fields.
+type DocumentFields<T> = T extends unknown ? "_id" extends keyof T ? Omit<T, "_id"> : T : never;
+
+type CollectionOptions<T> = Omit<CollectionDef, "schema" | "queries"> & {
+  queries?: Record<string, QueryDef<T>>;
+};
+
+/** A collection whose query documents are typed from its JSON Schema. */
+export function defineCollection<const S extends JSONSchema>(
+  def: CollectionOptions<WithId<Infer<S>>> & { schema: S },
+): CollectionOptions<WithId<Infer<S>>> & { schema: S };
+/** Declare a document type for copilotz gen to turn into the collection's schema. */
+export function defineCollection<T extends object>(
+  def: CollectionOptions<T> & { schema?: JSONSchema },
+): CollectionOptions<T> & { schema: JSONSchema };
+export function defineCollection(def: Omit<CollectionDef, "schema"> & { schema?: JSONSchema }) {
+  return def.schema === undefined ? { ...def, schema: missingCollectionSchema } : def;
+}
+
+type ActionOptions<I, R> = Omit<ActionDef, "input" | "run" | "allow"> & {
+  allow?(actor: Actor, input: NoInfer<I>, ctx: AllowContext): boolean | Promise<boolean>;
+  run(ctx: Context, input: I): R | Promise<R>;
+};
+
+/** Declare an Action whose JSON Schema types its run and permission check. */
+export function defineAction<const S extends JSONSchema, R = unknown>(
+  def: ActionOptions<Infer<S>, R> & { input: S },
+): ActionDef;
+/** Omit input for a parameterless Action, or type run's second parameter for copilotz gen. */
+export function defineAction<I = Record<string, never>, R = unknown>(
+  def: ActionOptions<I, R> & { input?: never },
+): ActionDef;
+export function defineAction(def: ActionDef): ActionDef {
+  return def.input === undefined ? { ...def, input: emptyInput } : def;
+}
 
 export const defineProcessor = (def: ProcessorDef): ProcessorDef => def;
 

@@ -6,12 +6,15 @@
  * page per page of rows; JSON, XML, SQL and the HTML `.xls` escape what
  * they must.
  */
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
 import { test } from "../../../testing/mod.ts";
 import {
   exportFile,
+  exportTableFile,
   guard,
   type Sheet,
+  type TableExportOptions,
+  type TableExportSheet,
   toCsv,
   toExcel,
   toJson,
@@ -19,6 +22,7 @@ import {
   toXlsx,
   toXml,
 } from "../toolkit/export.ts";
+import { barcodePng, pdfImage, tableSheet } from "../export.ts";
 import { tablePdf, winAnsi } from "../toolkit/pdf.ts";
 import { crc32, zip } from "../toolkit/zip.ts";
 
@@ -30,6 +34,16 @@ const sheet: Sheet = {
     ["@sum", "-12.5", "-x"],
   ],
 };
+
+function csvFile(sheet: TableExportSheet, options: TableExportOptions) {
+  return String(exportTableFile("csv", sheet, "report", { ...options, bom: false }).content);
+}
+
+function pdfFile(sheet: TableExportSheet, pdf: TableExportOptions["pdf"]) {
+  const { content } = exportTableFile("pdf", sheet, "report", { pdf });
+  assert(content instanceof Uint8Array);
+  return content;
+}
 
 /** A zip's entries, read back: name, stored data, and the CRC it says. */
 function unzip(bytes: Uint8Array) {
@@ -97,6 +111,29 @@ test("xlsx: an Office workbook whose sheet has numbers as numbers, text escaped,
   assert(!xml.includes("<f>"), "no formulas");
 });
 
+test("raw XLSX keeps decimal strings distinct and writes numbers as numeric cells", () => {
+  const first = "123456789012345.671";
+  const second = "123456789012345.672";
+  const sheet = tableSheet(
+    [{ key: "value", title: "Value" }],
+    [{ value: first }, { value: second }, { value: 12.5 }],
+    [{ value: "12.50" }],
+    "raw",
+  );
+  const { content } = exportTableFile("xlsx", sheet, "values", { values: "raw" });
+  assert(content instanceof Uint8Array);
+  const entry = unzip(content).find((e) => e.name === "xl/worksheets/sheet1.xml");
+  assert(entry);
+  const xml = new TextDecoder().decode(entry.data);
+  for (const [ref, value] of [["A2", first], ["A3", second], ["A5", "12.50"]]) {
+    assertStringIncludes(
+      xml,
+      `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${value}</t></is></c>`,
+    );
+  }
+  assertStringIncludes(xml, '<c r="A4"><v>12.5</v></c>');
+});
+
 test("CSV quotes every cell and guards formulas, but not plain numbers", () => {
   assertEquals(guard("=1+1"), "'=1+1");
   assertEquals(guard("-12.5"), "-12.5");
@@ -111,6 +148,54 @@ test("CSV quotes every cell and guards formulas, but not plain numbers", () => {
     ].join("\n"),
   );
   assertStringIncludes(toCsv(sheet, { formulas: true }), '"=HYPERLINK(1)"');
+});
+
+test("CSV and TXT preserve raw and written numbers and guard formula-like text", () => {
+  const values = [-1e-7, 1e-7, "-1e-7", "-12.5", "+1", "=1", "+x", "-1e-7+1", "@x", "\tx", "\rx"];
+  const sheet = tableSheet(
+    [{ key: "value", title: "Value" }],
+    values.map((value) => ({ value })),
+    [],
+    "raw",
+  );
+  const expected = [
+    "Value",
+    "-1e-7",
+    "1e-7",
+    "-1e-7",
+    "-12.5",
+    "+1",
+    "'=1",
+    "'+x",
+    "'-1e-7+1",
+    "'@x",
+    "'\tx",
+    "'\rx",
+  ];
+  for (const format of ["csv", "txt"]) {
+    assertEquals(
+      exportTableFile(format, sheet, "values", { bom: false, values: "raw" }).content,
+      expected.map((value) => `"${value}"`).join("\n"),
+    );
+  }
+  assertEquals(
+    csvFile({ headers: ["Delta"], rows: [[-1e-7], ["-1e-7"]] }, {
+      csv: { quote: "needed" },
+    }),
+    "Delta\n-1e-7\n-1e-7",
+  );
+  const excel = String(exportTableFile("excel", sheet, "values", { values: "raw" }).content);
+  for (const value of expected.slice(1)) assertStringIncludes(excel, `<td>${value}</td>`);
+});
+
+test("JSON records keep sparse and missing cells as empty strings and explicit null as null", () => {
+  const row: (string | null)[] = [];
+  row[1] = null;
+  const sheet = { headers: ["Sparse", "Null", "Missing"], rows: [row] };
+  const records = exportTableFile("json", sheet, "sparse", { values: "raw" });
+  assertEquals(JSON.parse(String(records.content)), [{ Sparse: "", Null: null, Missing: "" }]);
+  const table = exportTableFile("json", sheet, "sparse", { json: "table", values: "raw" });
+  assertEquals(JSON.parse(String(table.content)).data, [{ 0: "", 1: null }]);
 });
 
 test("JSON as records by header, or the table export's shape", () => {
@@ -167,4 +252,223 @@ test("a file per format: its name, type, and CSV's byte-order mark", () => {
   assertEquals(exportFile("excel", sheet, "s").file, "s.xls");
   assert(exportFile("pdf", sheet, "s").content instanceof Uint8Array);
   assertEquals(exportFile("sql", sheet, "s").type, "application/sql");
+});
+
+test("CSV dialect quotes only what needs it and keeps the formula guard", () => {
+  const input = {
+    headers: ["First", "Second"],
+    rows: [["=1", 'quote"'], ["a;b", "a\nb"]],
+    footerRows: [["Total", 7]],
+  };
+  assertEquals(
+    csvFile(input, {
+      csv: {
+        quote: "needed",
+        delimiter: ";",
+        header: false,
+        lineEnding: "\r\n",
+        finalNewline: true,
+      },
+    }),
+    '\'=1;"quote"""\r\n"a;b";"a\nb"\r\nTotal;7\r\n',
+  );
+  assertEquals(
+    csvFile({ headers: ["A"], rows: [] }, { csv: { header: false, finalNewline: true } }),
+    "",
+  );
+  assertEquals(
+    csvFile(input, { csv: { delimiter: "\t", lineEnding: "\r" } }).split("\r")[0],
+    '"First"\t"Second"',
+  );
+  assertThrows(() => csvFile(input, { csv: { delimiter: "" } }));
+});
+
+test("custom serializers get the projected sheet, totals, base name and options", () => {
+  const data = [{ price: 2.5, paid: false, note: null }];
+  const columns = [
+    {
+      key: "price",
+      title: "Price",
+      text: (r: typeof data[number]) => "$" + r.price.toFixed(2),
+    },
+    { key: "paid", title: "Paid" },
+    { key: "note", title: "Note" },
+    { key: "edit", title: "" },
+  ];
+  const totals = [{ price: 2.5 }];
+  const shown = tableSheet(columns, data, totals);
+  assertEquals(shown.rows, [["$2.50", "false", ""]]);
+  assertEquals(shown.keys, ["price", "paid", "note"]);
+  const raw = tableSheet(columns, data, totals, "raw");
+  assertEquals(raw.rows, [[2.5, false, null]]);
+  assertEquals(raw.footerRows, [[2.5, "", ""]]);
+  const custom = exportTableFile("csv", raw, "invoices", {
+    formats: {
+      csv: {
+        label: "Binary",
+        type: "application/octet-stream",
+        extension: "bin",
+        serialize(sheet, name) {
+          assertEquals(sheet, raw);
+          assertEquals(name, "invoices");
+          return Uint8Array.of(4, 2);
+        },
+      },
+    },
+  });
+  assertEquals(custom, {
+    file: "invoices.bin",
+    type: "application/octet-stream",
+    content: Uint8Array.of(4, 2),
+  });
+  const sql = exportTableFile("sql", raw, "invoices", {
+    tableName: "invoice_lines",
+    values: "raw",
+  });
+  assertEquals(sql.file, "invoices.sql");
+  assertStringIncludes(
+    String(sql.content),
+    "INSERT INTO `invoice_lines` (`Price`,`Paid`,`Note`) VALUES (2.5,FALSE,NULL);",
+  );
+  assertEquals(JSON.parse(String(exportTableFile("json", raw, "invoices").content))[0], {
+    Price: 2.5,
+    Paid: false,
+    Note: null,
+  });
+  assertEquals(
+    JSON.parse(
+      String(exportTableFile("json", raw, "invoices", { json: "table", values: "raw" }).content),
+    ).data[0],
+    {
+      0: 2.5,
+      1: false,
+      2: null,
+    },
+  );
+  assertThrows(() => exportTableFile("toString", raw, "orders"), RangeError);
+});
+
+test("all eight built-in formats include the supplied totals", () => {
+  const sheet = {
+    headers: ["Product", "Price"],
+    rows: [["Pen", 2]],
+    footerRows: [["Grand Total", 2]],
+  };
+  for (const format of ["csv", "txt", "xlsx", "excel", "sql", "pdf", "json", "xml"] as const) {
+    const { content } = exportTableFile(format, sheet, "products");
+    const text = typeof content === "string" ? content : new TextDecoder().decode(content);
+    assertStringIncludes(text, "Grand Total");
+  }
+  assertEquals(
+    JSON.parse(String(exportTableFile("json", sheet, "products", { json: "table" }).content)).data
+      .at(-1),
+    {
+      0: "Grand Total",
+      1: "2",
+    },
+  );
+});
+
+test("a table PDF repeats headings, lays out its logo and titles, and aligns its totals", async () => {
+  const image = await pdfImage(await barcodePng("ORDER"));
+  const sheet = {
+    headers: ["Order", "Amount"],
+    rows: Array.from({ length: 4 }, (_, i) => [i, 10]),
+    footerRows: [["Total", 40]],
+  };
+  const file = String.fromCharCode(
+    ...pdfFile(sheet, {
+      size: [300, 200],
+      fontSize: 10,
+      titleLines: ["Orders", "November"],
+      subtitle: "Paid invoices",
+      headerImage: { image, width: 40, height: 16 },
+      columns: [{ width: 130 }, { align: "right" }],
+    }),
+  );
+  assertStringIncludes(file, "/MediaBox [0 0 300 200]");
+  assertStringIncludes(file, "/Count 2");
+  for (const line of ["Orders", "November", "Paid invoices", "Total"]) {
+    assertEquals(file.split("(" + line + ") Tj").length, 2);
+  }
+  assertEquals(file.split("(Amount) Tj").length, 3);
+  assertStringIncludes(file, "q 40 0 0 16 36 148 cm /Im1 Do Q");
+  const x = Number(file.match(/Tf ([\d.]+) [\d.]+ Td \(40\) Tj/)![1]);
+  assertEquals(x, 249.88); // right edge 264, minus padding 3 and Helvetica Bold's 11.12 points
+  const keyed = { amount: { align: "right" }, order: { width: 130 } } as const;
+  const positional = [{ width: 130 }, { align: "right" as const }];
+  const expected = pdfFile(sheet, { columns: positional });
+  assertEquals(pdfFile({ ...sheet, keys: ["order", "amount"] }, { columns: keyed }), expected);
+  assertEquals(pdfFile(sheet, { columns: { Amount: keyed.amount, Order: keyed.order } }), expected);
+  const letter = String.fromCharCode(
+    ...pdfFile(sheet, { size: "letter", orientation: "portrait" }),
+  );
+  assertStringIncludes(letter, "/MediaBox [0 0 612 792]");
+  assertThrows(() => pdfFile(sheet, { size: [100, 150], columns: [{ width: 90 }] }));
+});
+
+test("automatic columns in a custom PDF layout leave room for a single digit", () => {
+  const headers = [
+    "PO",
+    "Supplier",
+    "Item",
+    "Description",
+    "Qty",
+    "Project",
+    "Cost centre",
+    "Ship to",
+    "Terms",
+    "Buyer",
+  ];
+  const sheet = { headers, rows: [headers.map((h) => h === "Qty" ? 9 : h.repeat(40))] };
+  for (const orientation of ["landscape", "portrait"] as const) {
+    const pdf = pdfFile(sheet, { size: "a4", orientation, subtitle: "Open purchases" });
+    assertStringIncludes(new TextDecoder().decode(pdf), "(9) Tj");
+  }
+});
+
+test("an Action makes invoice attachments through the server export entry point", async () => {
+  const { createRuntime, definePlugin } = await import("../../../runtime/mod.ts");
+  const { memoryStore } = await import("../../../stores/memory/mod.ts");
+  const { exportFile } = await import("../export.ts");
+  const runtime = await createRuntime({
+    store: memoryStore(),
+    plugins: [definePlugin({
+      name: "invoices",
+      actions: {
+        "invoice.attachments": {
+          run() {
+            const sheet = { headers: ["Order"], rows: [["Order 12"]] };
+            const pdf = exportFile("pdf", sheet, "invoice");
+            const csv = exportFile("csv", sheet, "orders");
+            return {
+              type: pdf.type,
+              pdfHeader: new TextDecoder().decode((pdf.content as Uint8Array).subarray(0, 8)),
+              csv: csv.content,
+            };
+          },
+        },
+      },
+    })],
+  });
+  try {
+    assertEquals(await runtime.call("invoice.attachments", {}), {
+      type: "application/pdf",
+      pdfHeader: "%PDF-1.4",
+      csv: '﻿"Order"\n"Order 12"',
+    });
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("minimal CSV quotes preserve a single empty field as a record", () => {
+  assertEquals(
+    csvFile({ headers: ["Value"], rows: [[""]] }, { csv: { quote: "needed" } }),
+    'Value\n""',
+  );
+  assertEquals(
+    csvFile({ headers: ["A", "B"], rows: [["", ""]] }, { csv: { quote: "needed" } }),
+    "A,B\n,",
+  );
 });

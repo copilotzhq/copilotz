@@ -8,8 +8,8 @@
  *   the width by how much they hold, and a cell too long for its column ends
  *   in "…".
  * - **`documentPdf`**: a document drawn at places, page by page: text (left,
- *   centred or right in a width, wrapped to it), lines, rectangles, and Code
- *   128 barcodes. Places are points (1/72 in) from the page's top left. A
+ *   centred or right in a width, wrapped to it), lines, rectangles and vector
+ *   barcodes. `drawDocumentPdf` also draws images and automatically sized barcodes. Places are points (1/72 in) from the page's top left. A
  *   page is A4, letter, or a receipt's 80 mm roll, as long as what's on it
  *   (`height: "fit"`). `textWidth` and `wrapText` measure with Helvetica's
  *   own widths, for laying a document out (a receipt's lines, one under
@@ -25,13 +25,15 @@
  * ]], { size: "receipt" });
  * ```
  */
-import { bars } from "./code128.ts";
+import type { Sheet, TableExportSheet } from "./export.ts";
+import type { PdfImage } from "./pdf-image.ts";
+import { barcodeBars, type BarcodeOptions, bars } from "./code128.ts";
 
 /** How the PDF looks: its page, its title, and its colours (`#rrggbb`). */
 export type PdfOptions = {
   /** A line over the table, on the first page. */
   title?: string;
-  /** Landscape (the default: tables are wide) or portrait, on A4. */
+  /** Rotates the paper to landscape or portrait. Named paper defaults to landscape. */
   orientation?: "landscape" | "portrait";
   /** The header band's colour, and its text's. */
   headerColor?: string;
@@ -40,6 +42,22 @@ export type PdfOptions = {
   stripeColor?: string | null;
   /** Points, 9 by default. */
   fontSize?: number;
+};
+
+type PdfColumn = { width?: number; align?: "left" | "center" | "right" };
+
+/** A table file's page, heading and exported columns. */
+export type TablePdfOptions = PdfOptions & {
+  /** Multiple title lines, in place of title. */
+  titleLines?: string[];
+  /** Smaller lines under the title, on the first page. */
+  subtitle?: string | string[];
+  /** Paper in points. Named paper defaults to landscape, a pair keeps its given orientation. */
+  size?: "a4" | "letter" | [number, number];
+  /** Columns by key or in exported order. Widths are points. Unspecified columns share what remains. */
+  columns?: Record<string, PdfColumn> | PdfColumn[];
+  /** A prepared logo beside the first page's title. Width and height are in points. */
+  headerImage?: { image: PdfImage; width: number; height: number };
 };
 
 /** Unicode's characters WinAnsi has between 0x80 and 0x9f. */
@@ -95,8 +113,8 @@ function rgb(colour: string): string {
 }
 
 /** A table as PDF bytes: `headers` over `rows`. */
-export function tablePdf(
-  { headers, rows }: { headers: string[]; rows: (string | number)[][] },
+function automaticTablePdf(
+  { headers, rows }: TableExportSheet,
   options: PdfOptions = {},
 ): Uint8Array {
   const [W, H] = options.orientation === "portrait" ? [595, 842] : [842, 595];
@@ -104,9 +122,12 @@ export function tablePdf(
   const CHAR = SIZE * 0.52; // Helvetica's average width, near enough to fit columns
   const cells = rows.map((row) => headers.map((_, i) => winAnsi(String(row[i] ?? ""))));
   const heads = headers.map(winAnsi);
-  const want = heads.map((h, i) =>
-    Math.min(40, Math.max(h.length, ...cells.map((r) => r[i].length), 3))
-  );
+  const want = heads.map((h) => Math.min(40, Math.max(3, h.length)));
+  for (const row of cells) {
+    row.forEach((cell, i) => {
+      want[i] = Math.min(40, Math.max(want[i], cell.length));
+    });
+  }
   const sum = want.reduce((a, b) => a + b, 0) || 1;
   const widths = want.map((w) => ((W - 2 * M) * w) / sum);
   const fit = (text: string, width: number) => {
@@ -154,6 +175,179 @@ export function tablePdf(
   return assemble(pages.map((stream) => ({ width: W, height: H, stream })), ["regular", "bold"]);
 }
 
+/** The enhanced layout is opt-in. A normal table keeps its original fitting and pagination. */
+export function usesTableLayout(options?: TablePdfOptions, footerRows?: unknown[]): boolean {
+  return !!footerRows?.length || options?.columns !== undefined || options?.size !== undefined ||
+    options?.titleLines !== undefined || options?.subtitle !== undefined ||
+    options?.headerImage !== undefined;
+}
+
+/** Resolve settings against the sheet being written. */
+export function pdfColumn(settings: TablePdfOptions["columns"], key: string, index: number) {
+  if (Array.isArray(settings)) return settings[index];
+  return settings && Object.hasOwn(settings, key) ? settings[key] : undefined;
+}
+
+/** A printable table, with repeated column headings and totals after its final row. */
+export function renderTablePdf(
+  sheet: TableExportSheet,
+  options: TablePdfOptions = {},
+): Uint8Array {
+  const { headers, rows, footerRows = [] } = sheet;
+  if (!usesTableLayout(options, footerRows)) {
+    return automaticTablePdf(sheet, options);
+  }
+  const paper = options.size ?? "a4";
+  const [a, b] = Array.isArray(paper) ? paper : [SIZES[paper].width, Number(SIZES[paper].height)];
+  const orientation = options.orientation ?? (Array.isArray(paper) ? undefined : "landscape");
+  const W = orientation === "portrait"
+    ? Math.min(a, b)
+    : orientation === "landscape"
+    ? Math.max(a, b)
+    : a;
+  const H = a + b - W;
+  const M = 36, SIZE = options.fontSize ?? 9, LINE = Math.max(1, Math.round(SIZE * 2));
+  const available = W - 2 * M;
+  if (![W, H, SIZE].every(Number.isFinite) || SIZE <= 0 || available <= 0 || H < 2 * M + 2 * LINE) {
+    throw new RangeError("The page must have room for a table heading and a row.");
+  }
+  const cells = [...rows, ...footerRows].map((row) =>
+    headers.map((_, i) => winAnsi(String(row[i] ?? "")))
+  );
+  const heads = headers.map(winAnsi);
+  const settings = options.columns;
+  const columns = headers.map((header, i) => pdfColumn(settings, sheet.keys?.[i] ?? header, i));
+  const weights = heads.map((h, i) =>
+    columns[i]?.width === undefined ? Math.max(3, Math.min(40, h.length)) : 0
+  );
+  for (const row of cells) {
+    row.forEach((v, i) => {
+      if (weights[i]) weights[i] = Math.max(weights[i], Math.min(40, v.length));
+    });
+  }
+  const fixed = heads.reduce((sum, _, i) => {
+    const width = columns[i]?.width;
+    if (width !== undefined && (!Number.isFinite(width) || width <= 0)) {
+      throw new RangeError("Invalid PDF column width.");
+    }
+    return sum + (width ?? 0);
+  }, 0);
+  const sum = weights.reduce((a, b) => a + b, 0);
+  if (fixed > available || (sum && fixed >= available)) {
+    throw new RangeError("Columns exceed the page width.");
+  }
+  // Reserve padding and one em for each automatic column before sharing the remaining space.
+  const autoCount = weights.filter((weight) => weight > 0).length;
+  const autoSpace = available - fixed;
+  const minimum = autoCount ? Math.min(SIZE + 6, autoSpace / autoCount) : 0;
+  const remaining = autoSpace - minimum * autoCount;
+  const widths = weights.map((weight, i) =>
+    columns[i]?.width ?? minimum + remaining * weight / sum
+  );
+  const tableWidth = widths.reduce((a, b) => a + b, 0);
+  const lines = (s?: string | string[]) =>
+    (Array.isArray(s) ? s : s ? [s] : []).flatMap((v) => v.split(/\r?\n/));
+  const titles = lines(options.titleLines ?? options.title), subtitles = lines(options.subtitle);
+  const logo = options.headerImage;
+  if (
+    logo &&
+    (![logo.width, logo.height].every((n) => Number.isFinite(n) && n > 0) || logo.width > available)
+  ) {
+    throw new RangeError("Invalid PDF header image size.");
+  }
+  const captionX = M + (logo && (titles.length || subtitles.length) ? logo.width + 8 : 0);
+  const headingHeight = Math.max(
+    titles.length * (SIZE + 8) + subtitles.length * (SIZE + 4),
+    logo?.height ?? 0,
+  );
+  const firstTop = H - M - headingHeight - (headingHeight ? 8 : 0);
+  if (firstTop - M < LINE * (cells.length ? 2 : 1)) {
+    throw new RangeError("The table heading is too tall for this page.");
+  }
+  const head = rgb(options.headerColor ?? "#334058"),
+    headText = rgb(options.headerText ?? "#ffffff");
+  const stripe = options.stripeColor === null ? null : rgb(options.stripeColor ?? "#f1f4f9");
+  const pages: { width: number; height: number; stream: string }[] = [];
+  let start = 0;
+  do {
+    const ops: string[] = [];
+    let top = H - M;
+    if (!pages.length) {
+      if (logo) {
+        ops.push(
+          `q ${n(logo.width)} 0 0 ${n(logo.height)} ${M} ${n(top - logo.height)} cm /Im1 Do Q`,
+        );
+      }
+      const caption = (line: string, size: number, font: string) => {
+        const { shown } = fitCell(winAnsi(line), W - M - captionX, size, font === "F2");
+        ops.push(
+          `0 0 0 rg BT /${font} ${n(size)} Tf ${n(captionX)} ${n(top - size)} Td (${
+            literal(shown)
+          }) Tj ET`,
+        );
+        top -= size + 4;
+      };
+      titles.forEach((line) => caption(line, SIZE + 4, "F2"));
+      subtitles.forEach((line) => caption(line, SIZE, "F1"));
+      top = firstTop;
+    }
+    const line = (texts: string[], bold: boolean, ink: string, fill?: string | null) => {
+      if (fill) ops.push(`${fill} rg ${M} ${n(top - LINE)} ${n(tableWidth)} ${LINE} re f`);
+      let x = M;
+      texts.forEach((value, i) => {
+        const room = Math.max(0, widths[i] - 6);
+        const { shown, width } = fitCell(value, room, SIZE, bold);
+        const align = columns[i]?.align;
+        const offset = align === "right"
+          ? room - width
+          : align === "center"
+          ? (room - width) / 2
+          : 0;
+        ops.push(
+          `${ink} rg BT /${bold ? "F2" : "F1"} ${SIZE} Tf ${n(x + 3 + offset)} ${
+            n(top - LINE / 2 - SIZE / 3)
+          } Td (${literal(shown)}) Tj ET`,
+        );
+        x += widths[i];
+      });
+      top -= LINE;
+    };
+    line(heads, true, headText, head);
+    const end = Math.min(cells.length, start + Math.floor((top - M) / LINE));
+    for (let i = start; i < end; i++) {
+      line(cells[i], i >= rows.length, "0 0 0", (i - start) % 2 ? stripe : null);
+    }
+    start = end;
+    pages.push({ width: W, height: H, stream: ops.join("\n") });
+  } while (start < cells.length);
+  return assemble(pages, ["regular", "bold"], logo ? new Map([[logo.image, "Im1"]]) : undefined);
+}
+
+/** A table of text and numbers with automatic column widths. */
+export function tablePdf(sheet: Sheet, options: PdfOptions = {}): Uint8Array {
+  return automaticTablePdf(sheet, options);
+}
+
+/** Fits WinAnsi text to the available points, including the ellipsis and the chosen face. */
+function fitCell(value: string, room: number, size: number, bold: boolean) {
+  let width = 0;
+  const ellipsis = size; // Helvetica's ellipsis is one em.
+  let cut = 0, truncatedWidth = 0;
+  for (let i = 0; i < value.length; i++) {
+    width += charWidth(value[i], bold) * size / 1000;
+    if (width <= room - ellipsis) {
+      cut = i + 1;
+      truncatedWidth = width;
+    }
+    if (width > room) {
+      return room >= ellipsis
+        ? { shown: value.slice(0, cut) + "\x85", width: truncatedWidth + ellipsis }
+        : { shown: "", width: 0 };
+    }
+  }
+  return { shown: value, width };
+}
+
 /** Helvetica's four faces, and their names in a page's resources. */
 export type PdfFont = "regular" | "bold" | "italic" | "bold-italic";
 const FACES: Record<PdfFont, [name: string, base: string]> = {
@@ -171,9 +365,10 @@ const FACES: Record<PdfFont, [name: string, base: string]> = {
 function assemble(
   pages: { width: number; height: number; stream: string }[],
   fonts: PdfFont[],
+  images: Map<PdfImage, string> = new Map(),
 ): Uint8Array {
   const used = (Object.keys(FACES) as PdfFont[]).filter((font) => fonts.includes(font));
-  const objects: string[] = [
+  const objects: (string | (string | Uint8Array)[])[] = [
     "<< /Type /Catalog /Pages 2 0 R >>",
     "", // the pages, once their numbers are known
     ...used.map((font) =>
@@ -181,30 +376,82 @@ function assemble(
     ),
   ];
   const resources = used.map((font, i) => `/${FACES[font][0]} ${i + 3} 0 R`).join(" ");
+  const xobjects: string[] = [];
+  for (const [image, name] of images) {
+    const base = `/Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height}`;
+    const stream = (dict: string, data: Uint8Array) =>
+      objects.push([
+        `<< ${base} ${dict} /Length ${data.length} >>\nstream\n`,
+        data,
+        "\nendstream",
+      ]);
+    const mask = image.alpha &&
+      stream("/BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /FlateDecode", image.alpha);
+    const space = image.palette
+      ? `[/Indexed /DeviceRGB ${image.palette.length / 3 - 1} <${
+        Array.from(image.palette, (b) => b.toString(16).padStart(2, "0")).join("")
+      }>]`
+      : image.colors === 1
+      ? "/DeviceGray"
+      : image.colors === 3
+      ? "/DeviceRGB"
+      : "/DeviceCMYK";
+    const params = image.predictor
+      ? ` /DecodeParms << /Predictor 15 /Colors ${image.colors} /BitsPerComponent ${image.bits} /Columns ${image.width} >>`
+      : "";
+    const id = stream(
+      `/BitsPerComponent ${image.bits} /ColorSpace ${space} /Filter /${image.filter}${params}` +
+        (image.inverted ? " /Decode [1 0 1 0 1 0 1 0]" : "") + (mask ? ` /SMask ${mask} 0 R` : ""),
+      image.data,
+    );
+    xobjects.push(`/${name} ${id} 0 R`);
+  }
+  const imageResources = xobjects.length ? ` /XObject << ${xobjects.join(" ")} >>` : "";
   const kids: number[] = [];
   for (const { width, height, stream } of pages) {
     objects.push(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
     const contents = objects.length;
     objects.push(
       `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] ` +
-        `/Resources << /Font << ${resources} >> >> /Contents ${contents} 0 R >>`,
+        `/Resources << /Font << ${resources} >>${imageResources} >> /Contents ${contents} 0 R >>`,
     );
     kids.push(objects.length);
   }
   objects[1] = `<< /Type /Pages /Kids [${
     kids.map((k) => `${k} 0 R`).join(" ")
   }] /Count ${kids.length} >>`;
-  let out = "%PDF-1.4\n%\xe2\xe3\xcf\xd3\n";
+  const parts: (string | Uint8Array)[] = [];
+  let length = 0;
+  const write = (part: string | Uint8Array) => {
+    parts.push(part);
+    length += part.length;
+  };
+  write("%PDF-1.4\n%\xe2\xe3\xcf\xd3\n");
   const offsets: number[] = [];
   objects.forEach((body, i) => {
-    offsets.push(out.length);
-    out += `${i + 1} 0 obj\n${body}\nendobj\n`;
+    offsets.push(length);
+    write(`${i + 1} 0 obj\n`);
+    if (Array.isArray(body)) body.forEach(write);
+    else write(body);
+    write("\nendobj\n");
   });
-  const xref = out.length;
-  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n` +
-    offsets.map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("") +
-    `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
-  return Uint8Array.from(out, (c) => c.charCodeAt(0) & 0xff);
+  const xref = length;
+  write(
+    `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n` +
+      offsets.map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("") +
+      `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`,
+  );
+  const out = new Uint8Array(length);
+  let at = 0;
+  for (const part of parts) {
+    if (typeof part === "string") {
+      for (let i = 0; i < part.length; i++) out[at++] = part.charCodeAt(i);
+    } else {
+      out.set(part, at);
+      at += part.length;
+    }
+  }
+  return out;
 }
 
 /** Helvetica's widths (thousandths of its size), for its characters 32 to 126. */
@@ -377,7 +624,7 @@ export type Drawn =
     thickness?: number;
   }
   | {
-    /** A Code 128 barcode of this text, as `Barcode` draws it, at most `width` wide. */
+    /** A barcode of this text, as `Barcode` draws it, with preferred `width`. */
     barcode: string;
     x: number;
     y: number;
@@ -387,6 +634,15 @@ export type Drawn =
     quiet?: boolean;
     color?: string;
   };
+
+/** drawDocumentPdf can size a barcode from its position and the page's width. */
+type BarcodeInput = Omit<Extract<Drawn, { barcode: string }>, "width"> & BarcodeOptions & {
+  width?: number;
+};
+type DocumentItem =
+  | Drawn
+  | BarcodeInput
+  | { image: PdfImage; x: number; y: number; width: number; height: number };
 
 /** A page's size in points: a name, `[width, height]`, or a width and `"fit"` (as tall as what's on it). */
 export type PageSize =
@@ -409,7 +665,7 @@ const SIZES: Record<string, { width: number; height: number | "fit" }> = {
 const n = (value: number) => String(Math.round(value * 100) / 100);
 
 /** How far down a drawn thing reaches, from the page's top. */
-function bottomOf(drawn: Drawn): number {
+function bottomOf(drawn: DocumentItem): number {
   if ("text" in drawn) {
     const size = drawn.size ?? 10;
     const lines = drawn.width === undefined
@@ -423,7 +679,14 @@ function bottomOf(drawn: Drawn): number {
 }
 
 /** One page's drawing, as a content stream, its places turned to PDF's (from the bottom left). */
-function draw(items: Drawn[], height: number, fonts: Set<PdfFont>): string {
+function draw(
+  items: DocumentItem[],
+  width: number,
+  height: number,
+  fonts: Set<PdfFont>,
+  images: Map<PdfImage, string>,
+  checkBounds: boolean,
+): string {
   const ops: string[] = [];
   const up = (y: number) => n(height - y);
   for (const item of items) {
@@ -471,8 +734,27 @@ function draw(items: Drawn[], height: number, fonts: Set<PdfFont>): string {
           `${box} ${paint}`,
         ].filter(Boolean).join(" "),
       );
-    } else {
-      const drawn = bars(item.barcode, item.width, { set: item.set, quiet: item.quiet });
+    } else if ("barcode" in item) {
+      const barWidth = item.width ?? width - item.x;
+      if (!Number.isFinite(item.height) || item.height < 0.01) {
+        throw new RangeError("Barcode height must be at least 0.01 points.");
+      }
+      if (checkBounds && !(barWidth > 0)) {
+        throw new RangeError("Barcode width must be positive.");
+      }
+      const drawn = checkBounds
+        ? barcodeBars(item.barcode, barWidth, item)
+        : bars(item.barcode, item.width, item);
+      const first = drawn.bars[0];
+      const last = drawn.bars[drawn.bars.length - 1];
+      const tolerance = 1e-6; // points
+      if (
+        checkBounds &&
+        !(item.x + first.x >= -tolerance && item.x + last.x + last.w <= width + tolerance &&
+          item.y >= -tolerance && item.y + item.height <= height + tolerance)
+      ) {
+        throw new RangeError("Barcode bars must fit on the page.");
+      }
       // Whole modules, as the screen's: a module is the most whole points that fit.
       ops.push(`${rgb(item.color ?? "#000")} rg`);
       for (const bar of drawn.bars) {
@@ -480,19 +762,39 @@ function draw(items: Drawn[], height: number, fonts: Set<PdfFont>): string {
           `${n(item.x + bar.x)} ${up(item.y + item.height)} ${n(bar.w)} ${n(item.height)} re f`,
         );
       }
+    } else {
+      const name = images.get(item.image) ?? `Im${images.size + 1}`;
+      images.set(item.image, name);
+      ops.push(
+        `q ${n(item.width)} 0 0 ${n(item.height)} ${n(item.x)} ${
+          up(item.y + item.height)
+        } cm /${name} Do Q`,
+      );
     }
   }
   return ops.join("\n");
 }
 
+type DocumentOptions = {
+  size?: PageSize;
+  /** Under what's drawn, on a page whose height fits it. */
+  margin?: number;
+};
+
 /** A document as PDF bytes: each page's drawing, on pages of one `size` (A4 by default). */
-export function documentPdf(
-  pages: Drawn[][],
-  { size = "a4", margin = 12 }: {
-    size?: PageSize;
-    /** Under what's drawn, on a page whose height fits it. */
-    margin?: number;
-  } = {},
+export function documentPdf(pages: Drawn[][], options?: DocumentOptions): Uint8Array {
+  return renderDocument(pages, options, false);
+}
+
+/** Draw images and automatically sized barcodes, checking that the printed bars fit the page. */
+export function drawDocumentPdf(pages: DocumentItem[][], options?: DocumentOptions): Uint8Array {
+  return renderDocument(pages, options, true);
+}
+
+function renderDocument(
+  pages: DocumentItem[][],
+  { size = "a4", margin = 12 }: DocumentOptions = {},
+  checkBounds: boolean,
 ): Uint8Array {
   const page = Array.isArray(size)
     ? { width: size[0], height: size[1] }
@@ -500,11 +802,16 @@ export function documentPdf(
     ? SIZES[size]
     : size;
   const fonts = new Set<PdfFont>();
+  const images = new Map<PdfImage, string>();
   const drawn = (pages.length ? pages : [[]]).map((items) => {
     const height = page.height === "fit"
       ? Math.ceil(Math.max(0, ...items.map(bottomOf)) + margin)
       : page.height;
-    return { width: page.width, height, stream: draw(items, height, fonts) };
+    return {
+      width: page.width,
+      height,
+      stream: draw(items, page.width, height, fonts, images, checkBounds),
+    };
   });
-  return assemble(drawn, [...fonts]);
+  return assemble(drawn, [...fonts], images);
 }

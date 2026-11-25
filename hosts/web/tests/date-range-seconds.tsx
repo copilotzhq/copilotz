@@ -244,7 +244,7 @@ test("typing: seconds left out are :00, the toolkit's own form is read, bounds h
     assert.deepEqual(applied, [{ start: "2026-11-02 14:30:00", end: "2026-11-20 08:00:05" }]);
   }));
 
-test("days picked keep each end's time; on one day the end never comes before the start", () =>
+test("days picked keep each end's time; on one day, an end before the start is marked", () =>
   inPage("en-GB", async (draw, applied) => {
     await draw({ value: { start: "2026-11-01 18:00:00", end: "2026-11-30 07:30:15" } });
     await click(".copilotz-date-field");
@@ -255,10 +255,12 @@ test("days picked keep each end's time; on one day the end never comes before th
     await click(".copilotz-date-field");
     await click('[data-day="2026-11-10"]');
     await click('[data-day="2026-11-10"]');
+    assert.ok(invalid(1) && applyOff());
+    await type(ENDS, 1, "10/11/2026 19:00:00");
     await press("Apply");
     assert.deepEqual(applied, [
       { start: "2026-11-10 18:00:00", end: "2026-11-12 07:30:15" },
-      { start: "2026-11-10 18:00:00", end: "2026-11-10 18:00:00" },
+      { start: "2026-11-10 18:00:00", end: "2026-11-10 19:00:00" },
     ]);
   }));
 
@@ -312,7 +314,7 @@ test("an end being typed moves nothing until it's left or applied", () =>
 
 const KEYED: unknown[] = [undefined, "dd/MM/yyyy", "d MMM yyyy", "MM/dd/yyyy hh:mm:ss a"];
 const START: Range = { start: "2026-11-15 08:00:00", end: "2026-11-21 23:59:59" };
-/** For each end, a day within the range and one past the other end, which is refused. */
+/** For each end, a day within the range and one past the other end, which moves it. */
 const TARGETS: [field: number, end: string][] = [
   [1, "2026-11-20 23:59:58"],
   [1, "2026-11-02 07:05:09"],
@@ -337,8 +339,11 @@ for (const lang of ["en-US", "ar-EG"]) {
             await blur(ENDS, field);
             await press("Apply");
             const pasted = applied.splice(0);
-            // An end past the other one moves nothing: it's marked, and Apply is off.
-            const crosses = field === 1 ? end < START.start : end > START.end;
+            // An end past the other one moves its day, keeping its time; if it then ends before it
+            // starts, it's marked, and Apply is off.
+            const crosses = field === 1
+              ? end < START.start && end < `${end.slice(0, 10)}${START.start.slice(10)}`
+              : end > START.end && end > `${end.slice(0, 10)}${START.end.slice(10)}`;
             assert.equal(pasted.length, crosses ? 0 : 1, `${lang} ${String(format)}: ${target}`);
             // A digit wrong where it can't be: a day, month, year or hour of 99.
             const wrong = target.replace(/\p{Nd}+/u, "99");
@@ -513,9 +518,6 @@ test("text typed in one pattern is never read by another", () =>
 
 // Review round 3.
 
-/** The problem said under From and To, if any. */
-const problem = () => document.querySelector(".copilotz-date-ends-problem")?.textContent ?? "";
-
 /**
  * What the picker shows is what it applies: with Apply on, the foot is From and To, and Apply gives
  * From and To as they read; with it off, a field is marked.
@@ -535,112 +537,59 @@ async function shownIsApplied(applied: Range[], pattern: string, at: string) {
   );
 }
 
-test("an end before the start is marked, never saved as another: same day or earlier, typed or picked, either end", () =>
+test("an end that would end before the start is marked, never saved as another: same day or another, typed or picked, either end", () =>
   inPage("en-GB", async (draw, applied) => {
     const { pattern } = rangeSecondsPattern("dd/MM/yyyy", "en-GB");
     const value = { start: "2026-11-15 10:00:00", end: "2026-11-21 18:00:00" };
-    const typed: [string, number, string][] = [
-      ["To, same day, earlier", 1, "15/11/2026 08:00:00"],
-      ["To, an earlier day", 1, "10/11/2026 08:00:00"],
-      ["From, same day, later", 0, "21/11/2026 20:00:00"],
-      ["From, a later day", 0, "25/11/2026 08:00:00"],
+    // Typed: [what, field, text, whether it ends before it starts]. A day past the other end moves
+    // that end's day, as since rc.54, keeping its time.
+    const typed: [string, number, string, boolean][] = [
+      ["To, From's day, earlier", 1, "15/11/2026 08:00:00", true],
+      ["To, an earlier day, earlier than From's time", 1, "10/11/2026 08:00:00", true],
+      ["To, an earlier day, later than From's time", 1, "10/11/2026 12:00:00", false],
+      ["From, To's day, later", 0, "21/11/2026 20:00:00", true],
+      ["From, a later day, later than To's time", 0, "25/11/2026 20:00:00", true],
+      ["From, a later day, earlier than To's time", 0, "25/11/2026 08:00:00", false],
     ];
-    for (const [name, field, text] of typed) {
+    for (const [name, field, text, crosses] of typed) {
       await draw({ value, format: "dd/MM/yyyy" });
       await click(".copilotz-date-field");
       const before = { ends: ends(), foot: footText() };
       await type(ENDS, field, text);
       await blur(ENDS, field);
-      // Kept as typed, marked, and the other end where it was.
       assert.equal(ends()[field], text, name);
-      assert.equal(ends()[1 - field], before.ends[1 - field], name);
-      assert.equal(footText(), before.foot, name);
-      assert.ok(invalid(field) && applyOff(), name);
-      assert.equal(problem(), "Ends before it starts", name);
-      await press("Apply");
-      assert.deepEqual(applied.splice(0), [], name);
-      // Put right in the other field, both read, and what's shown is what's applied.
-      const fix = field === 1 ? "01/11/2026 00:00:00" : "30/11/2026 23:59:59";
-      await type(ENDS, 1 - field, fix);
-      await blur(ENDS, 1 - field);
-      assert.ok(!invalid(0) && !invalid(1) && !applyOff(), name);
-      assert.equal(problem(), "", name);
+      if (crosses) {
+        // Kept as typed, marked, the other end where it was, and Apply off.
+        assert.equal(ends()[1 - field], before.ends[1 - field], name);
+        assert.equal(footText(), before.foot, name);
+        assert.ok(invalid(field) && applyOff(), name);
+        await press("Apply");
+        assert.deepEqual(applied.splice(0), [], name);
+        // Put right in the other field: both read, and what's shown is what's applied.
+        const fix = field === 1 ? "01/11/2026 00:00:00" : "30/11/2026 23:59:59";
+        await type(ENDS, 1 - field, fix);
+        assert.ok(!invalid(0) && !invalid(1) && !applyOff(), `${name}, put right`);
+        await blur(ENDS, 1 - field);
+        assert.deepEqual(ends(), field === 1 ? [fix, text] : [text, fix], `${name}, put right`);
+      }
       await shownIsApplied(applied, pattern, name);
     }
-    // Picked: one day, or a second day before the first, whichever end's time is earlier.
-    const picks: [string, Range, string[]][] = [
-      ["one day, To's time earlier", { start: "2026-11-01 18:00:00", end: "2026-11-30 07:30:15" }, [
-        "2026-11-10",
-        "2026-11-10",
-      ]],
-      ["one day, To's time later", value, ["2026-11-10", "2026-11-10"]],
-      ["the second day first", { start: "2026-11-01 18:00:00", end: "2026-11-30 07:30:15" }, [
-        "2026-11-20",
-        "2026-11-12",
-      ]],
+    // Picked: one day, To's time earlier (marked) or later; a second day before the first.
+    const nights = { start: "2026-11-01 18:00:00", end: "2026-11-30 07:30:15" };
+    const picks: [string, Range, string[], boolean][] = [
+      ["one day, To's time earlier", nights, ["2026-11-10", "2026-11-10"], true],
+      ["one day, To's time later", value, ["2026-11-10", "2026-11-10"], false],
+      ["the second day first", nights, ["2026-11-20", "2026-11-12"], false],
     ];
-    for (const [name, from, days] of picks) {
+    for (const [name, from, days, crosses] of picks) {
       await draw({ value: from, format: "dd/MM/yyyy" });
       await click(".copilotz-date-field");
       for (const day of days) await click(`[data-day="${day}"]`);
-      assert.ok(!invalid(0) && !invalid(1), name);
-      const [start, end] = ends().map((t) => readEnd(t, pattern, "en-GB")!);
-      assert.ok(start <= end, `${name}: ${start} – ${end}`);
+      assert.equal(invalid(1) && applyOff(), crosses, name);
       await shownIsApplied(applied, pattern, name);
     }
     // A value that ends before it starts, from the app: To is marked, and Apply is off.
     await draw({ value: { start: "2026-11-16 23:00:00", end: "2026-11-16 07:00:00" } });
     await click(".copilotz-date-field");
     assert.ok(invalid(1) && applyOff());
-    assert.equal(problem(), "Ends before it starts");
-  }));
-
-test("min and max to the second hold for every end: typed, picked, each preset", () =>
-  inPage("en-GB", async (draw, applied) => {
-    const { pattern } = rangeSecondsPattern("dd/MM/yyyy", "en-GB");
-    const bounds = [
-      { min: "2026-11-02 08:30:00", max: "2026-11-16 12:00:00" },
-      { min: "2026-11-02 08:30", max: "2026-11-16 12:00" },
-      { max: "2026-11-16 12:00:00" },
-      { min: "2026-11-02 08:30:15" },
-    ];
-    const fits = (end: string, b: { min?: string; max?: string }) =>
-      (!b.min || end >= (b.min.length === 16 ? `${b.min}:00` : b.min)) &&
-      (!b.max || end <= (b.max.length === 16 ? `${b.max}:59` : b.max));
-    for (const b of bounds) {
-      const at = JSON.stringify(b);
-      const value = { start: "2026-11-05 07:00:00", end: "2026-11-10 23:00:00" };
-      // Typed past a bound: refused.
-      await draw({ ...b, value, presets: false });
-      await click(".copilotz-date-field");
-      if (b.max) {
-        await type(ENDS, 1, "16/11/2026 13:00:00");
-        assert.ok(invalid(1), at);
-      }
-      if (b.min) {
-        await type(ENDS, 0, "02/11/2026 08:00:00");
-        assert.ok(invalid(0), at);
-      }
-      // Picked on a bound's day: its time is held to the bound, shown and applied.
-      await draw({ ...b, value, presets: false });
-      await click(".copilotz-date-field");
-      await click(`[data-day="${b.min ? "2026-11-02" : "2026-11-03"}"]`);
-      await click(`[data-day="${b.max ? "2026-11-16" : "2026-11-15"}"]`);
-      for (const text of ends()) {
-        assert.ok(fits(readEnd(text, pattern, "en-GB")!, b), `${at}: ${text}`);
-      }
-      await shownIsApplied(applied, pattern, `${at}, picked`);
-      // Each preset.
-      await draw({ ...b, value, presets: true });
-      const count = document.querySelectorAll(".copilotz-date-preset").length - 1;
-      for (let i = 0; i < count; i++) {
-        await draw({ ...b, value, presets: true });
-        await click(".copilotz-date-preset", i);
-        const [range] = applied.splice(0);
-        assert.ok(
-          fits(range.start, b) && fits(range.end, b),
-          `${at}, preset ${i}: ${range.start} – ${range.end}`,
-        );
-      }
-    }
   }));

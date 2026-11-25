@@ -30,8 +30,8 @@ Nobody calls it: it has no Actions, tools or routes.
 Its Views show on the web.
 
 - **On the web:** `chat.asks`, `chat.moving`, `chat.notes`, `chat.palette`, `chat.waiting`,
-  `chat.waiting.rail`, `chats`, `chats.recent`, `file`, `home`, `new-thread`, `new-thread.rail`,
-  `web.live`, `web.message`, `web.thread`.
+  `chat.waiting.rail`, `chats`, `chats.archived`, `chats.recent`, `file`, `home`, `new-thread`,
+  `new-thread.rail`, `web.live`, `web.message`, `web.thread`.
 - **What it adds to resources:** `conversation` (`asks`), `palette` (`chats`), `sidebar` (`asks`,
   `start`), `spaceSidebar` (`chats`), `spaceTabs` (`chats`), `suggestions` (`draft`, `explain`,
   `names`, `week`).

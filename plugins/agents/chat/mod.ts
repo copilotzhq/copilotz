@@ -54,6 +54,13 @@
  * - A person renames a conversation (`chat.rename`), from its header's menu,
  *   a list's row or the palette; its notes take the title too, and an agent
  *   that might have named it (`renamable`) no longer does.
+ * - A person archives a conversation (`chat.archive`), for everyone who sees
+ *   it, as a title: lists leave it out, with its notes and subthreads, and
+ *   list it apart when asked (`thread.recent`'s `archived`); nothing in it
+ *   changes. Restoring it, or any new message in it, its notes or a
+ *   subthread, brings it back, in that message's own commit. Archiving checks
+ *   the newest message the person was shown (`latest`) against the whole
+ *   conversation.
  * - A chat shared with someone outside its space (a contact's) has notes
  *   beside it (`chat.notes`): a thread of its own in the same space, made
  *   the first time it's asked for, where its people work with agents about
@@ -116,6 +123,7 @@
  */
 import { definePlugin, failure, personOf, type Plugin } from "../../../runtime/mod.ts";
 import { approveAction } from "./actions/approve.ts";
+import { archiveAction } from "./actions/archive.ts";
 import { attachAction } from "./actions/attach.ts";
 import { eraseAction } from "./actions/erase.ts";
 import { forgetGrantAction } from "./actions/forget-grant.ts";
@@ -221,6 +229,7 @@ export const chat: Plugin = definePlugin({
     "chat.stop": stopAction,
     "chat.move": moveAction,
     "chat.rename": renameAction,
+    "chat.archive": archiveAction,
     "chat.notes": notesAction,
     "chat.unmark": unmarkAction,
     "chat.import": importAction,

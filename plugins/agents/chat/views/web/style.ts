@@ -1,8 +1,9 @@
 /**
  * Chat's layout on the web: a chat and its messages, what agents wait on you
  * for (over where you type, and in the sidebar), the composer, home, a
- * space's chats (its tab) and its latest (in the sidebar), and a contact's
- * chat's staff notes beside it. Only layout, on the theme's variables; the
+ * space's chats (its tab, its archived ones apart) and its latest (in the
+ * sidebar), an archived chat's note, and a contact's chat's staff notes
+ * beside it. Only layout, on the theme's variables; the
  * pieces (buttons, chips, notices, markdown…) are the web host's toolkit.
  */
 export const STYLE = `
@@ -366,6 +367,16 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
   .chats-item:is(:hover, :focus-within) .chats-row-meta { visibility: visible; }
 }
 .chats-none { margin: 4px 2px; color: var(--muted-foreground); font-size: 13px; text-align: center; }
+.chats-archived { display: grid; gap: 6px; }
+.chats-archived > .copilotz-nav-item { color: var(--muted-foreground); }
+.chats-archived-end { display: inline-flex; }
+.chats-archived-end .copilotz-icon { transition: transform .15s; }
+.chats-archived[data-open] .chats-archived-end .copilotz-icon { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) {
+  .chats-archived-end .copilotz-icon { transition: none; }
+}
+.chat-archived { flex: none; margin: 10px 16px 0 24px; }
+.chat-newer { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .chats-empty { margin: 40px auto 24px; }
 .chats-compact { gap: 14px; }
 .chats-compact .chats-list { padding: 2px; }

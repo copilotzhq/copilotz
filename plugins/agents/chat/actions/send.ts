@@ -50,8 +50,9 @@ import {
   rosterOf,
 } from "../shared/agents.ts";
 import { letIn } from "../shared/contact-send.ts";
+import { chatOf } from "../shared/chat-of.ts";
 import { delivery } from "../shared/delivery.ts";
-import { movedBy, startedWith } from "../shared/summary.ts";
+import { movedBy, revived, startedWith } from "../shared/summary.ts";
 import { settingsOf } from "../shared/types.ts";
 
 const names = { type: "array", items: { type: "string" } } as const;
@@ -364,10 +365,13 @@ export const sendAction = defineAction({
       at: now(),
     };
     const deliver = await delivery(ctx, sent, sent.thread, true, input.quiet ?? 0);
+    // The chat it belongs to, when it's notes or a subthread: archived, it comes back with this.
+    const chat = existing ? await chatOf(ctx.as().db, existing) : threadId;
     await ctx.transaction(async (tx) => {
-      // The chat's summary moves with the write that touches it anyway.
+      // The chat's summary moves with the write that touches it anyway (and an archived one is back).
       if (existing) {
         await tx.db.collection("thread").updateOne({ _id: threadId }, movedBy(sent), NO_ANSWER);
+        if (chat !== threadId) await revived(tx, chat);
       } else {
         await tx.db.collection("thread").insertOne({
           _id: threadId,

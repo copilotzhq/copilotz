@@ -2,9 +2,10 @@
  * A chat's header: what it's about, the space it's in (a link to its page),
  * and who's in it (agents as they're named, with their emoji); what the
  * chat offers beside it (`tools`: its staff notes' button); its menu, to
- * rename it, move it to another space (the command palette's space picker, then who'll
- * see it there) or start another chat there. On a phone, a way to start
- * another (the sidebar is tucked away there). Its end keeps clear of what
+ * rename it, move it to another space (the command palette's space picker,
+ * then who'll see it there), archive or restore it (given `archive`), or
+ * start another chat there. On a phone, a way to start another (the
+ * sidebar is tucked away there). Its end keeps clear of what
  * the shell puts at the page's top right (`--copilotz-inset-end`: the side
  * panel's button).
  */
@@ -19,6 +20,7 @@ import {
   openPalette,
   Title,
 } from "../../../../../hosts/web/mod.ts";
+import { archiveItem, type Archiving } from "./archive.tsx";
 import { moveStep } from "./move.tsx";
 import { renameStep } from "./rename.tsx";
 import { say } from "./words.ts";
@@ -29,7 +31,7 @@ export type Someone = { name: string; agent: boolean; icon?: string; picture?: s
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
 export function Header(
-  { title, thread, space, people, fresh, call, tools }: {
+  { title, thread, space, people, fresh, call, tools, archive }: {
     title: string;
     thread: string;
     space?: { _id: string; name: string; kind: string };
@@ -39,6 +41,11 @@ export function Header(
     call: Call;
     /** Before its menu: what the chat offers beside it (its staff notes' button). */
     tools?: ReactNode;
+    /**
+     * Whether it's archived, and its latest message as shown: its menu then
+     * archives it, or restores it (`chat.archive`). Without it, it doesn't.
+     */
+    archive?: Omit<Archiving, "thread">;
   },
 ): ReactNode {
   const shown = people.slice(0, 4);
@@ -108,6 +115,7 @@ export function Header(
             onSelect: () =>
               openPalette(moveStep({ thread, title, from: space?._id, call, open: true })),
           },
+          ...(archive ? [archiveItem({ ...archive, thread, call })] : []),
           { label: say("newChat"), icon: "compose", href: fresh },
         ]}
       />

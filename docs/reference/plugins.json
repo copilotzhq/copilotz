@@ -3154,6 +3154,7 @@
             "in",
             "about",
             "held",
+            "archived",
             "messages",
             "opened",
             "latest",
@@ -3208,6 +3209,9 @@
                 "required": [
                   "from"
                 ]
+              },
+              "archived": {
+                "type": "string"
               },
               "messages": {
                 "type": "integer"
@@ -3488,6 +3492,50 @@
             "required": [
               "approval",
               "answer"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
+          "name": "chat.archive",
+          "summary": "Archives a conversation, or brings it back",
+          "input": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "type": "string",
+                "minLength": 1
+              },
+              "archived": {
+                "type": "boolean"
+              },
+              "latest": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "thread",
+              "archived"
             ],
             "additionalProperties": false
           },
@@ -4709,6 +4757,9 @@
             "/approve": {
               "description": "Answer what an agent waits on you for (once, this conversation, its routine, always, or no: as it allows)"
             },
+            "/archive": {
+              "description": "Put this conversation away (or one /threads listed, or named by id), for everyone who sees it: /threads leaves it out, /threads archived lists it, and a new message in it brings it back"
+            },
             "/file": {
               "description": "Send a file (its text, for text files), with what you say about it"
             },
@@ -4733,6 +4784,9 @@
             "/prompt": {
               "description": "Exactly what an agent would be sent now"
             },
+            "/restore": {
+              "description": "Bring an archived conversation back: this one, or one listed or named by id"
+            },
             "/retry": {
               "description": "Have your last message answered again, in a fork"
             },
@@ -4740,7 +4794,7 @@
               "description": "Stop the agents working here (and in its subthreads)"
             },
             "/threads": {
-              "description": "The latest conversations"
+              "description": "The latest conversations; /threads archived, those put away"
             }
           },
           "notices": {
@@ -4814,6 +4868,10 @@
         },
         {
           "name": "chats",
+          "place": "web"
+        },
+        {
+          "name": "chats.archived",
           "place": "web"
         },
         {

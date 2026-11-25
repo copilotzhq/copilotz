@@ -176,6 +176,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.open` | Open {name} |
 | `chat.openChat` | Open chat |
 | `chat.openConversation` | Open conversation |
+| `chat.openNotes` | Open staff notes |
 | `chat.openSpace` | Open {space} |
 | `chat.otherSpaces` | one: {count} other space / other: {count} other spaces |
 | `chat.overLimit` | Over 10 MB |

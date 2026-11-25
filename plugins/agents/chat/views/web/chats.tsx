@@ -12,7 +12,7 @@
 import { type ReactNode, useDeferredValue, useState } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
 import { Button, EmptyState, IconButton, Input, Skeleton } from "../../../../../hosts/web/mod.ts";
-import { ChatRow } from "./chat-row.tsx";
+import { ChatRow, rowLatest } from "./chat-row.tsx";
 import { byDay, type Listed, matches } from "./listed.ts";
 import { Shelf } from "./shelf.tsx";
 import { STYLE } from "./style.ts";
@@ -118,7 +118,15 @@ function Chats(
           <section key={g.label} className="chats-group" aria-label={g.label}>
             <h3>{g.label}</h3>
             <ul className="chats-list">
-              {g.items.map((t) => <ChatRow key={t._id} thread={t} compact={compact} call={call} />)}
+              {g.items.map((t) => (
+                <ChatRow
+                  key={t._id}
+                  thread={t}
+                  latest={rowLatest(t, shown)}
+                  compact={compact}
+                  call={call}
+                />
+              ))}
             </ul>
           </section>
         ))

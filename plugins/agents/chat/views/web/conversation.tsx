@@ -50,7 +50,7 @@ import { beforeSend } from "./before-send.ts";
 import { Composer, type Mentioned } from "./composer.tsx";
 import { drawnLatest } from "./archive.tsx";
 import { ArchivedNote } from "./archived-note.tsx";
-import { notesOpen } from "./lane.ts";
+import { notesOpen, setNotesOpen } from "./lane.ts";
 import { Header, type Someone } from "./header.tsx";
 import { Missing } from "./missing.tsx";
 import {
@@ -116,6 +116,9 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
       ...(notes ? { notes: notes._id } : {}),
     }
     : undefined;
+  // The newest message the page draws: its own, and its notes' while their lane is open.
+  const drawn = drawnLatest(ctx, t._id, false);
+  const withNotes = lane ? drawnLatest(ctx, t._id, true) : drawn;
   const { main, title, people, space } = talk(ctx, {
     id: t._id,
     thread,
@@ -154,8 +157,13 @@ export const conversationView = (t: { _id?: string }, ctx: ViewContext<ReactNode
         tools={lane ? <NotesToggle who={me} count={notes?.messages} /> : undefined}
         archive={{
           archived,
-          latest: drawnLatest(ctx, t._id, !!lane && notesOpen(me)),
-          ...(thread.about ? { open: pathOf(thread.about, thread.in) } : {}),
+          // With a notes' lane, which may open after it's drawn: asked as it's archived.
+          latest: lane ? () => notesOpen(me) ? withNotes : drawn : drawn,
+          ...(lane?.notes
+            ? { notes: () => setNotesOpen(me, true) }
+            : thread.about
+            ? { open: pathOf(thread.about, thread.in) }
+            : {}),
         }}
       />
       {thread.about

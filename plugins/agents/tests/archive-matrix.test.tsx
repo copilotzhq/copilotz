@@ -26,7 +26,7 @@ import { tempFile, test } from "../../../testing/mod.ts";
 import type { Message, Thread } from "../chat/mod.ts";
 import { notesOf } from "../chat/shared/notes.ts";
 import { chatTerminal } from "../chat/terminal.ts";
-import { ChatRow } from "../chat/views/web/chat-row.tsx";
+import { ChatRow, rowLatest } from "../chat/views/web/chat-row.tsx";
 import { conversationView } from "../chat/views/web/conversation.tsx";
 import { Header } from "../chat/views/web/header.tsx";
 import { setNotesOpen } from "../chat/views/web/lane.ts";
@@ -35,7 +35,7 @@ import { chatPaletteView } from "../chat/views/web/palette.tsx";
 import { terminalPlugin } from "../../interfaces/terminal/mod.ts";
 import { terminalShell } from "../../interfaces/terminal/terminal.ts";
 import { accessTerminal } from "../../access/spaces/terminal.ts";
-import { archiveKit, bob, carla, type Kit } from "./archive-kit.ts";
+import { ana, archiveKit, bob, carla, type Kit } from "./archive-kit.ts";
 
 const code = (p: Promise<unknown>) =>
   p.then(() => "done", (e) => (e as { code?: string }).code ?? String(e));
@@ -56,17 +56,23 @@ const itemsOf = (node: unknown) =>
 
 type Landing = "chat" | "notes" | "subthread" | "deeper" | "opening";
 
+/** Who wrote it: Bob, who archives (his own messages count as seen), or someone else. */
+type Author = "other" | "archiver";
+
 /** One conversation: its chat, notes (a contact's), and the subthreads two levels down. */
 type Place = { chat: string; notes?: string; first: string; second: string; from: string };
 
 /** Lands a new message there, and waits for what follows. */
-async function land(k: Kit, p: Place, where: Landing, n: number) {
+async function land(k: Kit, p: Place, where: Landing, n: number, author: Author) {
   const say = (thread: string, actor: Actor) =>
     k.send({ thread, text: `news ${n}`, to: [] }, actor);
-  if (where === "chat") await say(p.chat, p.notes ? carla : bob);
-  else if (where === "notes") await say(p.notes!, bob);
-  else if (where === "subthread") await say(p.first, bob);
-  else if (where === "deeper") await say(p.second, bob);
+  // Someone else than Bob, who archives: in a contact's chat, the contact.
+  const other = where === "chat" && p.notes ? carla : ana;
+  const by = author === "archiver" ? bob : other;
+  if (where === "chat") await say(p.chat, by);
+  else if (where === "notes") await say(p.notes!, by);
+  else if (where === "subthread") await say(p.first, by);
+  else if (where === "deeper") await say(p.second, by);
   // Lead opens a subthread to Bob, where its subthreads hang from, and waits on him.
   else await k.send({ thread: p.from, text: "aside bob" }, bob);
 }
@@ -138,15 +144,19 @@ async function shown(k: Kit, page: string, lane: boolean) {
 type Source = {
   name: string;
   shows: Landing[];
+  /** Where what it draws last is said. */
+  home: Landing;
   /** Archives, with the message landing before what it shows (`before`), or after. */
   archive(k: Kit, p: Place, before: boolean, landed: () => Promise<void>): Promise<string>;
 };
 
 /** A page's header, or the palette over it. */
 function page(name: string, of: (p: Place) => string, lane: boolean, shows: Landing[]) {
+  const home = shows[0] ?? "chat";
   const viaHeader: Source = {
     name: `${name} header`,
     shows,
+    home,
     async archive(k, p, before, landed) {
       if (before) await landed();
       const { ctx, after } = await shown(k, of(p), lane);
@@ -161,6 +171,7 @@ function page(name: string, of: (p: Place) => string, lane: boolean, shows: Land
   const viaPalette: Source = {
     name: `${name} palette`,
     shows,
+    home,
     async archive(k, p, before, landed) {
       if (before) await landed();
       const { ctx, after } = await shown(k, of(p), lane);
@@ -179,14 +190,15 @@ function row(name: string, of: (p: Place) => string, shows: Landing[]): Source {
   return {
     name,
     shows,
+    home: shows[0] ?? "chat",
     async archive(k, p, before, landed) {
       if (before) await landed();
       const { ctx, after } = await shown(k, of(p), false);
-      const listed = (await k.recent(bob, { in: k.shop, limit: 100 })).find((t) =>
-        t._id === of(p)
-      )!;
+      const list = (await k.recent(bob, { in: k.shop, limit: 100 })) as unknown as Listed[];
+      const listed = list.find((t) => t._id === of(p))!;
       const drawn = ChatRow({
-        thread: listed as unknown as Listed,
+        thread: listed,
+        latest: rowLatest(listed, list),
         compact: false,
         call: ctx.call,
       });
@@ -255,6 +267,7 @@ async function outcome(k: Kit, chat: string, out: string) {
 const terminalOpen: Source = {
   name: "terminal /archive (open)",
   shows: [],
+  home: "chat",
   async archive(k, p, before, landed) {
     if (before) await landed();
     const trap: { land?: () => Promise<void> } = {};
@@ -274,6 +287,7 @@ const terminalOpen: Source = {
 const terminalListed: Source = {
   name: "terminal /archive <n>",
   shows: ["chat"],
+  home: "chat",
   async archive(k, p, before, landed) {
     if (before) await landed();
     const out = await session(k, [
@@ -290,20 +304,31 @@ const terminalListed: Source = {
   },
 };
 
-/** Every source, every landing, both timings: what each case came to, and what it should. */
+/**
+ * Every source, every landing, by whom (an agent's opening is never the
+ * archiver's), both timings: what each case came to, and what it should.
+ * What the archiver says is seen wherever it lands: first, someone else says
+ * something where the source draws, so nothing else is newer than it drew.
+ */
 async function matrix(k: Kit, p: Place, sources: Source[], landings: Landing[]) {
   const got: string[] = [];
   const expected: string[] = [];
   let n = 0;
   for (const before of [true, false]) {
     for (const where of landings) {
-      for (const source of sources) {
-        const name = `${source.name} × ${where} × ${before ? "before" : "after"}`;
-        const result = await source.archive(k, p, before, () => land(k, p, where, n++));
-        got.push(`${name}: ${result}`);
-        expected.push(`${name}: ${before && source.shows.includes(where) ? "done" : "conflict"}`);
-        if ((await k.thread(p.chat))?.archived) {
-          await k.runtime.call("chat.archive", { thread: p.chat, archived: false }, { actor: bob });
+      for (const author of (where === "opening" ? ["other"] : ["other", "archiver"]) as Author[]) {
+        for (const source of sources) {
+          const name = `${source.name} × ${where} by ${author} × ${before ? "before" : "after"}`;
+          if (author === "archiver") await land(k, p, source.home, n++, "other");
+          const result = await source.archive(k, p, before, () => land(k, p, where, n++, author));
+          const seen = author === "archiver" || (before && source.shows.includes(where));
+          got.push(`${name}: ${result}`);
+          expected.push(`${name}: ${seen ? "done" : "conflict"}`);
+          if ((await k.thread(p.chat))?.archived) {
+            await k.runtime.call("chat.archive", { thread: p.chat, archived: false }, {
+              actor: bob,
+            });
+          }
         }
       }
     }
@@ -329,7 +354,8 @@ test("a contact's chat: archived only over what the place it's archived from sho
       ...page("chat page, notes lane closed", (p) => p.chat, false, ["chat"]),
       ...page("notes page", (p) => p.notes!, false, ["notes", "subthread", "opening"]),
       ...page("subthread page", (p) => p.first, false, ["subthread", "deeper"]),
-      row("chat row", (p) => p.chat, ["chat"]),
+      // Its notes row is drawn beside it, in the same list.
+      row("chat row", (p) => p.chat, ["chat", "notes"]),
       row("notes row", (p) => p.notes!, ["notes"]),
       { ...terminalOpen, shows: ["chat"] },
       terminalListed,
@@ -341,7 +367,7 @@ test("a contact's chat: archived only over what the place it's archived from sho
       "deeper",
       "opening",
     ]);
-    assertEquals(got.length, 120);
+    assertEquals(got.length, 216);
     assertEquals(got, expected);
   }, { plugins });
 });
@@ -365,7 +391,7 @@ test("a team's chat: archived only over what the place it's archived from showed
       "deeper",
       "opening",
     ]);
-    assertEquals(got.length, 56);
+    assertEquals(got.length, 98);
     assertEquals(got, expected);
   }, { plugins });
 });
@@ -441,6 +467,35 @@ for (const [name, store] of Object.entries(stores)) {
       assert(!(await k.thread(k.carlas))?.archived, "not put away over her message");
       const listed = (await k.recent(bob, { in: k.shop })).map((t) => t._id);
       assert(listed.includes(k.carlas) && listed.includes(notes));
+    }, { store });
+  });
+}
+
+// Review (round 3): a chat closed with a staff note ("Resolved, closing") couldn't be archived from
+// its row or its page, where the notes' lane is closed by default.
+for (const [name, store] of Object.entries(stores)) {
+  test(`${name}: a chat closed with the archiver's own staff note archives from its row and page`, async () => {
+    await archiveKit(async (k) => {
+      await k.send({ thread: k.carlas, text: "where's my order?" }, carla);
+      await k.send({ thread: k.carlas, text: "@lead status?" }, bob);
+      const { thread: notes } = await k.runtime.call<{ thread: string }>("chat.notes", {
+        thread: k.carlas,
+      }, { actor: bob });
+      await k.send({ thread: notes, text: "Resolved: shipped today. Closing.", to: [] }, bob);
+      const p: Place = { chat: k.carlas, notes, first: notes, second: notes, from: notes };
+      const [chatRow] = [row("chat row", (p) => p.chat, [])];
+      const [closed] = page("chat page, notes lane closed", (p) => p.chat, false, []);
+      const now = () => Promise.resolve();
+      const restore = () =>
+        k.runtime.call("chat.archive", { thread: k.carlas, archived: false }, { actor: bob });
+      assertEquals(await chatRow.archive(k, p, true, now), "done");
+      await restore();
+      assertEquals(await closed.archive(k, p, true, now), "done");
+      await restore();
+      // Someone else's note, the lane closed: not drawn, kept. The row draws its notes row beside it.
+      await k.send({ thread: notes, text: "One more thing first", to: [] }, ana);
+      assertEquals(await closed.archive(k, p, true, now), "conflict");
+      assertEquals(await chatRow.archive(k, p, true, now), "done");
     }, { store });
   });
 }

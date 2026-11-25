@@ -54,6 +54,7 @@ export const say = defineWords("chat", {
   restore: "Restore",
   archiveNewer: "Something new arrived in this conversation: see it, then archive it.",
   openChat: "Open chat",
+  openNotes: "Open staff notes",
   // An archived chat's page
   archivedTitle: "This chat is archived",
   notesArchivedTitle: "Archived, with the chat they're about",

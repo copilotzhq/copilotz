@@ -253,7 +253,7 @@ test("what the person saw last: a message after it, and the chat isn't put away"
     );
     // And what the notes said after the chat's latest, asked about them.
     const chats = (await k.thread(k.carlas))!.latest!;
-    await k.send({ thread: notes, text: "she wrote again", to: [] }, bob);
+    await k.send({ thread: notes, text: "she wrote again", to: [] }, ana);
     assertEquals(
       await code(archive(k, bob, { thread: notes, archived: true, latest: chats })),
       "conflict",

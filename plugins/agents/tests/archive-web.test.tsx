@@ -111,6 +111,23 @@ test("a refused archive, from a menu, is said: something newer, with the way to 
     return [toasted.tone, html(toasted.message)];
   };
   assertEquals(await shown("forbidden"), ["destructive", "Refused: forbidden"]);
+  // On the chat's page with notes: their lane opens, where something new may be.
+  let opened = false;
+  const { call } = calls(refused("conflict"));
+  itemsOf(Header({
+    title: "Plan",
+    thread: "c1",
+    people: [],
+    fresh: "/",
+    call,
+    archive: { archived: false, latest: "m9", notes: () => opened = true },
+  }))[2].onSelect!();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const toasted = toastState().toasts.at(-1)!;
+  dismissToast(toasted.id);
+  assertStringIncludes(html(toasted.message), "Open staff notes");
+  (toasted.message as ReactElement<{ notes(): void }>).props.notes();
+  assert(opened, "the notes' lane opened");
   const [tone, newer] = await shown("conflict", "/thread/c1");
   assertEquals(tone, "warning");
   assertStringIncludes(newer, "Something new arrived in this conversation");
@@ -313,19 +330,29 @@ test("a page says the newest message it draws: its notes' too while their lane i
     ],
     "c1:notes": [said("n4", "c1:notes", early), said("n5", "c1:notes", "2026-11-25T12:00:00.000Z")],
   };
+  // What the header's archiving says, asked as it's archived: the lane may open after it's drawn.
   const archiveOn = (id: string, lane: boolean, t: Record<string, unknown> = transcripts) => {
+    setNotesOpen("sam", false);
+    const { latest, notes, ...rest } = elements(
+      pageOf(threads, id, t, { "thread:c1": [{ member: "contact:c9" }] }),
+      Header,
+    )[0].props.archive as Record<string, unknown>;
     setNotesOpen("sam", lane);
-    return elements(pageOf(threads, id, t, { "thread:c1": [{ member: "contact:c9" }] }), Header)[0]
-      .props.archive;
+    return {
+      ...rest,
+      latest: typeof latest === "function" ? latest() : latest,
+      notes: !!notes,
+    } as Record<string, unknown>;
   };
-  assertEquals(archiveOn("c1", false), { archived: false, latest: "s9" });
-  assertEquals(archiveOn("c1", true), { archived: false, latest: "n5" });
+  assertEquals(archiveOn("c1", false), { archived: false, latest: "s9", notes: true });
+  assertEquals(archiveOn("c1", true), { archived: false, latest: "n5", notes: true });
   assertEquals(archiveOn("c1:notes", true), {
     archived: false,
     latest: "n5",
     open: "/thread/c1?in=s1",
+    notes: false,
   });
-  assertEquals(archiveOn("c1", false, {}), { archived: false, latest: null });
+  assertEquals(archiveOn("c1", false, {}), { archived: false, latest: null, notes: true });
   setNotesOpen("sam", false);
   // What archiving then asks: what was drawn, or that nothing was.
   assertEquals(archiveInput({ thread: "c9", archived: false }), {

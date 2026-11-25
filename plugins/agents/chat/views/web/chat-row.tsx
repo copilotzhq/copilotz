@@ -15,8 +15,23 @@ import { say } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
+/**
+ * What a chat's row shows last, for archiving it: its own latest message, or
+ * its notes row's, drawn beside it in the same list (`drawn`), when newer.
+ */
+export const rowLatest = (t: Listed, drawn: Listed[]) => {
+  const notes = drawn.find((n) => n.about === t._id);
+  return notes?.latest && notes.at > t.at ? notes.latest : t.latest;
+};
+
 export function ChatRow(
-  { thread: t, compact, call }: { thread: Listed; compact: boolean; call: Call },
+  { thread: t, latest = t.latest, compact, call }: {
+    thread: Listed;
+    /** What it shows last (see `rowLatest`): its own latest, unless said. */
+    latest?: string | null;
+    compact: boolean;
+    call: Call;
+  },
 ): ReactNode {
   const title = titleOf(t);
   const last = lastOf(t);
@@ -62,11 +77,10 @@ export function ChatRow(
               icon: "move",
               onSelect: () => openPalette(moveStep({ thread: t._id, title, from: t.in, call })),
             },
-            // What the row shows: its own latest message.
             archiveItem({
               thread: t._id,
               archived: !!t.archived,
-              latest: t.latest,
+              latest,
               open: `/thread/${encodeURIComponent(t.about ?? t._id)}${
                 t.in ? `?in=${encodeURIComponent(t.in)}` : ""
               }`,

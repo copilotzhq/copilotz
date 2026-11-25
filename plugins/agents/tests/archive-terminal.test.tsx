@@ -150,9 +150,13 @@ test("/archive <n> checks what /threads showed of it: a message since, and it st
     const [plan] = await listed(runtime);
     const shown = await session(runtime, [
       "/threads",
+      // Someone else says something there (an agent, through trusted code): her own would be seen.
       () =>
-        runtime.call("chat.send", { thread: plan._id, text: "and the budget", to: [] }, {
-          actor: ana,
+        runtime.call("chat.say", {
+          id: "budget-1",
+          thread: plan._id,
+          from: "lead",
+          text: "And the budget?",
         }),
       "/archive 1",
       "/threads",

@@ -20,17 +20,23 @@ export type Archiving = {
   thread: string;
   /** Whether it's archived now: it restores it. */
   archived: boolean;
-  /** The newest message drawn (`newestOf`); null or left out, none was. */
-  latest?: string | null;
+  /**
+   * The newest message drawn (`newestOf`), or how to ask as it's archived
+   * (a page whose notes' lane may open after it's drawn); null or left out,
+   * none was.
+   */
+  latest?: string | null | (() => string | null);
   /** The chat's page, to see what's new when archiving is refused. */
   open?: string;
+  /** Opens the chat's notes' lane, there, to see what's new when archiving is refused. */
+  notes?: () => void;
 };
 
 /** The input `chat.archive` takes to do the opposite of what's so now. */
 export const archiveInput = ({ thread, archived, latest }: Archiving) => ({
   thread,
   archived: !archived,
-  ...(!archived ? { latest: latest ?? null } : {}),
+  ...(!archived ? { latest: (typeof latest === "function" ? latest() : latest) ?? null } : {}),
 });
 
 /** Archives it, or restores it; what refuses it, a toast says. */
@@ -39,7 +45,10 @@ export async function archiving(call: Call, o: Archiving): Promise<void> {
     await call("chat.archive", archiveInput(o));
   } catch (e) {
     const newer = (e as { code?: string }).code === "conflict";
-    toast(newer ? <Newer open={o.open} /> : message(e), newer ? "warning" : "destructive");
+    toast(
+      newer ? <Newer open={o.open} notes={o.notes} /> : message(e),
+      newer ? "warning" : "destructive",
+    );
   }
 }
 
@@ -62,12 +71,16 @@ export function drawnLatest(ctx: ViewContext<ReactNode>, thread: string, lane: b
   return newestOf(said(thread), lane ? said(notesOf(thread)) : []);
 }
 
-/** Archiving refused: something newer arrived, and where to see it. */
-function Newer({ open }: { open?: string }): ReactNode {
+/** Archiving refused: something newer arrived, and where to see it (the notes, or the chat). */
+function Newer({ open, notes }: { open?: string; notes?: () => void }): ReactNode {
   return (
     <span className="chat-newer">
       {say("archiveNewer")}
-      {open ? <Button size="sm" variant="outline" href={open}>{say("openChat")}</Button> : null}
+      {notes
+        ? <Button size="sm" variant="outline" onClick={notes}>{say("openNotes")}</Button>
+        : open
+        ? <Button size="sm" variant="outline" href={open}>{say("openChat")}</Button>
+        : null}
     </span>
   );
 }

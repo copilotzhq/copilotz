@@ -14,7 +14,7 @@ import { sqliteStore } from "../../../stores/sql/sqlite/mod.ts";
 import { postgresStore } from "../../../stores/sql/postgres/mod.ts";
 import { tempFile, test } from "../../../testing/mod.ts";
 import type { Message } from "../chat/mod.ts";
-import { archiveKit, bob, carla, type Kit } from "./archive-kit.ts";
+import { ana, archiveKit, bob, carla, type Kit } from "./archive-kit.ts";
 
 const stores: Record<string, () => Store | Promise<Store>> = {
   memory: memoryStore,
@@ -73,9 +73,10 @@ export async function land(
     return message;
   };
   if (where === "chat") return await say(k.carlas, carla);
-  if (where === "notes") return await say(c.notes, bob);
-  if (where === "subthread") return await say(c.first, bob);
-  if (where === "deeper") return await say(c.second, bob);
+  // Someone else than Bob, who archives: his own messages count as seen.
+  if (where === "notes") return await say(c.notes, ana);
+  if (where === "subthread") return await say(c.first, ana);
+  if (where === "deeper") return await say(c.second, ana);
   // Lead opens a subthread to Bob, from the notes, and waits on him: no answer follows.
   await k.send({ thread: c.notes, text: "aside bob" }, bob);
   const opening = (await k.messages(c.notes)).filter((m) => m.subthread && m.to.includes("bob"))
@@ -126,7 +127,7 @@ for (const [store, make] of Object.entries(stores)) {
         _id: id,
         thread,
         in: k.shop,
-        from: "bob",
+        from: "ana",
         to: [],
         text: id,
         hops: 0,
@@ -164,5 +165,18 @@ test("what doesn't count: an agent's private step, another chat, a fork of it", 
     // What Lead said after its step counts; nothing else does.
     assertEquals(await archive(k, seen), "conflict");
     assertEquals(await archive(k, last), "done");
+  });
+});
+
+test("what the archiver said themselves counts as seen, wherever it is", async () => {
+  await archiveKit(async (k) => {
+    const c = await conversation(k);
+    const seen = (await newest(k, [k.carlas, c.notes, c.first, c.second]))._id;
+    for (const thread of [c.notes, c.first, c.second]) {
+      await k.send({ thread, text: "Resolved, closing.", to: [] }, bob);
+    }
+    assertEquals(await archive(k, seen), "done");
+    await restore(k);
+    assertEquals(await archive(k, null), "conflict");
   });
 });

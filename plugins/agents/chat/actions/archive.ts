@@ -15,9 +15,10 @@
  *
  * With `latest`, the newest message the person was shown, archiving is
  * refused (`conflict`) when anything in the conversation is newer: the chat,
- * its notes, its subthreads at every level. Nothing new is put away unseen.
+ * its notes, its subthreads at every level, but what they said themselves.
+ * Nothing new is put away unseen.
  */
-import { defineAction, failure, inPerson } from "../../../../runtime/mod.ts";
+import { defineAction, failure, inPerson, personOf } from "../../../../runtime/mod.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 import { now } from "../shared/agents.ts";
@@ -74,12 +75,14 @@ export const archiveAction = defineAction({
         });
       }
       if (input.archived && !found.archived && input.latest !== undefined) {
-        // Anything said there after what they were shown (a message as old counts as shown).
+        // Anything said there after what they were shown (a message as old counts as shown), by
+        // someone else: what they said themselves, they've seen.
         const messages = tx.db.collection<Message>("message");
         const shown = input.latest ? await messages.findOne({ _id: input.latest }) : null;
         const [newer] = await messages.find({
           thread: { $in: all },
           private: { $ne: true },
+          from: { $ne: personOf(ctx.actor) },
           ...(shown ? { at: { $gt: shown.at } } : {}),
         }, { limit: 1, projection: { _id: 1 } });
         if (newer) {

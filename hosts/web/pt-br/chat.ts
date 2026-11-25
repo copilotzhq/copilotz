@@ -188,6 +188,7 @@ export const chat: Words = {
   "chat.notInSpaceBody":
     "As conversas daqui são para os membros. Escolha um dos seus espaços para começar uma, ou peça a alguém daqui para convidar você.",
   "chat.openChat": "Abrir conversa",
+  "chat.openNotes": "Abrir notas da equipe",
   "chat.restore": "Restaurar",
   "chat.restoreThisChat": "Restaurar esta conversa",
   "chat.welcomeStep": "{at} de {count}",

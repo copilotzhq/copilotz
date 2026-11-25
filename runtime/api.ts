@@ -158,7 +158,7 @@ const enc = encodeURIComponent;
 /** What the runtime gives the API: the owner's own ways in for outsiders (see owner.ts). */
 export type ApiEnv = {
   registry: Registry;
-  owner(): Owner;
+  owner(): Owner<string, string>;
   clock: Clock;
   /** Throws why an outsider may not make an op on a collection directly (`admitted`). */
   admitted(actor: Actor, op: ReadOp | WriteOp): Promise<void>;

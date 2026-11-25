@@ -9,6 +9,7 @@
   },
   "exports": {
     ".": "./runtime/mod.ts",
+    "./gen": "./cli/mod.ts",
     "./stores/memory": "./stores/memory/mod.ts",
     "./stores/sqlite": "./stores/sql/sqlite/mod.ts",
     "./stores/postgres": "./stores/sql/postgres/mod.ts",

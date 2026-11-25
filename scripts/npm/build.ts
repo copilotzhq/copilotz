@@ -306,6 +306,7 @@ async function buildCore(out: string) {
     type: "module",
     engines: root.engines,
     sideEffects: false,
+    bin: { copilotz: js(deno.exports["./gen"]) },
     types: types(deno.exports["."]),
     exports: {
       ...Object.fromEntries(

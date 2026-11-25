@@ -278,7 +278,7 @@ export function checkHttp(registry: Registry): void {
  */
 export function createFetch(deps: {
   registry: Registry;
-  runtime: () => Owner;
+  runtime: () => Owner<string, string>;
   tickets: Tickets;
   hypervisor: Hypervisor;
   api: Api;

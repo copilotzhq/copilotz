@@ -3,6 +3,7 @@
  * them. An executor runs it over its job's calls to the owner; the owner, for
  * Views it observes, over its own reads.
  */
+import type { AppName } from "./names.ts";
 import { collection, type Query, type Run } from "./collection.ts";
 import type { AllowContext, Context, QueryDef, ReadContext } from "./define.ts";
 import type { Metrics } from "./metrics.ts";
@@ -121,7 +122,7 @@ async (name, queryName, params) => {
     throw forbidden(`${actor.kind} ${actor.id} may not run "${name}.${queryName}".`);
   }
   return await (typeof def === "function" ? def : def.run)(
-    ctx.db.collection(name),
+    ctx.db.collection(name as AppName<"collections">),
     json(params),
     ctx,
   );

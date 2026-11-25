@@ -1,0 +1,9 @@
+import { definePlugin } from "copilotz";
+import viewOrders from "../../../../plugins/orders/views/terminal/orders.ts";
+
+export default definePlugin({
+  name: "orders-terminal",
+  views: {
+    "orders": viewOrders,
+  },
+});

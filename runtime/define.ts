@@ -2,6 +2,7 @@
  * What a plugin declares. Everything here is plain data; the runtime gives it
  * meaning only as primitives. It never knows what a plugin is for.
  */
+import type { AppName, LocalQuery, ViewName } from "./names.ts";
 import type { FromSchema, JSONSchema } from "json-schema-to-ts";
 import { emptyInput } from "./action-input.ts";
 import type { Pipeline } from "./aggregate.ts";
@@ -52,7 +53,12 @@ export type Graph = {
  * Another plugin's Action joins it through `call`, when it's `atomic`.
  */
 export type TransactionScope = {
-  db: { collection<T = Record<string, unknown>>(name: string): Collection<T> };
+  db: {
+    collection<
+      T = Record<string, unknown>,
+      C extends AppName<"collections"> = AppName<"collections">,
+    >(name: C): Collection<T, C>;
+  };
   graph: Omit<Graph, "edges">;
   emit(type: string, data?: Record<string, unknown>, options?: { id?: string }): void;
   /** Sets a timer with the transaction's writes, and returns its id (see `Context.schedule`). */
@@ -71,19 +77,24 @@ export type TransactionScope = {
    * it again, and one after a commit answers from the record. Calls run one
    * at a time, in the order they're made.
    */
-  call<R = unknown>(action: string, input?: unknown): Promise<R>;
+  call<R = unknown>(action: AppName<"actions">, input?: unknown): Promise<R>;
 };
 
 export type Context = {
   /** MongoDB-style collections. Each write commits on its own. */
-  db: { collection<T = Record<string, unknown>>(name: string): Collection<T> };
+  db: {
+    collection<
+      T = Record<string, unknown>,
+      C extends AppName<"collections"> = AppName<"collections">,
+    >(name: C): Collection<T, C>;
+  };
   graph: Graph;
   /** Commits an event. Inside `transaction`, events commit with the writes. */
   emit(type: string, data?: Record<string, unknown>, options?: { id?: string }): Promise<void>;
   transaction<R>(work: (tx: TransactionScope) => Promise<R>): Promise<R>;
   /** Live, non-durable frames for subscribers (for example tokens being generated). */
   stream(channel: string): { write(data: unknown): void };
-  call<R = unknown>(action: string, input?: unknown): Promise<R>;
+  call<R = unknown>(action: AppName<"actions">, input?: unknown): Promise<R>;
   /**
    * This context, with the calls and timers it starts numbered apart, under
    * `key`. For work run concurrently (each of a step's tool calls): a retry
@@ -183,7 +194,12 @@ export type Context = {
 
 /** What a query (and, read-only, anything rendering) can reach: reads, never writes. */
 export type ReadContext = {
-  db: { collection<T = Record<string, unknown>>(name: string): ReadCollection<T> };
+  db: {
+    collection<
+      T = Record<string, unknown>,
+      C extends AppName<"collections"> = AppName<"collections">,
+    >(name: C): ReadCollection<T, C>;
+  };
   /** What the app's plugins declare (as `Context.describe`): its Actions' inputs, its Views. */
   describe(): Description;
   graph: Pick<Graph, "edges">;
@@ -215,7 +231,7 @@ export type ReadContext = {
    * but anything it writes fails. How a query or View uses what another
    * plugin does (an embedding) without importing its code.
    */
-  call<R = unknown>(action: string, input?: unknown): Promise<R>;
+  call<R = unknown>(action: AppName<"actions">, input?: unknown): Promise<R>;
 };
 
 /**
@@ -242,7 +258,7 @@ export type Merged = {
   /** Every plugin's Actions, by name: whether one a declaration names is there. */
   actions: Readonly<Record<string, ActionDef>>;
   /** Calls an unrecorded Action, as a read does (another plugin's check: `models.check`). */
-  call<R = unknown>(action: string, input?: unknown): Promise<R>;
+  call<R = unknown>(action: AppName<"actions">, input?: unknown): Promise<R>;
 };
 
 /**
@@ -284,13 +300,13 @@ export type Read<T> =
   | { status: "ready"; value: T };
 
 /** A collection's reads inside a View: the same reads, answered as `Read`s. */
-export type ViewCollection<T> = {
+export type ViewCollection<T, C extends string = AppName<"collections">> = {
   find(filter?: Filter, options?: FindOptions): Read<WithId<T>[]>;
   findOne(filter?: Filter, options?: FindOptions): Read<WithId<T> | null>;
   countDocuments(filter?: Filter): Read<number>;
   aggregate<R = Record<string, unknown>>(pipeline: Pipeline): Read<R[]>;
   nearest(vector: number[], options?: NearestOptions): Read<(WithId<T> & { _score: number })[]>;
-  query<R = unknown>(name: string, params?: unknown): Read<R>;
+  query<R = unknown>(name: LocalQuery<C>, params?: unknown): Read<R>;
   /**
    * From a handler (a click, a form's submit), a write of the viewer's own,
    * as REST and the socket write: under the rules (a rule must speak for the
@@ -310,7 +326,12 @@ export type ViewCollection<T> = {
 
 /** What a View gets. `Shown` is what showing another View returns (text, an element). */
 export type ViewContext<Shown = unknown> = {
-  db: { collection<T = Record<string, unknown>>(name: string): ViewCollection<T> };
+  db: {
+    collection<
+      T = Record<string, unknown>,
+      C extends AppName<"collections"> = AppName<"collections">,
+    >(name: C): ViewCollection<T, C>;
+  };
   resources: Resources;
   /** What the app's plugins declare (as `Context.describe`); a View the runtime runs has it. */
   describe?(): Description;
@@ -328,19 +349,19 @@ export type ViewContext<Shown = unknown> = {
    * undefined when there is none. Observed, the shown View is a part of its own: it runs
    * again on its own when what it read changes (see `Owner.observe`).
    */
-  show(name: string, item: unknown, hints?: Record<string, unknown>): Shown;
+  show(name: ViewName, item: unknown, hints?: Record<string, unknown>): Shown;
   /**
    * Calls an Action, from a handler in what the View returns (a key, a
    * click). A View being observed can; one rendered once has no handlers.
    */
-  call<R = unknown>(action: string, input?: unknown): Promise<R>;
+  call<R = unknown>(action: AppName<"actions">, input?: unknown): Promise<R>;
   /** Commits an event, from a handler, as `call` does: for Processors to react to. */
   emit(type: string, data?: Record<string, unknown>): Promise<void>;
 };
 
 /** A collection's reads, with its named queries. */
-export type ReadCollection<T> = Pick<
-  Collection<T>,
+export type ReadCollection<T, C extends string = AppName<"collections">> = Pick<
+  Collection<T, C>,
   "find" | "findOne" | "countDocuments" | "aggregate" | "nearest" | "query"
 >;
 
@@ -656,9 +677,9 @@ export type Route =
 export type WhoContext = {
   resources: Resources;
   /** Runs a named query as the system, kept a few seconds per query and params. */
-  query<R = unknown>(name: string, params?: unknown): Promise<R>;
+  query<R = unknown>(name: AppName<"queries">, params?: unknown): Promise<R>;
   /** Calls an Action as the system: what a credential's use changes (a key's last use). */
-  call<R = unknown>(action: string, input?: unknown): Promise<R>;
+  call<R = unknown>(action: AppName<"actions">, input?: unknown): Promise<R>;
   /** The request's cookies, by their plain names (see `Cookies`). */
   cookies: Pick<Cookies, "get">;
 };

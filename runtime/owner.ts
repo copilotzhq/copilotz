@@ -4,6 +4,7 @@
  * Processors. Plugin code runs in executors, which reach the store only by
  * sending ops to the owner over Oxian.
  */
+import type { AppName } from "./names.ts";
 import { workerPresence } from "./presence.ts";
 import { plan } from "./aggregate.ts";
 import { type Metrics, noMetrics } from "./metrics.ts";
@@ -158,7 +159,10 @@ export type Bytes = {
   read(start: number, end: number): Promise<Uint8Array>;
 };
 
-export type Owner = {
+export type Owner<
+  Action extends string = AppName<"actions">,
+  Query extends string = AppName<"queries">,
+> = {
   /**
    * Runs an action. Pass your own `id` to make retries safe: a call whose id
    * already completed returns its recorded result without running again, and
@@ -170,7 +174,7 @@ export type Owner = {
    * against the scope. Without, it runs as the system.
    */
   call<R = unknown>(
-    action: string,
+    action: Action,
     input?: unknown,
     options?: { id?: string; actor?: Actor },
   ): Promise<R>;
@@ -178,7 +182,11 @@ export type Owner = {
    * Runs a collection's named query: `query("message.history", { thread })`.
    * With `actor`, the query must `allow` them (and be in their `scope`).
    */
-  query<R = unknown>(name: string, params?: unknown, options?: { actor?: Actor }): Promise<R>;
+  query<R = unknown>(
+    name: Query,
+    params?: unknown,
+    options?: { actor?: Actor },
+  ): Promise<R>;
   /**
    * A large value as bytes, for trusted host code that sends it on (a route
    * serving a file): the string at `field` (a dotted path) of the first
@@ -2337,7 +2345,7 @@ export async function createOwner(
   }
   await timers.recover();
 
-  const api: Owner = {
+  const api: Owner<string, string> = {
     maintenance: createMaintenance({
       store,
       epoch,

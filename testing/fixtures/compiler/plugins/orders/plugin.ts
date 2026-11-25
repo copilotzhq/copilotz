@@ -1,0 +1,1 @@
+export default { requires: ["manual"] };

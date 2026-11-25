@@ -1,3 +1,6 @@
+/** Registry names for this app. `copilotz gen` augments this interface in copilotz-env.d.ts. */
+export interface AppNames {}
+export type { AppName, LocalQuery, ViewName } from "./names.ts";
 export * from "./define.ts";
 export { createRuntime, type Runtime } from "./runtime.ts";
 export { type Runtimes, runtimes } from "./runtimes.ts";

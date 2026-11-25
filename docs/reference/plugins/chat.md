@@ -28,7 +28,7 @@ It keeps 10 collections, 7 of them on the record.
 | `live`     | in memory, gone on restart          | `thread`, `agent`, `turn`, `text`, `calls`, `retry`, `open`, `in`, `at`                                                                                                                                                                          |
 | `message`  | documents                           | `thread`, `from`, `to`, `text`, `toolCalls`, `private`, `replyTo`, `expectReply`, `subthread`, `hops`, `turn`, `failed`, `in`, `files`, `drew`, `held`, `stopped`, `tap`, `via`, `back`, `state`, `told`, `knew`, `at`; private: `state`, `told` |
 | `shown`    | records, appended and never changed | `thread`, `in`, `key`, `after`, `medium`, `fallback`, `note`, `at`                                                                                                                                                                               |
-| `thread`   | documents                           | `title`, `renamable`, `agents`, `parent`, `fork`, `in`, `about`, `held`, `messages`, `opened`, `latest`, `at`                                                                                                                                    |
+| `thread`   | documents                           | `title`, `renamable`, `agents`, `parent`, `fork`, `in`, `about`, `held`, `archived`, `messages`, `opened`, `latest`, `at`                                                                                                                        |
 | `wait`     | documents                           | `agent`, `thread`, `trigger`, `hops`, `waitingFor`, `received`, `step`, `at`                                                                                                                                                                     |
 | `welcome`  | documents                           | `at`                                                                                                                                                                                                                                             |
 
@@ -55,12 +55,13 @@ Its named queries read for callers, as the rules let them:
 
 ## What it lets callers do
 
-Of its 18 Actions, people may call 11; agents may call 4; contacts may call 2; someone signed out
+Of its 19 Actions, people may call 12; agents may call 4; contacts may call 2; someone signed out
 may call none.
 
 | Action             | Person | Agent | Contact | Anyone | Key | Routine | Maintenance | What it does                                                                           |
 | ------------------ | ------ | ----- | ------- | ------ | --- | ------- | ----------- | -------------------------------------------------------------------------------------- |
 | `chat.approve`     | yes    | no    | no      | no     | no  | no      | no          | Answers what an agent waits on you for.                                                |
+| `chat.archive`     | yes    | no    | no      | no     | no  | no      | no          | Archives a conversation, or brings it back.                                            |
 | `chat.attach`      | yes    | no    | yes     | no     | yes | yes     | no          | Uploads a file to send: a draft that a message of yours sends, by its id.              |
 | `chat.forgetGrant` | yes    | no    | no      | no     | no  | no      | no          | Takes back what you let an agent do without asking.                                    |
 | `chat.fork`        | yes    | yes   | no      | no     | yes | yes     | no          |                                                                                        |

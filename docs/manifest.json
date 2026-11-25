@@ -327,6 +327,11 @@
           "title": "The compiler: plugins from folders",
           "slug": "guides/the-compiler",
           "description": "Start an app with copilotz init. Generate plugin entry points, Action inputs and collection schemas from TypeScript. Get checked names, watch for changes, check the build or take over a plugin by hand."
+        },
+        {
+          "title": "Chats: their lists and archive",
+          "slug": "guides/chats",
+          "description": "The chats a person sees, listed with thread.recent; archiving one for everyone who sees it, and restoring it; what brings it back; and where archived chats are still found, by people and by agents."
         }
       ]
     },

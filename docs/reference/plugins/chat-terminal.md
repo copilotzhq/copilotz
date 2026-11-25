@@ -29,9 +29,9 @@ Its Views show in the terminal.
 
 - **In the terminal:** `agent.prompt`, `approvals`, `author`, `terminal.live`, `terminal.message`,
   `terminal.thread`, `threads`.
-- **What it adds to resources:** `commands` (`*`, `/approvals`, `/approve`, `/file`, `/fork`,
-  `/history`, `/move`, `/new`, `/notes`, `/open`, `/prompt`, `/retry`, `/stop`, `/threads`),
-  `notices` (`approvals`).
+- **What it adds to resources:** `commands` (`*`, `/approvals`, `/approve`, `/archive`, `/file`,
+  `/fork`, `/history`, `/move`, `/new`, `/notes`, `/open`, `/prompt`, `/restore`, `/retry`, `/stop`,
+  `/threads`), `notices` (`approvals`).
 
 ## What it needs
 

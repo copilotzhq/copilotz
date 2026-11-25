@@ -175,9 +175,10 @@ conversations live in your Personal space.
 - `/computer connect` in a space gives the command that connects a computer to it.
 - `/approve once|thread|always|no` answers what agents wait on.
 
-Inside the chat: `/new`, `/threads`, `/open <n>`, `/history`, `/memories`, `/usage [all]`,
-`/metrics [name]`, `/prompt [agent]`, `/fork`, `/retry`, `/events [n]`, `/stats`, `/sql <query>` (a
-SQL store) and `/quit`. With `OTEL_EXPORTER_OTLP_ENDPOINT` set, metrics also go to that collector.
+Inside the chat: `/new`, `/threads [archived]`, `/open <n>`, `/archive [n]`, `/restore [n]`,
+`/history`, `/memories`, `/usage [all]`, `/metrics [name]`, `/prompt [agent]`, `/fork`, `/retry`,
+`/events [n]`, `/stats`, `/sql <query>` (a SQL store) and `/quit`. With
+`OTEL_EXPORTER_OTLP_ENDPOINT` set, metrics also go to that collector.
 
 Every turn prints its time, its database round trips, the jobs sent to executors and the calls they
 made back to the owner.

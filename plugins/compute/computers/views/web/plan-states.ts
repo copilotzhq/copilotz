@@ -29,6 +29,7 @@ const OF: Record<EngineName, { provider: string; install: string }> = {
   claude: { provider: "claude-plan", install: INSTALL.claude },
   codex: { provider: "codex-plan", install: INSTALL.codex },
   antigravity: { provider: "gemini-plan", install: INSTALL.antigravity },
+  grok: { provider: "grok-plan", install: INSTALL.grok },
 };
 
 /** The plans, in their order, named in the app's words. */
@@ -56,6 +57,14 @@ export const plans = (): Plan[] => [
     plan: say("antigravityPlan"),
     cli: say("antigravityCli"),
     about: say("antigravityAbout"),
+  },
+  {
+    engine: "grok",
+    ...OF.grok,
+    title: say("grokTitle"),
+    plan: say("grokPlan"),
+    cli: say("grokCli"),
+    about: say("grokAbout"),
   },
 ];
 

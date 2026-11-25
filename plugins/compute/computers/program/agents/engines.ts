@@ -11,6 +11,9 @@
  * - `antigravity`: `agy acp`, a native ACP agent, its home its `HOME` (it
  *   has no other): its settings there deny every built-in tool. Its sign-in
  *   may be the system keyring's, shared with the person's own.
+ * - `grok`: Grok Build, through our adapter (grok.ts), its home its `HOME`
+ *   (with `GROK_HOME` in it: Grok reads the person's Claude Code and Cursor
+ *   settings from their home too). It signs in with a device code.
  *
  * A session works in a folder of its own under its engine's home, named by
  * its instructions (so a session loaded later is in the same one), and kept
@@ -18,8 +21,8 @@
  * which it has no prompt of its own to replace with.
  *
  * Signing in is the CLI's own, polled like the terminal (`login`), and so is
- * signing out (`logout`), run in its home: Claude Code's and Codex's
- * sign-ins are there, so their home goes when it fails. Antigravity has no
+ * signing out (`logout`), run in its home: Claude Code's, Codex's and
+ * Grok Build's sign-ins are there, so their home goes when it fails. Antigravity has no
  * sign-out of its own here: its sign-in may be the keyring's. The person's
  * own sign-in (`~/.claude`, `~/.codex`) is never touched. Given
  * its official installer (`install`) while the CLI is missing, it runs that
@@ -41,6 +44,7 @@ import { fail } from "../workloads/answer.ts";
 import { childEnv, homeEnv, OWN, signalGroup, WINDOWS } from "../workloads/processes.ts";
 import { claude } from "./claude.ts";
 import { codex } from "./codex.ts";
+import { grok } from "./grok.ts";
 import { agentError, spawnPeer } from "./rpc.ts";
 import type { Engine, Peer, Ran } from "./types.ts";
 import { writeWhole } from "./write.ts";
@@ -64,6 +68,8 @@ const CREDENTIALS = [
   "GEMINI_API_KEY",
   "GOOGLE_API_KEY",
   "GOOGLE_APPLICATION_CREDENTIALS",
+  "XAI_API_KEY",
+  "GROK_DEPLOYMENT_KEY",
   "CLAUDECODE",
 ];
 
@@ -146,6 +152,25 @@ export const ENGINES: Record<string, Engine> = {
         JSON.stringify(DENY_ALL, null, 2) + "\n",
       ),
     login: ["acp", "--login"],
+  },
+  grok: {
+    name: "grok",
+    binary: "grok",
+    places: (user) => [join(user, ".grok", "bin", "grok"), join(user, ".local", "bin", "grok")],
+    // Its own HOME too: Grok reads the person's Claude Code and Cursor settings from there.
+    homeEnv: (home) => ({ HOME: home, GROK_HOME: join(home, ".grok") }),
+    adapter: grok,
+    // A link and a code, on a cloud computer as on a laptop: nothing to paste back.
+    login: ["login", "--device-code"],
+    logout: ["logout"],
+    async signedIn(run) {
+      // "You are logged in with grok.com.", or "You are not authenticated." (its exit is 0 either way).
+      const { code, stdout, stderr } = await run(["models"]);
+      const said = `${stdout}\n${stderr}`;
+      return {
+        signedIn: code === 0 && /logged in with/i.test(said) && !/not authenticated/i.test(said),
+      };
+    },
   },
 };
 

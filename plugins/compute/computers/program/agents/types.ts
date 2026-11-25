@@ -95,7 +95,7 @@ export type Run = (args: string[], stdin?: string) => Promise<Ran>;
  * and how it signs in.
  */
 export type Engine = {
-  /** Its name in the contract: `claude`, `codex`, `antigravity`. */
+  /** Its name in the contract: `claude`, `codex`, `antigravity`, `grok`. */
   name: string;
   /** Its executable's name, looked for on the PATH. */
   binary: string;

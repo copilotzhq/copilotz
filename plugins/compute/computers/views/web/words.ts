@@ -24,6 +24,10 @@ export const say = defineWords("computers", {
   antigravityPlan: "Google AI plan",
   antigravityCli: "Antigravity",
   antigravityAbout: "Your agents run on your Google AI plan, through Antigravity on your computer.",
+  grokTitle: "Grok plan",
+  grokPlan: "Grok plan",
+  grokCli: "Grok Build",
+  grokAbout: "Your agents run on your Grok plan, through Grok Build on your computer.",
 
   // The section on Connected accounts
   plansTitle: "Plans on your computers",
@@ -161,7 +165,8 @@ export const say = defineWords("computers", {
     one: "Signed in on {count} computer",
     other: "Signed in on {count} computers",
   },
-  paletteKeywords: "plan, subscription, sign in, computer, Claude, ChatGPT, Codex, Gemini, Google",
+  paletteKeywords:
+    "plan, subscription, sign in, computer, Claude, ChatGPT, Codex, Gemini, Google, Grok",
 
   // A computer's Files tab: a folder at a time
   filesWhere: "Where in the folder",

@@ -319,7 +319,7 @@ export type SearchResult = { title: string; url: string; snippet: string };
 
 /**
  * An engine: a plan's CLI on this computer (`claude`, `codex`,
- * `antigravity`), which an agent's model calls can run on. Each has a home of
+ * `antigravity`, `grok`), which an agent's model calls can run on. Each has a home of
  * its own on the computer (its sign-in, its sessions), apart from the
  * person's own use of it.
  */

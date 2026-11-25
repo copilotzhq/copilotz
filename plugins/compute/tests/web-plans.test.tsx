@@ -173,9 +173,12 @@ test("a card per plan, each computer as it stands: signed in as whom, installed,
   assertStringIncludes(shown, "studio-linux is shared with others' agents in Acme");
   assertStringIncludes(shown, "How to use it");
   assertEquals(shown.split("studio-linux").length - 1, 1);
+  // Grok Build: not on any of them yet.
+  assertStringIncludes(shown, "Grok plan");
+  assertStringIncludes(shown, "Grok Build");
   // Signed in once, Claude says so; the others offer Sign in.
   assertEquals((markup.match(/copilotz-badge/g) ?? []).length >= 1, true);
-  assertEquals((shown.match(/Sign in(?! again| on| as)/g) ?? []).length, 2);
+  assertEquals((shown.match(/Sign in(?! again| on| as)/g) ?? []).length, 3);
   assertStringIncludes(shown, "Check again");
   assertStringIncludes(shown, "Connect a computer");
 });

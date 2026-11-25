@@ -10,4 +10,5 @@ export const INSTALL: Record<EngineName, string> = {
   claude: "curl -fsSL https://claude.ai/install.sh | bash",
   codex: "npm i -g @openai/codex",
   antigravity: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+  grok: "curl -fsSL https://x.ai/cli/install.sh | bash",
 };

@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import { test } from "../../../testing/mod.ts";
 import { parseDay } from "../toolkit/calendar.tsx";
+import { isDayTime } from "../toolkit/dates.ts";
 import { DateRangePicker } from "../toolkit/date-picker.tsx";
 import { blur, click, ENDS, fromEmpty, key, press, retyped, type } from "./date-range-steps.ts";
 import { page } from "./page.ts";
@@ -149,5 +150,126 @@ test("with a first day picked, To is empty until the second is: in every languag
       assert.ok(applyOff());
       await click('[data-day="2026-11-12"]');
       assert.notEqual(ends()[1], "");
+    }
+  }));
+
+// Review round 3.
+
+test("rc.64 apps at the edge of the change: empty, the field's own text, and wrong text", () =>
+  (async () => {
+    for (const lang of ["en-US", "ar-EG"]) {
+      await inPage(lang, async (draw, applied) => {
+        for (const format of [undefined, reverse, "dd/MM/yyyy"]) {
+          for (const field of [0, 1]) {
+            const at = (what: string) => `${lang} ${String(format)}, field ${field}: ${what}`;
+            // Empty while typing: not marked; left empty, its end's text again.
+            await draw({ format, value: START });
+            await click(".copilotz-date-field");
+            const shown = ends();
+            await type(ENDS, field, "");
+            assert.ok(!invalid(field) && !applyOff(), at("empty"));
+            await blur(ENDS, field);
+            assert.deepEqual(ends(), shown, at("left empty"));
+            assert.ok(!invalid(field), at("left empty"));
+            await press("Apply");
+            assert.deepEqual(applied.splice(0), [START], at("empty, applied"));
+            // The field's own text, typed again, is its end, though parseDay can't read it.
+            await draw({ format, value: START });
+            await click(".copilotz-date-field");
+            await type(ENDS, field, shown[field]);
+            assert.ok(!invalid(field) && !applyOff(), at("own text"));
+            await blur(ENDS, field);
+            assert.deepEqual(ends(), shown, at("own text, left"));
+            await press("Apply");
+            assert.deepEqual(applied.splice(0), [START], at("own text, applied"));
+            // Wrong text: marked, kept, and Apply off.
+            await draw({ format, value: START });
+            await click(".copilotz-date-field");
+            const wrong = shown[field].replace(/\p{Nd}+/u, "99");
+            await type(ENDS, field, wrong);
+            await blur(ENDS, field);
+            assert.equal(ends()[field], wrong, at("wrong"));
+            assert.ok(invalid(field) && applyOff(), at("wrong"));
+            await press("Apply");
+            assert.deepEqual(applied.splice(0), [], at("wrong, applied"));
+          }
+        }
+      });
+    }
+  })());
+
+test("min and max to the minute hold in time mode too: typed, picked, each preset", () =>
+  inPage("en-GB", async (draw, applied) => {
+    const bounds = [
+      { min: "2026-11-02 08:30", max: "2026-11-16 12:00" },
+      { max: "2026-11-16 12:00" },
+      { min: "2026-11-02 08:30" },
+    ];
+    const fits = (end: string, b: { min?: string; max?: string }) =>
+      (!b.min || end >= b.min) && (!b.max || end.slice(0, 16) <= b.max);
+    const value = { start: "2026-11-05 07:00", end: "2026-11-10 23:00" };
+    for (const b of bounds) {
+      const at = JSON.stringify(b);
+      // Picked on a bound's day: its time is held to the bound, in the foot and applied.
+      await draw({ ...b, value, time: true, format: "dd/MM/yyyy", presets: false });
+      await click(".copilotz-date-field");
+      await click(`[data-day="${b.min ? "2026-11-02" : "2026-11-03"}"]`);
+      await click(`[data-day="${b.max ? "2026-11-16" : "2026-11-15"}"]`);
+      const foot = footText();
+      await press("Apply");
+      const [range] = applied.splice(0);
+      assert.ok(fits(range.start, b) && fits(range.end, b), `${at}: ${range.start} – ${range.end}`);
+      const said = (end: string) =>
+        `${end.slice(8, 10)}/${end.slice(5, 7)}/${end.slice(0, 4)} ${end.slice(11, 16)}`;
+      assert.equal(foot, `${said(range.start)} – ${said(range.end)}`, `${at}: the foot`);
+      // Each preset.
+      await draw({ ...b, value, time: true, presets: true });
+      const count = document.querySelectorAll(".copilotz-date-preset").length - 1;
+      for (let i = 0; i < count; i++) {
+        await draw({ ...b, value, time: true, presets: true });
+        await click(".copilotz-date-preset", i);
+        const [preset] = applied.splice(0);
+        assert.ok(isDayTime(preset.start) && isDayTime(preset.end), `${at}, preset ${i}`);
+        assert.ok(
+          fits(preset.start, b) && fits(preset.end, b),
+          `${at}, preset ${i}: ${preset.start} – ${preset.end}`,
+        );
+      }
+      // Typed: a bound's day reads, and a day past it doesn't.
+      await draw({ ...b, value, time: true, format: "dd/MM/yyyy", presets: false });
+      await click(".copilotz-date-field");
+      if (b.max) {
+        await type(ENDS, 1, "16/11/2026");
+        assert.ok(!invalid(1), `${at}: max's day`);
+        await type(ENDS, 1, "17/11/2026");
+        assert.ok(invalid(1), `${at}: after max`);
+      }
+      if (b.min) {
+        await type(ENDS, 0, "02/11/2026");
+        assert.ok(!invalid(0), `${at}: min's day`);
+      }
+    }
+  }));
+
+test("the months never pass December 9999: Next is off there, and nothing breaks", () =>
+  inPage("en-GB", async (draw) => {
+    const month = () =>
+      [...document.querySelectorAll(".copilotz-calendar-title")].map((h) => h.textContent).join(
+        " | ",
+      );
+    for (const props of [{}, { seconds: true }, { time: true }]) {
+      for (const today of ["9999-12-15", "9999-10-01"]) {
+        await draw({ ...props, today, value: { start: today, end: today } });
+        await click(".copilotz-date-field");
+        for (let i = 0; i < 4; i++) {
+          const next = document.querySelectorAll<HTMLButtonElement>(".copilotz-calendar-nav")[1];
+          if (next.disabled) break;
+          await click(".copilotz-calendar-nav", 1);
+        }
+        const nav = document.querySelectorAll<HTMLButtonElement>(".copilotz-calendar-nav");
+        assert.ok(nav[1].disabled, `${JSON.stringify(props)} ${today}: Next`);
+        assert.match(month(), /December 9999/, `${JSON.stringify(props)} ${today}`);
+        assert.doesNotMatch(month(), /10000|\+0/, `${JSON.stringify(props)} ${today}`);
+      }
     }
   }));

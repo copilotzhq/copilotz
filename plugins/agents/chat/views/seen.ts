@@ -1,15 +1,12 @@
 /**
- * What a page, a row or a terminal's list showed last of a chat, for
- * `chat.archive`'s `latest`: of the threads it showed (the chat, its notes or
- * a subthread open), the latest message of the one that moved last; null
- * when none had a message. Every front end says it the same way.
+ * What a front end was shown last of a conversation, for `chat.archive`'s
+ * `latest`: the newest message in what it drew (an agent's private steps
+ * aside), or null when it drew none. Every front end passes it the same way.
  */
-import type { Thread } from "../collections/thread.ts";
+import type { Message } from "../collections/message.ts";
 
-export function seenOf(
-  ...shown: (Pick<Thread, "latest" | "at"> | null | undefined)[]
-): string | null {
-  const said = shown.filter((t): t is Pick<Thread, "latest" | "at"> => !!t?.latest);
-  said.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
-  return said[0]?.latest ?? null;
+export function newestOf(...drawn: Pick<Message, "_id" | "at" | "private">[][]): string | null {
+  let newest: Pick<Message, "_id" | "at"> | undefined;
+  for (const m of drawn.flat()) if (!m.private && (!newest || m.at > newest.at)) newest = m;
+  return newest?._id ?? null;
 }

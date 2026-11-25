@@ -52,10 +52,11 @@ export const say = defineWords("chat", {
   moveToSpace: "Move to another space…",
   archive: "Archive",
   restore: "Restore",
+  archiveNewer: "Something new arrived in this conversation: see it, then archive it.",
+  openChat: "Open chat",
   // An archived chat's page
   archivedTitle: "This chat is archived",
   notesArchivedTitle: "Archived, with the chat they're about",
-  subthreadArchivedTitle: "Archived, with the chat it's part of",
   archivedNote:
     "It's listed apart, under Archived in its space's chats. A new message brings it back.",
   // Messages

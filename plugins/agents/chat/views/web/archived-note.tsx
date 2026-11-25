@@ -1,8 +1,7 @@
 /**
  * An archived chat, said calmly at the top of its page, or of its staff
- * notes' or a subthread's (archived with it): it's listed apart, and a new
- * message brings it back; Restore is at hand, and a refusal is said in its
- * place.
+ * notes' (archived with it): it's listed apart, and a new message brings it
+ * back; Restore is at hand, and a refusal is said in its place.
  */
 import { type ReactNode, useState } from "react";
 import { Button, message, Notice } from "../../../../../hosts/web/mod.ts";
@@ -11,11 +10,11 @@ import { say } from "./words.ts";
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
 export function ArchivedNote(
-  { thread, part, call }: {
-    /** The chat, its notes or a subthread (restoring them restores it). */
+  { thread, notes, call }: {
+    /** The chat, or its notes (restoring them restores it). */
     thread: string;
-    /** It's the page of the chat's staff notes, or of a subthread of it. */
-    part?: "notes" | "subthread";
+    /** It's the chat's staff notes' page. */
+    notes?: boolean;
     call: Call;
   },
 ): ReactNode {
@@ -26,13 +25,7 @@ export function ArchivedNote(
       tone="neutral"
       icon="archive"
       className="chat-archived"
-      title={say(
-        part === "notes"
-          ? "notesArchivedTitle"
-          : part === "subthread"
-          ? "subthreadArchivedTitle"
-          : "archivedTitle",
-      )}
+      title={say(notes ? "notesArchivedTitle" : "archivedTitle")}
       action={
         <Button
           size="sm"

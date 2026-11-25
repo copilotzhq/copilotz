@@ -1,10 +1,9 @@
 /**
  * Archiving at the terminal: `/archive` puts the open conversation away (or
  * one listed, by number, or named by id), `/threads` leaves it out and
- * `/threads archived` lists it (with its staff notes), `/open` still finds
- * it, or its notes, by number or id, and `/restore` brings it back. What a
- * list showed is what archiving one of it checks: something said since, and
- * it stays.
+ * `/threads archived` lists it, `/open` still finds it by number or id, and
+ * `/restore` brings it back. What a list showed is what archiving one of it
+ * checks: something said since, and it stays.
  */
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { Writable } from "node:stream";
@@ -143,34 +142,6 @@ const runtimeOf = () =>
     ],
   });
 
-// Review L3: an archived chat's notes were in no list, so /open <notes-id> found nothing.
-test("an archived chat's notes are listed with it, and open by their id", async () => {
-  const runtime = await runtimeOf();
-  try {
-    const { space: shop } = await runtime.call<{ space: string }>("space.create", {
-      name: "Shop",
-    }, { actor: ana });
-    await runtime.call("contact.start", { id: "c-carla-01", in: shop, via: "web", name: "Carla" });
-    const { thread: carlas } = await runtime.call<{ thread: string }>("contact.chat", {
-      contact: "c-carla-01",
-      in: shop,
-    });
-    const { thread: notes } = await runtime.call<{ thread: string }>("chat.notes", {
-      thread: carlas,
-    }, { actor: ana });
-    await runtime.call("chat.send", { thread: notes, text: "a regular", to: [] }, { actor: ana });
-    await runtime.call("chat.archive", { thread: carlas, archived: true }, { actor: ana });
-    assertEquals((await listed(runtime, true)).map((t) => t._id).sort(), [carlas, notes].sort());
-    await session(runtime, [`/open ${notes}`]);
-    const { open } = await runtime.query<{ open?: { item: { _id: string } } }>("shell.mine", {
-      person: ana.id,
-    }, { actor: ana });
-    assertEquals(open?.item._id, notes);
-  } finally {
-    await runtime.close();
-  }
-});
-
 // Review L4: /archive said nothing of what it showed, so what came after a list went away unseen.
 test("/archive <n> checks what /threads showed of it: a message since, and it stays", async () => {
   const runtime = await runtimeOf();
@@ -187,7 +158,7 @@ test("/archive <n> checks what /threads showed of it: a message since, and it st
       "/threads",
       "/archive 1",
     ]);
-    assertStringIncludes(shown, "Something new was said in it");
+    assertStringIncludes(shown, "Something new arrived in this conversation");
     assertEquals((await listed(runtime, true)).map((t) => t._id), [plan._id]);
   } finally {
     await runtime.close();

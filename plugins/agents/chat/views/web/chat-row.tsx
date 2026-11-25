@@ -7,7 +7,7 @@
  */
 import type { ReactNode } from "react";
 import { Icon, Menu, openPalette, Time } from "../../../../../hosts/web/mod.ts";
-import { archiveItem } from "./archive.ts";
+import { archiveItem } from "./archive.tsx";
 import { lastOf, type Listed, titleOf } from "./listed.ts";
 import { moveStep } from "./move.tsx";
 import { renameStep } from "./rename.tsx";
@@ -16,16 +16,7 @@ import { say } from "./words.ts";
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
 export function ChatRow(
-  { thread: t, latest, compact, call }: {
-    thread: Listed;
-    /**
-     * What archiving it says was shown last (see `seenOf`): for a notes row,
-     * the newest of it and its chat's row. Left out, the row's own.
-     */
-    latest?: string | null;
-    compact: boolean;
-    call: Call;
-  },
+  { thread: t, compact, call }: { thread: Listed; compact: boolean; call: Call },
 ): ReactNode {
   const title = titleOf(t);
   const last = lastOf(t);
@@ -71,10 +62,14 @@ export function ChatRow(
               icon: "move",
               onSelect: () => openPalette(moveStep({ thread: t._id, title, from: t.in, call })),
             },
+            // What the row shows: its own latest message.
             archiveItem({
               thread: t._id,
               archived: !!t.archived,
-              latest: latest === undefined ? t.latest ?? null : latest,
+              latest: t.latest,
+              open: `/thread/${encodeURIComponent(t.about ?? t._id)}${
+                t.in ? `?in=${encodeURIComponent(t.in)}` : ""
+              }`,
               call,
             }),
           ]}

@@ -39,6 +39,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.archivedNone` | No archived chats here. |
 | `chat.archivedNote` | It's listed apart, under Archived in its space's chats. A new message brings it back. |
 | `chat.archivedTitle` | This chat is archived |
+| `chat.archiveNewer` | Something new arrived in this conversation: see it, then archive it. |
 | `chat.archiveThisChat` | Archive this chat |
 | `chat.areWorking` | one: {names} is working… / other: {names} are working… |
 | `chat.askBack` | Post {agent}'s answer here? |
@@ -173,6 +174,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.notYourSpaceTitle` | Not your space |
 | `chat.ofMinutes` | one: , of {count} minute at most / other: , of {count} minutes at most |
 | `chat.open` | Open {name} |
+| `chat.openChat` | Open chat |
 | `chat.openConversation` | Open conversation |
 | `chat.openSpace` | Open {space} |
 | `chat.otherSpaces` | one: {count} other space / other: {count} other spaces |
@@ -227,7 +229,6 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.stopped` | Stopped |
 | `chat.stopping` | Stopping… |
 | `chat.stopToSendNow` | Stop to send now |
-| `chat.subthreadArchivedTitle` | Archived, with the chat it's part of |
 | `chat.suggestions` | Suggestions |
 | `chat.theirPersonalSpace` | {name}'s Personal space |
 | `chat.thinking` | thinking |

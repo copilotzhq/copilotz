@@ -376,6 +376,7 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
   .chats-archived-end .copilotz-icon { transition: none; }
 }
 .chat-archived { flex: none; margin: 10px 16px 0 24px; }
+.chat-newer { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .chats-empty { margin: 40px auto 24px; }
 .chats-compact { gap: 14px; }
 .chats-compact .chats-list { padding: 2px; }

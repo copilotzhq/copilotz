@@ -4,7 +4,7 @@
  *
  * - **This chat**, the one open: renaming it, moving it to another space
  *   (spaces' picker), with everything in it, and archiving it, or restoring
- *   it (for staff notes or a subthread, their chat).
+ *   it (for staff notes, their chat).
  * - **Chats** to go to: the latest few; while searching, the latest hundred,
  *   found by what they're called and what was said first and last, each
  *   saying its space; and the archived ones after them, said so (read only
@@ -15,8 +15,8 @@ import type { ReactNode } from "react";
 import type { ViewContext } from "../../../../../runtime/mod.ts";
 import { go, type PaletteGroup, type PaletteItem } from "../../../../../hosts/web/mod.ts";
 import type { Thread } from "../../collections/thread.ts";
-import { archiveInput, type Archiving, seenOf } from "./archive.ts";
-import { chatDocOf } from "./chat-of.ts";
+import { type Archiving, archiving, drawnLatest } from "./archive.tsx";
+import { notesOpen } from "./lane.ts";
 import { type Listed, threadTitle, titleOf } from "./listed.ts";
 import { moveStep } from "./move.tsx";
 import { renameStep } from "./rename.tsx";
@@ -33,15 +33,15 @@ const inSpace = (space?: string) => space ? `?in=${encodeURIComponent(space)}` :
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
 /**
- * Archiving the chat open, or restoring it (`chat.archive`): with what it
- * last said as shown, so nothing new since is put away unseen.
+ * Archiving the chat open, or restoring it (`chat.archive`): with the newest
+ * message its page draws, so nothing new since is put away unseen.
  */
-const archiveThis = (call: Call, archiving: Archiving): PaletteItem => ({
-  key: archiving.archived ? "chat:restore" : "chat:archive",
-  label: say(archiving.archived ? "restoreThisChat" : "archiveThisChat"),
-  icon: archiving.archived ? "restore" : "archive",
-  keywords: [say(archiving.archived ? "keywordRestore" : "keywordArchive")],
-  run: () => call("chat.archive", archiveInput(archiving)),
+const archiveThis = (call: Call, o: Archiving): PaletteItem => ({
+  key: o.archived ? "chat:restore" : "chat:archive",
+  label: say(o.archived ? "restoreThisChat" : "archiveThisChat"),
+  icon: o.archived ? "restore" : "archive",
+  keywords: [say(o.archived ? "keywordRestore" : "keywordArchive")],
+  run: () => archiving(call, o),
 });
 
 export const chatPaletteView = (_: unknown, ctx: ViewContext<ReactNode>): PaletteGroup[] | null => {
@@ -57,8 +57,10 @@ export const chatPaletteView = (_: unknown, ctx: ViewContext<ReactNode>): Palett
   // The spaces the person reaches, read directly (the rules keep it to those): to say where each is.
   const spaces = ctx.db.collection<Space>("space").find({}).value;
   const thread = open ? ctx.db.collection<Thread>("thread").findOne({ _id: open }).value : null;
-  // Staff notes and subthreads are archived with their chat: it says whether they are.
-  const chat = thread ? chatDocOf(ctx.db, thread) : thread;
+  // Staff notes are archived with their chat: it says whether they are.
+  const chat = thread?.about
+    ? ctx.db.collection<Thread>("thread").findOne({ _id: thread.about }).value
+    : thread;
   if (!threads || !spaces || !shelved) return null;
   const named = new Map(
     spaces.map((s) => [s._id, s.kind === "personal" ? say("personal") : s.name]),
@@ -92,7 +94,7 @@ export const chatPaletteView = (_: unknown, ctx: ViewContext<ReactNode>): Palett
         archiveThis(ctx.call, {
           thread: open,
           archived: !!chat?.archived,
-          latest: seenOf(thread, chat === thread ? undefined : chat),
+          latest: drawnLatest(ctx, open, notesOpen(ctx.viewer?.name ?? "")),
         }),
       ],
     });

@@ -31,6 +31,7 @@ export const chat: Words = {
   "chat.archivedNote":
     "Ela aparece separada, entre as arquivadas nas conversas do espaço. Uma nova mensagem a traz de volta.",
   "chat.archivedTitle": "Esta conversa está arquivada",
+  "chat.archiveNewer": "Chegou algo novo nesta conversa: veja antes de arquivar.",
   "chat.archiveThisChat": "Arquivar esta conversa",
   "chat.areWorking": { one: "{names} está trabalhando…", other: "{names} estão trabalhando…" },
   "chat.askBack": "Publicar aqui a resposta de {agent}?",
@@ -186,9 +187,9 @@ export const chat: Words = {
   "chat.notInSpace": "Você não está neste espaço",
   "chat.notInSpaceBody":
     "As conversas daqui são para os membros. Escolha um dos seus espaços para começar uma, ou peça a alguém daqui para convidar você.",
+  "chat.openChat": "Abrir conversa",
   "chat.restore": "Restaurar",
   "chat.restoreThisChat": "Restaurar esta conversa",
-  "chat.subthreadArchivedTitle": "Arquivada, com a conversa da qual faz parte",
   "chat.welcomeStep": "{at} de {count}",
   "chat.welcomeBack": "Voltar",
   "chat.welcomeNext": "Próximo",

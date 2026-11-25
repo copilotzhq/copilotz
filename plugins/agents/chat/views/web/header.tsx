@@ -20,7 +20,7 @@ import {
   openPalette,
   Title,
 } from "../../../../../hosts/web/mod.ts";
-import { archiveItem, type Archiving } from "./archive.ts";
+import { archiveItem, type Archiving } from "./archive.tsx";
 import { moveStep } from "./move.tsx";
 import { renameStep } from "./rename.tsx";
 import { say } from "./words.ts";

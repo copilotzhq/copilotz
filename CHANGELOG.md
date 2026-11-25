@@ -47,10 +47,6 @@ guides ship with the runtime.
 
 **Fixed:**
 
-- Processor deliveries keep their nested-call numbering across restarts. An outstanding rc.63
-  delivery reuses the receipt of a completed call after an earlier permission refusal.
-- Legacy Action retries check the recorded child name, input hash and position before running a
-  nested call. An ambiguous replay fails with the parent call ID and position.
 - Grant checks inside a held transaction see staged membership changes. Database-backed permission
   rules use the same transaction reader on memory, SQLite and PGlite.
 - The final record flush attempts each identity's appends in order and reports the first refusal.
@@ -103,14 +99,21 @@ guides ship with the runtime.
   longer leaves durable data committed behind an error (`ctx.transaction` and `transaction: true`).
 - **A `ctx.record` append is kept as the identity that made it,** a declared grant included; one the
   owner refuses at completion fails the Action on the record.
-- **New Actions count nested calls before checking permission.** If an earlier call is refused on
-  retry, a later completed call still answers from its receipt. Actions started on rc.63 keep their
-  original numbering.
 
 **Fixed in this release's own work:** an Action input embedding `Infer<typeof schema>` keeps its
 `$ref`s; `gen` resolves Deno import-map aliases; the `copilotz` command runs on Node 24.0 and 24.1;
 and the capture mail adapter refuses a public `links` origin unless a test sets
 `email.capture.allowPublicOrigin: true`.
+
+**Known issues:**
+
+- If permission for a nested call changes between attempts, a retried Action can run a later
+  completed nested call again, as in rc.63.
+- Two Processors that make the same first nested call with the same input for the same event share
+  its record. After a crash, one Processor can receive the result from the other's record, as in
+  rc.63.
+
+A coming release will fix both issues with nested-call IDs that name their caller.
 
 **Docs:**
 
@@ -120,9 +123,6 @@ and the capture mail adapter refuses a public `links` origin unless a test sets
 
 **Upgrading:**
 
-- An Action begun on rc.63 and retried on rc.64 after a permission change fails if its nested calls
-  no longer match their receipts. Review the completed work and run the Action again by hand with a
-  fresh call ID.
 - Existing plugins can keep their hand-written entry points and JSON Schemas. To generate a plugin,
   give each declaration a default export, move React components into `lib/web/`, and install
   TypeScript as a dev dependency. Keep `_id` out of document types and use a string tagged

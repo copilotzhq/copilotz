@@ -598,10 +598,10 @@ test("each plugin imports another only through its contract, and requires it", (
 **The record lasts as the store does.** Each commit appends its events to the `events` table, and
 the runtime never changes or deletes one. An event is `{ seq, id, type, data, cause, actor, at }`:
 `cause` is the event behind it, `actor` the whole actor (`for`, `in`, `via`), `at` its commit's
-time. `action.started` holds `{ action, input, inputHash, startedAt, attempt, callNumbering }`,
-`action.completed` the `result`, a collection's event `{ _id, doc }`. Read it with
-`store.events(afterSeq, limit)` in a test or script, `runtime.subscribe` live, or SQL (`sqlite3`,
-`psql`, [maintenance](docs/operations/maintenance.md)). Plugin code reads no log.
+time. `action.started` holds `{ action, input, inputHash, startedAt, attempt }`, `action.completed`
+the `result`, a collection's event `{ _id, doc }`. Read it with `store.events(afterSeq, limit)` in a
+test or script, `runtime.subscribe` live, or SQL (`sqlite3`, `psql`,
+[maintenance](docs/operations/maintenance.md)). Plugin code reads no log.
 
 **Kept out:** a collection's `private` fields (keys, tokens), an Action's `private` fields, an
 unrecorded Action's call (`record: false`; not its writes), and collections with `events: false` or

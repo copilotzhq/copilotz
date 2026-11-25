@@ -74,11 +74,9 @@ what kinds there are.
 On PostgreSQL the table is in the store's schema (`copilotz` unless `schema` says), with a `tenant`
 column, and `seq` counts each tenant's events.
 
-An `action.started` event holds `{ action, input, inputHash, startedAt, attempt, callNumbering }`.
-New starts use `callNumbering: 2`. Starts from rc.63 omit it and keep their original nested call
-positions on retry. An `action.completed` event holds the `result` and `ms`, or `action.failed` the
-`error`. A collection's write records `{ _id, doc }`, and for an update the fields `changed` and
-`removed`.
+What a call records: `action.started` holds `{ action, input, inputHash, startedAt, attempt }`, then
+`action.completed` its `result` and `ms`, or `action.failed` its `error`. A collection's write
+records `{ _id, doc }`, and for an update the fields `changed` and `removed`.
 
 What stays out is what the app declares out:
 

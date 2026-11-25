@@ -762,14 +762,14 @@ The rest of `copilotz`:
 The log records what happened, with no bookkeeping tables beside it. Every event has its `type`,
 `data`, `cause`, commit time (`at`) and actor, with `for` and `in`.
 
-| Event                                          | When                                               | Its data                                                                |
-| ---------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------- |
-| `<collection>.created`, `.updated`, `.deleted` | a write changes a document, in its commit          | `_id`, `doc`; an update also `changed`, `removed`                       |
-| `action.started`                               | a recorded call starts                             | `action`, `input`, `inputHash`, `startedAt`, `attempt`, `callNumbering` |
-| `action.completed`, `action.failed`            | it ends                                            | `action`, `result` or `error`, `ms`, `attempt`                          |
-| `action.retried`                               | a call runs again                                  | `attempt`, `after`: `failed` or `lost`                                  |
-| `processor.retried`, `processor.failed`        | a delivery failed; the last one is the dead letter | `attempt` or `attempts`, `error`; `actor` on the last                   |
-| a declared event                               | code emits it                                      | what its schema says                                                    |
+| Event                                          | When                                               | Its data                                               |
+| ---------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------ |
+| `<collection>.created`, `.updated`, `.deleted` | a write changes a document, in its commit          | `_id`, `doc`; an update also `changed`, `removed`      |
+| `action.started`                               | a recorded call starts                             | `action`, `input`, `inputHash`, `startedAt`, `attempt` |
+| `action.completed`, `action.failed`            | it ends                                            | `action`, `result` or `error`, `ms`, `attempt`         |
+| `action.retried`                               | a call runs again                                  | `attempt`, `after`: `failed` or `lost`                 |
+| `processor.retried`, `processor.failed`        | a delivery failed; the last one is the dead letter | `attempt` or `attempts`, `error`; `actor` on the last  |
+| a declared event                               | code emits it                                      | what its schema says                                   |
 
 - **Collection writes:** the document after the write, the last version for a delete, without
   private fields. A write that changes nothing records nothing. `sys.` collections never record.
@@ -778,9 +778,9 @@ The log records what happened, with no bookkeeping tables beside it. Every event
 - **Retries:** `runtime.call(action, input, { id })` is retryable. An id that completed answers its
   recorded result without running. One still running is joined. Otherwise the call runs again. An id
   reused for another action or input is refused (`id_conflict`). A call whose executor died fails
-  with `executor_lost`. A nested call's id comes from its cause, its place, and its input, so a
-  retried delivery finds the calls it already made. New Actions count each nested call before
-  checking its permission. An Action started on rc.63 keeps its original numbering.
+  with `executor_lost`. A nested call's id comes from its cause, its place, and its input. A
+  synchronous permission refusal takes no place. An asynchronous check reserves the recorded call's
+  place before it waits.
 - **Timers:** an occurrence is the call `<timer>@<due time>`, and a failed one runs again as that
   same call.
 - **Causes:** every event names its cause, so the log is a tree you walk from any event back to the

@@ -13,7 +13,7 @@ import {
   compile,
   described,
   events,
-  fingerprint,
+  fingerprintOf,
   invalid,
   json,
   merge,
@@ -22,7 +22,7 @@ import {
   unprivate,
 } from "./registry.ts";
 import { presenter } from "./views.ts";
-import { callId, deliveryCaller, sameCall } from "./call-ids.ts";
+import { callId, callText, deliveryCaller, sameCall } from "./call-ids.ts";
 import { refuseBlobKeys } from "./blobs.ts";
 import {
   querying as queryingOver,
@@ -91,7 +91,13 @@ type Sent = { op: Op; who: Who };
 type Attempt = { id: string; attempt: number; after?: "failed" | "lost"; scheduled?: Scheduled };
 
 /** An atomic Action asked for in a transaction, checked: its declaration and its input. */
-type Asked = { name: string; def: ActionDef; input: unknown };
+type Asked = {
+  name: string;
+  def: ActionDef;
+  input: unknown;
+  /** Its canonical `[name, input]` (`callText`): what its hash and its count are of. */
+  text: string;
+};
 
 /** A transaction a job holds open on the owner (see `holding`). */
 type Held = {
@@ -288,7 +294,10 @@ export function createExecutor(
 
   /**
    * Checks a call's `allow` as its caller's actor: at once when the rule answers at once, else
-   * a promise. The call's number is taken before, so a refusal of either kind keeps it.
+   * a promise. A synchronous refusal throws before the call takes its number among identical
+   * calls, as in rc.63, so a fallback making the same call (through a grant) takes the number
+   * a retry finds. An asynchronous rule's call takes its number before waiting, so numbering
+   * never hangs on timing; refused, it keeps it.
    */
   const admit = (
     { name, def, input }: Asked,
@@ -358,10 +367,6 @@ export function createExecutor(
         try {
           held.ensure();
           asked = atomicOf(action, input);
-          // Its number is taken before its permission check: refused, it keeps it.
-          if (asked.def.record !== false && numbering) {
-            n = job.next(sameCall(numbering, asked.name, asked.input));
-          }
           // Permission reads see the effects of earlier calls on this scope.
           const before = turn;
           admission = admit(
@@ -374,6 +379,10 @@ export function createExecutor(
                 as,
               ),
           );
+          // Numbered once admitted, or before waiting on an asynchronous rule (see `admit`).
+          if (asked.def.record !== false && numbering) {
+            n = job.next(sameCall(numbering, asked.text));
+          }
         } catch (error) {
           return Promise.reject(error);
         }
@@ -402,7 +411,7 @@ export function createExecutor(
     const normalized = json(actionInput(def, input));
     inputs[name]?.(normalized);
     refuseBlobKeys(normalized);
-    return { name, def, input: normalized };
+    return { name, def, input: normalized, text: callText(name, normalized) };
   };
 
   /**
@@ -416,7 +425,7 @@ export function createExecutor(
   const atomic = async <R>(
     job: Reach,
     held: Held,
-    { name, def, input }: Asked,
+    { name, def, input, text }: Asked,
     who: Who,
     numbering: string | undefined,
     n: number,
@@ -444,7 +453,7 @@ export function createExecutor(
         return result;
       });
     }
-    const inputHash = await fingerprint(name, input);
+    const inputHash = await fingerprintOf(text);
     const id = own?.given?.id ??
       (numbering ? callId(numbering, name, n, inputHash) : crypto.randomUUID());
     let attempt = own?.given?.attempt ?? 1;
@@ -778,13 +787,7 @@ export function createExecutor(
     // Code acting for someone calls what lets them, as they would from outside (an agent, for
     // whom it works for too); what has no `allow` is internal, code's to call. Going on where
     // they couldn't is a grant of the system's (`ctx.as`), on record as one.
-    const asked = { name, def: action, input: normalized };
-    // Its number among the caller's identical calls, taken as it's made: before any wait (so
-    // calls made at once number in the order made) and before its permission check (so a
-    // refused one keeps it).
-    const n = !given && numbering && action.record !== false
-      ? job.next(sameCall(numbering, name, normalized))
-      : 0;
+    const asked: Asked = { name, def: action, input: normalized, text: callText(name, normalized) };
     const who: Who = { cause: parent, actor };
     const held = action.transaction ? holding(job, who) : undefined;
     const admission = admit(
@@ -800,6 +803,12 @@ export function createExecutor(
           as,
         ),
     );
+    // Its number among the caller's identical calls: taken once a synchronous rule lets it
+    // through, or before waiting on an asynchronous one, so calls made at once number in the
+    // order made. A synchronous refusal takes none (see `admit`).
+    const n = !given && numbering && action.record !== false
+      ? job.next(sameCall(numbering, asked.text))
+      : 0;
     if (held) {
       try {
         if (admission) await admission;
@@ -830,7 +839,7 @@ export function createExecutor(
     // identical calls and its input (see call-ids.ts): a retry finds it again wherever it's
     // made, and changed code makes a new call. It hashes the whole input, private fields
     // too, though the log never holds them.
-    const inputHash = await fingerprint(name, normalized);
+    const inputHash = await fingerprintOf(asked.text);
     const hidden = action.private ?? [];
     let { id, attempt, after } = given ?? {
       id: numbering ? callId(numbering, name, n, inputHash) : crypto.randomUUID(),

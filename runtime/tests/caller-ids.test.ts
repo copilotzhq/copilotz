@@ -7,12 +7,17 @@
  * so two Processors handling one event never share a record or a timer.
  */
 import { assert, assertEquals } from "@std/assert";
+import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  type ActionDef,
   type Actor,
   type Context,
   createRuntime,
   defineAction,
   type Event,
+  grant,
   people,
   type Store,
 } from "../mod.ts";
@@ -20,6 +25,8 @@ import { memoryStore } from "../../stores/memory/mod.ts";
 import { sqliteStore } from "../../stores/sql/sqlite/mod.ts";
 import { postgresStore } from "../../stores/sql/postgres/mod.ts";
 import { tempDir, tempFile, test } from "../../testing/mod.ts";
+import { callText } from "../call-ids.ts";
+import { fingerprint, fingerprintOf } from "../registry.ts";
 
 const ana: Actor = { kind: "person", id: "ana", in: "shop" };
 
@@ -57,6 +64,20 @@ const stores: Record<
     },
   },
 };
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
+
+/** The reference's example under "Nested calls and retries", as written, importing this repository. */
+async function referenceExample(): Promise<ActionDef> {
+  const page = readFileSync(join(ROOT, "docs/reference.md"), "utf8");
+  const section = page.slice(page.indexOf("#### Nested calls and retries"));
+  const runtime = pathToFileURL(join(ROOT, "runtime/mod.ts")).href;
+  const code = /```ts\n([\s\S]*?)```/.exec(section)![1]
+    .replace(`from "copilotz"`, `from ${JSON.stringify(runtime)}`);
+  const file = join(tempDir(), "checkout.ts");
+  writeFileSync(file, code);
+  return (await import(pathToFileURL(file).href)).default;
+}
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -390,7 +411,7 @@ for (const [kind, make] of Object.entries(stores)) {
     }
   });
 
-  test(`${kind}: a refused call keeps its number`, async () => {
+  test(`${kind}: a synchronous refusal takes no number; an asynchronous one keeps its own`, async () => {
     const store = await make.fresh();
     // What each permission check answers, in turn.
     const answers: boolean[] = [];
@@ -420,22 +441,72 @@ for (const [kind, make] of Object.entries(stores)) {
       }],
     });
     try {
-      for (const call of ["bonus", "later"]) {
+      // Refused at once, the first takes no number: the second is #1. Refused after a wait, the
+      // first keeps the #1 it took before waiting: the second is #2. Either way the retry, both
+      // allowed, runs one more and answers the other: two runs, as the code made two calls.
+      for (
+        const [call, result, numbers] of [
+          ["bonus", [1, 2], ["#1", "#2"]],
+          ["later", [2, 1], ["#2", "#1"]],
+        ] as const
+      ) {
         runs = 0;
         fail = true;
-        // The first is refused; the second runs, as the second call.
         answers.push(false, true);
         await runtime.call("reward", { call }, { id: call, actor: ana }).catch(() => {});
         fail = false;
         answers.push(true, true);
-        // The first runs now; the second answers from its record.
-        assertEquals(await runtime.call("reward", { call }, { id: call, actor: ana }), [2, 1]);
+        assertEquals(await runtime.call("reward", { call }, { id: call, actor: ana }), result);
         assertEquals(runs, 2);
         const ids = await startedOf(store, call);
-        assertEquals(ids.map((id) => id.slice(0, id.lastIndexOf("."))), [
-          `${call}.${call}#2`,
-          `${call}.${call}#1`,
-        ]);
+        assertEquals(
+          ids.map((id) => id.slice(0, id.lastIndexOf("."))),
+          numbers.map((n) => `${call}.${call}${n}`),
+        );
+      }
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test(`${kind}: a refused call made again through a grant sells once, whichever way the permission goes`, async () => {
+    const store = await make.fresh();
+    let allowed = false;
+    let fail = true;
+    const runtime = await createRuntime({
+      store,
+      plugins: [{
+        name: "shop",
+        collections: sales,
+        actions: {
+          sell: defineAction({
+            input: order,
+            allow: () => allowed,
+            run: (ctx, input) => ctx.db.collection("sale").insertOne(input),
+          }),
+          checkout: defineAction({
+            input: order,
+            allow: people,
+            run: async (ctx, input: { order: string }) => {
+              await ctx.call("sell", { order: input.order }).catch(() =>
+                ctx.as(grant("shop.fallback")).call("sell", { order: input.order })
+              );
+              if (fail) throw new Error("boom");
+            },
+          }),
+        },
+      }],
+    });
+    try {
+      for (const first of [false, true]) {
+        const id = first ? "allowed-first" : "refused-first";
+        allowed = first;
+        fail = true;
+        await runtime.call("checkout", { order: id }, { id, actor: ana }).catch(() => {});
+        allowed = !first;
+        fail = false;
+        await runtime.call("checkout", { order: id }, { id, actor: ana });
+        assertEquals(await sold(store, id), 1, id);
       }
     } finally {
       await runtime.close();
@@ -479,4 +550,50 @@ for (const [kind, make] of Object.entries(stores)) {
       await runtime.close();
     }
   });
+
+  test(`${kind}: the reference's example finds its calls on a retry, its discount refused first`, async () => {
+    const checkout = await referenceExample();
+    const store = await make.fresh();
+    let allowed = false;
+    const runs = { reserve: 0, invoice: 0 };
+    const runtime = await createRuntime({
+      store,
+      plugins: [{
+        name: "orders",
+        actions: {
+          "order.checkout": checkout,
+          "discount.apply": defineAction({ input: placed, allow: () => allowed, run: () => 10 }),
+          "inventory.reserve": defineAction({
+            input: placed,
+            allow: people,
+            run: () => ++runs.reserve,
+          }),
+          "invoice.create": defineAction({
+            input: placed,
+            allow: people,
+            run: () => {
+              if (++runs.invoice === 1) throw new Error("try again");
+              return "inv-1";
+            },
+          }),
+        },
+      }],
+    });
+    try {
+      const call = () => runtime.call("order.checkout", { order: "o1" }, { id: "k1", actor: ana });
+      await call().catch(() => {});
+      allowed = true;
+      assertEquals(await call(), "inv-1");
+      // Reserved once, answered on the retry; the invoice that failed runs again.
+      assertEquals(runs, { reserve: 1, invoice: 2 });
+    } finally {
+      await runtime.close();
+    }
+  });
 }
+
+test("a call's input hash is rc.64's, worked out once for its id and its count", async () => {
+  assertEquals(await fingerprint("sell", {}), "a67be582be756679");
+  assertEquals(await fingerprintOf(callText("sell", {})), "a67be582be756679");
+  assertEquals(await fingerprint("sell", undefined), await fingerprintOf(callText("sell", null)));
+});

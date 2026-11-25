@@ -1,6 +1,7 @@
 /**
  * Tiers as the web says them: what a typical message (or reply) comes to, in
- * cents people can compare ("2¢ a message"), and how far the plan's credits
+ * cents people can compare ("2¢ a message"), or nothing on the person's own
+ * plans ("on your plans · model $0"), and how far the plan's credits
  * go at that ("about 220 messages with Free's $5"); how hard a model is asked
  * to think; who chose the tier in force ("the org's default"); and who runs
  * a model ("OpenAI").
@@ -61,6 +62,14 @@ export function perReply(usd: number | null | undefined): string | undefined {
   if (cents < 100) return `${Math.round(cents)}¢`;
   return `$${formatNumber(usd, CENTS)}`;
 }
+
+/**
+ * A tier's price for the person looking, with their plans: "on your plans ·
+ * model $0" when they answer every kind, else what it comes to for them
+ * ("2¢"); none when nothing prices it.
+ */
+export const tierPriceSaid = (tier: Pick<TierShown, "price" | "yours">): string | undefined =>
+  tier.yours === 0 ? say("onPlans") : perReply(tier.yours ?? tier.price);
 
 const EFFORTS = {
   none: "effortNone",

@@ -1,11 +1,13 @@
 /**
  * The tier beside the send button (kind `tiers.composer`, chat's
  * `composerControls`, hints `{ thread?, in? }`): what what's sent runs on,
- * with what a typical message comes to. In a conversation, choosing one sets
- * that conversation's tier (`tiers.choose { thread }`), for everyone in it;
- * on home, the person's own default for new chats (`{ mine }`). Each tier
- * says its price; one over the org's cap is out of reach for those who don't
- * run it, and says who sets it. Back to the default where one was chosen.
+ * with what a typical message comes to for the person, their own plans
+ * costing nothing ("Everyday · on your plans · model $0"). In a
+ * conversation, choosing one sets that conversation's tier
+ * (`tiers.choose { thread }`), for everyone in it; on home, the person's own
+ * default for new chats (`{ mine }`). Each tier says its price; one over the
+ * org's cap is out of reach for those who don't run it, and says who sets
+ * it. Back to the default where one was chosen.
  */
 import { type ReactNode, useState } from "react";
 import type { ViewContext } from "copilotz";
@@ -14,7 +16,7 @@ import { runs, useStanding } from "copilotz/plugins/interfaces/contract";
 import type { Shown } from "../../contract.ts";
 import { STYLE } from "./style.ts";
 import { say } from "./say.ts";
-import { bySaid, perReply, shownSaid } from "./words.ts";
+import { bySaid, shownSaid, tierPriceSaid } from "./words.ts";
 
 type Call = <R = unknown>(action: string, input?: unknown) => Promise<R>;
 
@@ -68,7 +70,7 @@ function TierPick(
   };
   const items: (MenuItem | "separator")[] = [
     ...shown.tiers.map((t, i): MenuItem => {
-      const price = perReply(t.price);
+      const price = tierPriceSaid(t);
       const over = !free && capIndex >= 0 && i > capIndex;
       return {
         label: `${t.title}${price ? ` · ${price}` : ""}`,
@@ -87,7 +89,7 @@ function TierPick(
       ]
       : []),
   ];
-  const price = perReply(tier?.price);
+  const price = tier && tierPriceSaid(tier);
   return (
     <span className="tiers-pick" aria-busy={busy || undefined}>
       <Menu

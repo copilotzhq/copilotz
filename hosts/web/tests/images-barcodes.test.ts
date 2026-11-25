@@ -229,3 +229,10 @@ test("an omitted barcode width uses the room from x to the receipt edge", () => 
     documentPdf([[{ ...small, width: 219 }]], { size: "receipt" }),
   );
 });
+
+test("a receipt refuses off-page barcode origins before sizing", () => {
+  for (const x of [-25, 227, 228]) {
+    const label = { barcode: "POS 12", x, y: 0, height: 20, quiet: true };
+    assertThrows(() => documentPdf([[label]], { size: "receipt" }), RangeError, "Barcode x");
+  }
+});

@@ -522,20 +522,26 @@ export type Drawn =
     stroke?: string;
     thickness?: number;
   }
-  | { image: PdfImage; x: number; y: number; width: number; height: number }
-  | (BarcodeOptions & {
+  | {
     /** A barcode of this text, as `Barcode` draws it, at most `width` wide. */
     barcode: string;
     x: number;
     y: number;
     width: number;
     height: number;
+    set?: "auto" | "B";
+    quiet?: boolean;
     color?: string;
-  });
+  };
 
 /** documentPdf can size a barcode from its position and the page's width. */
-type BarcodeInput = Omit<Extract<Drawn, { barcode: string }>, "width"> & { width?: number };
-type DocumentItem = Drawn | BarcodeInput;
+type BarcodeInput = Omit<Extract<Drawn, { barcode: string }>, "width"> & BarcodeOptions & {
+  width?: number;
+};
+type DocumentItem =
+  | Drawn
+  | BarcodeInput
+  | { image: PdfImage; x: number; y: number; width: number; height: number };
 
 /** A page's size in points: a name, `[width, height]`, or a width and `"fit"` (as tall as what's on it). */
 export type PageSize =
@@ -635,6 +641,9 @@ function draw(
         } cm /${name} Do Q`,
       );
     } else {
+      if (!(item.x >= 0 && item.x < width)) {
+        throw new RangeError(`Barcode x must be on the page (0 <= x < ${width}).`);
+      }
       const drawn = bars(item.barcode, item.width ?? width - item.x, item);
       // Whole modules, as the screen's: a module is the most whole points that fit.
       ops.push(`${rgb(item.color ?? "#000")} rg`);

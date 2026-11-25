@@ -369,9 +369,11 @@ function readPattern(
       );
       months.set(token, names);
       // Numeric month names can use the locale's digits too. Look up the captured name below.
-      const alternatives = names.map((name) =>
-        escaped(name).replace(/\d/g, (digit) => `[${digit}${localeDigits(locale)[+digit]}]`)
-      );
+      const alternatives = names.map((name) => {
+        const localized = escaped(name).replace(/\d/g, (d) => `[${d}${localeDigits(locale)[+d]}]`);
+        // A numeric name needs boundaries: 112 could mean January 12 or November 2.
+        return /^\d+$/.test(name) ? `(?<!\\p{Nd})${localized}(?!\\p{Nd})` : localized;
+      });
       source += `(${alternatives.join("|")})\\.?`;
       order.push(token);
     } else if (token === "MM" || token === "M") digits("M");

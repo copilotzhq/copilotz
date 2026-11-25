@@ -8,6 +8,7 @@
 
 /** A form control, as `formValues` reads it: what `form.elements` holds. */
 type Element = {
+  id?: string;
   name?: string;
   type?: string;
   value?: string;
@@ -25,6 +26,53 @@ export function namedControls(form: { elements: ArrayLike<unknown> }): Element[]
   return (Array.from(form.elements) as Element[]).filter((c) =>
     !!c.name && !c.disabled && !SKIPPED.has((c.type ?? "").toLowerCase())
   );
+}
+
+const controlKey = (c: Element) =>
+  c.name
+    ? JSON.stringify([
+      c.name,
+      c.type,
+      c.id,
+      !c.id && (c.type === "radio" || c.type === "checkbox") ? c.value : null,
+    ])
+    : undefined;
+
+/** Match a remount only when its identity was unique in both versions of the form. */
+export function trackControls<T extends Element>(
+  initial: T[],
+  key: (c: T) => string | undefined = controlKey,
+) {
+  const unique = (controls: T[]) => {
+    const byKey = new Map<string, T | undefined>();
+    for (const c of controls) {
+      const k = key(c);
+      if (k !== undefined) byKey.set(k, byKey.has(k) ? undefined : c);
+    }
+    return byKey;
+  };
+  const names = new Map(initial.map((c) => [c, c.name]));
+  const before = unique(initial);
+  return (current: T[]) => {
+    const live = new Set(current);
+    const after = unique(current);
+    const replacements = new Map<T, T>();
+    for (const [k, c] of before) {
+      const match = after.get(k);
+      if (c && match && !names.has(match)) replacements.set(c, match);
+    }
+    return (c: T) => live.has(c) && names.get(c) === c.name ? c : replacements.get(c);
+  };
+}
+
+/** Remember eligibility at submit, then read only controls still represented in the live form. */
+export function captureNamedControls(form: HTMLFormElement): () => Element[] {
+  const participating = namedControls(form);
+  const track = trackControls(Array.from(form.elements) as Element[]);
+  return () => {
+    const resolve = track(Array.from(form.elements) as Element[]);
+    return participating.map(resolve).filter((c) => c !== undefined);
+  };
 }
 
 /**

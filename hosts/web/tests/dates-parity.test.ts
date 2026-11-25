@@ -1,7 +1,7 @@
 // Expected date-only readings from hosts/web/toolkit/dates.ts at 2383779c (rc.63).
 import { assertEquals } from "@std/assert";
 import { test } from "../../../testing/mod.ts";
-import { parsePattern } from "../toolkit/dates.ts";
+import { formatPattern, parsePattern } from "../toolkit/dates.ts";
 
 for (const locale of ["en-US", "pt-BR", "fr-FR", "ja-JP", "ar-EG"]) {
   test("rc.63 date patterns and literal separators in " + locale, () => {
@@ -39,4 +39,13 @@ test("localized short months retain rc.63 readings and support Japanese numeric 
   ) {
     assertEquals(parsePattern(input, "d MMM yyyy", locale), "2026-11-12", locale);
   }
+});
+
+test("a Japanese numeric month name needs a separator from adjacent digits", () => {
+  const pattern = "yyyyMMMd";
+  const compact = formatPattern("2026-11-02", pattern, "ja-JP");
+  assertEquals(compact, "2026112");
+  assertEquals(parsePattern(compact, pattern, "ja-JP"), undefined);
+  assertEquals(parsePattern("202692", pattern, "ja-JP"), undefined);
+  assertEquals(parsePattern("2026/11/2", "yyyy/MMM/d", "ja-JP"), "2026-11-02");
 });

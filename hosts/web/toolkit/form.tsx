@@ -153,17 +153,15 @@ export function Form(
     const handlers = [...parts.current].map((handler) => handler.current);
     const { signal } = controller;
     const finished = () => onSubmittingChange?.(false, form);
-    if (onSubmittingChange) {
-      handlers.unshift(() => {
-        signal.addEventListener("abort", finished, { once: true });
-        onSubmittingChange(true, form);
-      });
-    }
     const done = await submitAll(
       form,
       handlers,
       (values) => onSubmit?.(values, form, signal),
       signal,
+      () => {
+        signal.addEventListener("abort", finished, { once: true });
+        onSubmittingChange?.(true, form);
+      },
     );
     if (signal.aborted) return;
     attempt.current = null;
@@ -199,7 +197,9 @@ export function Form(
 
 /**
  * Joins the `Form` around it: `handler` runs on its submit (see the top of
- * this file). Says whether there is one (`inForm`), and whether it's saving.
+ * this file). It receives the attempt's working form and AbortSignal. Edit controls through
+ * that form to stage their values until the parts finish. Says whether there is a form
+ * (`inForm`), and whether it's saving.
  */
 export function useFormSubmit(
   handler: PartSubmit,

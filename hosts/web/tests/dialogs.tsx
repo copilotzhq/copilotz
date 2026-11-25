@@ -312,9 +312,11 @@ test("R7: a View's collection takes the change: an unset removes, an insert adds
         ? customers.insertOne(change.values)
         : customers.updateOne({ _id: change._id }, change.update);
     await page(async (render) => {
-      const draw = (record?: Customer & { _id: string }) =>
+      // Each step opens the dialog anew: a session that saved takes nothing more.
+      const draw = (step: number, record?: Customer & { _id: string }) =>
         render(
           <RecordDialog<Customer>
+            key={step}
             title="Item"
             record={record}
             errors={{ name: "Give the whole name." }}
@@ -324,7 +326,7 @@ test("R7: a View's collection takes the change: an unset removes, an insert adds
             {(form) => fields(form)}
           </RecordDialog>,
         );
-      await draw({ _id: insertedId, name: "Pen", price: 24 });
+      await draw(1, { _id: insertedId, name: "Pen", price: 24 });
       await typeInto(input("price"), "");
       await submit();
       await act(async () => void await saving);
@@ -334,14 +336,14 @@ test("R7: a View's collection takes the change: an unset removes, an insert adds
       });
       assert.equal(closed, 1);
 
-      await draw({ _id: insertedId, name: "Pen" });
+      await draw(2, { _id: insertedId, name: "Pen" });
       await typeInto(input("name"), "Pe");
       await submit();
       await act(async () => void await saving.catch(() => {}));
       assert.deepEqual(notes(), ["Give the whole name."]);
       assert.equal(closed, 1);
 
-      await draw(undefined);
+      await draw(3, undefined);
       await typeInto(input("name"), "Pencil");
       await typeInto(input("price"), "2.5");
       await submit();

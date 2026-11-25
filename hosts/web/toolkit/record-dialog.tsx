@@ -17,8 +17,11 @@
  *   With nothing changed, `onSave` isn't called and the dialog just closes.
  *
  * A `useFormSubmit` part (another plugin's View shown in the fields) takes part in the save: what
- * it hands up is set too. Values are read when the save starts, after the parts, so what's typed
- * while a part uploads is saved. While it saves, Save is busy and the dialog can't be dismissed.
+ * it hands up is set too, compared with the record as an edit is. The fields take edits while the
+ * parts run: what's typed while a part uploads is saved. The values are read, and checked by the
+ * browser again (`required`), when the save starts; from then until it answers the fields are
+ * read-only, and after a refusal they take edits again, the draft as it was. While it saves,
+ * Save is busy and the dialog can't be dismissed.
  * A save that's refused by its field (`detail.field`: a schema's refusal, an Action's `failure`
  * with a `detail`) shows under the `Field` whose `error` is `form.error(name)`, in the words
  * `errors` gives for it (a schema's are for developers), or its own; the focus goes to its
@@ -28,7 +31,11 @@
  * Each record is a session of its own (its `_id`, or a new one), and so is each time it opens: a
  * draft or a refusal never shows on another record. A save runs to its end in the session it
  * started in, with that session's record and handlers. If the dialog moved to another record,
- * closed, or went meanwhile, it calls no `onClose` and shows nothing: its outcome is a toast.
+ * closed, or went meanwhile, it calls no `onClose` and shows nothing: its outcome is a toast. A
+ * session ends once (Cancel, Escape, the backdrop, ×, a save done or nothing to save) and tells
+ * `onClose` once; until it closes, it takes no more edits or saves. Its actions use the props it
+ * was last drawn with on the screen, never those of a render React didn't commit. It answers only
+ * its own close and submit, not a dialog's shown inside it.
  *
  * In a dialog View, `ctx.show` goes in the View's body, not in the function.
  *
@@ -61,7 +68,15 @@
  * </RecordDialog>
  * ```
  */
-import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { Button } from "./button.tsx";
 import { Dialog } from "./dialog.tsx";
 import { Form, useFormState } from "./form.tsx";
@@ -81,6 +96,7 @@ import {
   withValue,
 } from "./record-draft.ts";
 import { refusedField } from "./refusal.ts";
+import { sheet } from "./sheet.tsx";
 import { useReturnFocus } from "./return-focus.ts";
 import { toast } from "./toast-state.ts";
 import { say } from "./words.ts";
@@ -130,7 +146,7 @@ export type RecordForm<T> = {
    */
   value<V = string>(name: string): {
     value: NoInfer<V> | undefined;
-    onChange(value: NoInfer<V> | undefined): void;
+    onChange(value: NoInfer<V> | null | undefined): void;
   };
   /** For a control of several values (`TagsInput`, `MultiPicker`): emptied, it's the empty list. */
   list<V = string>(name: string): { values: NoInfer<V>[]; onChange(values: NoInfer<V>[]): void };
@@ -234,7 +250,22 @@ export function RecordDialog<T extends Record<string, unknown> = Record<string, 
 /** A save's refusal: the field it's about, if any, and its words. */
 type Refused = { field?: string; words: ReactNode };
 
-/** One record, for as long as it's open. */
+/**
+ * Where a record's session is: `open` (its fields take edits, Save takes a save), `saving`
+ * (its save has its values: the fields are read-only until it answers), or `done` (it closed,
+ * or its save is done: it takes nothing more until a new session).
+ */
+type Phase = "open" | "saving" | "done";
+
+const SHEET = sheet(
+  "record-dialog",
+  `.copilotz-record-fields { display: contents; min-width: 0; margin: 0; padding: 0; border: 0; }`,
+);
+
+/**
+ * One record, for as long as it's open. Its actions use what it was drawn with when last
+ * committed, never a render React didn't show; it ends once, and tells `onClose` once.
+ */
 function Session<T extends Record<string, unknown>>(props: RecordDialogProps<T>): ReactNode {
   const { title, description, record, defaults, children, size, placement = "top" } = props;
   const own = useId();
@@ -244,20 +275,43 @@ function Session<T extends Record<string, unknown>>(props: RecordDialogProps<T>)
   const draft = useRef<Edits>(edits);
   const [refused, setRefused] = useState<Refused>();
   const [busy, setBusy] = useState(false);
-  const saving = useRef(false);
-  const latest = useRef(props);
-  latest.current = props;
-  /** Shown, and not dismissed: what a save's end may still act on. */
-  const here = useRef(false);
+  const [locked, setLocked] = useState(false);
+  /** The props as last committed: what the person sees. */
+  const committed = useRef(props);
   useLayoutEffect(() => {
-    here.current = true;
+    committed.current = props;
+  });
+  const phase = useRef<Phase>("open");
+  /** `onClose` was called: this session told its owner it's done. */
+  const told = useRef(false);
+  /** The form runs a submit: its parts, then its save. */
+  const running = useRef(false);
+  const mounted = useRef(false);
+  useLayoutEffect(() => {
+    mounted.current = true;
     return () => {
-      here.current = false;
+      mounted.current = false;
     };
   }, []);
+  const box = useRef<HTMLDivElement>(null);
+  const ownForm = () => (box.current?.firstElementChild as HTMLFormElement | null) ?? null;
+
+  /** Ends the session and tells the owner, once. */
+  const tell = () => {
+    if (told.current) return;
+    told.current = true;
+    phase.current = "done";
+    setLocked(true);
+    committed.current.onClose();
+  };
+  /** Still the one on the screen: mounted, not done, and its `<dialog>` still open. */
+  const shown = () =>
+    mounted.current && !told.current && ownForm()?.closest("dialog")?.open === true;
 
   const base = (record ?? defaults ?? {}) as Record<string, unknown>;
   const edit = (path: string, kind: DraftKind, raw: unknown) => {
+    // Read-only while a save has its values, and once the session is done.
+    if (phase.current !== "open") return;
     draft.current = { ...draft.current, [path]: { kind, raw } };
     setEdits(draft.current);
     // Editing a refused field takes its refusal away.
@@ -265,7 +319,7 @@ function Session<T extends Record<string, unknown>>(props: RecordDialogProps<T>)
   };
   const current = (path: string) =>
     Object.hasOwn(edits, path) ? savedOf(edits[path]) : valueAt(base, path);
-  const shown = (path: string, kind: DraftKind) =>
+  const display = (path: string, kind: DraftKind) =>
     Object.hasOwn(edits, path) && edits[path].kind === kind
       ? edits[path].raw
       : shownAs(kind, current(path));
@@ -278,7 +332,7 @@ function Session<T extends Record<string, unknown>>(props: RecordDialogProps<T>)
     saving: busy,
     text: (name) => ({
       name,
-      value: shown(name, "text") as string,
+      value: display(name, "text") as string,
       onChange: (change) =>
         edit(name, "text", typeof change === "string" ? change : change.target.value),
     }),
@@ -286,13 +340,13 @@ function Session<T extends Record<string, unknown>>(props: RecordDialogProps<T>)
       name,
       type: "number",
       step: "any",
-      value: shown(name, "number") as string,
+      value: display(name, "number") as string,
       onChange: (change) =>
         edit(name, "number", typeof change === "string" ? change : change.target.value),
     }),
     checked: (name) => ({
       name,
-      checked: shown(name, "checked") as boolean,
+      checked: display(name, "checked") as boolean,
       onChange: (change) =>
         edit(name, "checked", typeof change === "boolean" ? change : change.target.checked),
     }),
@@ -307,11 +361,11 @@ function Session<T extends Record<string, unknown>>(props: RecordDialogProps<T>)
       },
     }),
     value: <V,>(name: string) => ({
-      value: shown(name, "value") as V | undefined,
-      onChange: (value: V | undefined) => edit(name, "value", value),
+      value: display(name, "value") as V | undefined,
+      onChange: (value: V | null | undefined) => edit(name, "value", value),
     }),
     list: <V,>(name: string) => ({
-      values: shown(name, "list") as V[],
+      values: display(name, "list") as V[],
       onChange: (values: V[]) => edit(name, "list", values),
     }),
     get: current,
@@ -348,13 +402,21 @@ function Session<T extends Record<string, unknown>>(props: RecordDialogProps<T>)
     if (!now || now === document.body) document.getElementById(`${own}-save`)?.focus();
   }, [refused, busy]);
 
-  const save = async (handed: Record<string, unknown>, element: HTMLFormElement) => {
-    const now = latest.current;
+  // What `Form` calls once its parts are done. `Form` keeps the onSubmit it was last drawn with,
+  // committed or not, so this reads nothing of a render: only what's committed, and the draft.
+  const save = useCallback(async (handed: Record<string, unknown>, element: HTMLFormElement) => {
+    const now = committed.current;
+    const here = shown() && phase.current === "open";
+    // What changed while a part ran is checked again, as the save starts.
+    if (here && !element.checkValidity()) {
+      element.reportValidity();
+      return;
+    }
     let change: RecordChange<T>;
     if (now.record) {
       const changed = updateOf(now.record, draft.current, handed);
       if (!changed) {
-        if (here.current) now.onClose();
+        if (here) tell();
         return;
       }
       change = { kind: "update", _id: String(now.record._id), ...changed, record: now.record };
@@ -366,29 +428,49 @@ function Session<T extends Record<string, unknown>>(props: RecordDialogProps<T>)
       );
       change = { kind: "create", values: values as T };
     }
+    // The save has its values: the fields are read-only until it answers.
+    if (here) {
+      phase.current = "saving";
+      setLocked(true);
+    }
+    let failure: { error: unknown } | undefined;
     try {
       await now.onSave(change, element);
     } catch (error) {
-      const field = refusedField(error);
-      const words = refusalWords(field, error, latest.current.errors) ?? say("notSaved");
-      if (here.current) setRefused({ field, words });
-      else toast(words, "destructive");
+      failure = { error };
+    }
+    const after = committed.current;
+    // Closed by the browser meanwhile, its close event maybe still on its way: dismissed now.
+    if (mounted.current && !told.current && element.closest("dialog")?.open !== true) tell();
+    const still = mounted.current && !told.current;
+    if (failure) {
+      const field = refusedField(failure.error);
+      const words = refusalWords(field, failure.error, after.errors) ?? say("notSaved");
+      if (still) {
+        phase.current = "open";
+        setLocked(false);
+        setRefused({ field, words });
+      } else toast(words, "destructive");
       return;
     }
-    const after = latest.current;
     if (after.toast) toast(after.toast, "success");
-    if (here.current) after.onClose();
-  };
-  const dismissed = () => {
-    // Closed by the browser while it saves: the save goes on, out of view.
-    if (saving.current) here.current = false;
-    latest.current.onClose();
+    if (still) tell();
+  }, []);
+  const onBusy = useCallback((yes: boolean) => {
+    running.current = yes;
+    setBusy(yes);
+  }, []);
+  const cancel = () => {
+    if (phase.current === "open" && !running.current) tell();
   };
 
   return (
     <Dialog
       open
-      onClose={dismissed}
+      // Its own close only (Escape, the backdrop, ×, the browser): told once. While it saves,
+      // that's a dismissal: the save goes on, out of view.
+      onClose={tell}
+      isolated
       title={title}
       description={description}
       size={size}
@@ -396,26 +478,46 @@ function Session<T extends Record<string, unknown>>(props: RecordDialogProps<T>)
       busy={busy}
       footer={
         <>
-          <Button onClick={() => latest.current.onClose()} disabled={busy}>
+          <Button onClick={cancel} disabled={busy || locked}>
             {props.cancelLabel ?? say("cancel")}
           </Button>
-          <Button id={`${own}-save`} type="submit" form={formId} variant="primary" loading={busy}>
+          <Button
+            id={`${own}-save`}
+            type="submit"
+            form={formId}
+            variant="primary"
+            loading={busy}
+            disabled={locked}
+          >
             {props.saveLabel ?? say("save")}
           </Button>
         </>
       }
     >
-      {/* A new attempt takes the last refusal away, before the form's own handler runs. */}
-      <div onSubmitCapture={() => setRefused(undefined)}>
+      {SHEET}
+      <div
+        ref={box}
+        onSubmitCapture={(event) => {
+          // A form inside the fields (another record's dialog) submits on its own.
+          if (event.target !== ownForm()) return;
+          // Done, or its save running: a new submit doesn't start.
+          if (phase.current !== "open") {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
+          // A new attempt takes the last refusal away, before the form's own handler runs.
+          setRefused(undefined);
+        }}
+        // Its submit never reaches a form around this dialog.
+        onSubmit={(event) => event.stopPropagation()}
+      >
         <Form id={formId} onSubmit={save}>
-          <Busy
-            on={(yes) => {
-              saving.current = yes;
-              setBusy(yes);
-            }}
-          />
+          <Busy on={onBusy} />
           {atTop ? <Notice tone="destructive" role="alert">{top}</Notice> : null}
-          {fields}
+          <fieldset className="copilotz-record-fields" disabled={locked}>
+            {fields}
+          </fieldset>
         </Form>
       </div>
     </Dialog>
@@ -425,8 +527,6 @@ function Session<T extends Record<string, unknown>>(props: RecordDialogProps<T>)
 /** Says when the `Form` around it saves: from its submit until its save, or a part, ends. */
 function Busy({ on }: { on(busy: boolean): void }): null {
   const { submitting } = useFormState();
-  const latest = useRef(on);
-  latest.current = on;
-  useLayoutEffect(() => latest.current(submitting), [submitting]);
+  useLayoutEffect(() => on(submitting), [submitting, on]);
   return null;
 }

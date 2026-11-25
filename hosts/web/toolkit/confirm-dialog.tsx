@@ -14,9 +14,11 @@
  *
  * - **`useConfirm()`**, from a handler: `const [dialog, confirm] = useConfirm()`, `{dialog}`
  *   drawn once in the same component, then `await confirm({ … })`: `true` once confirmed (and
- *   `onConfirm` done), `false` when cancelled. Questions show one at a time, in order. They
- *   belong to the component: when it goes (or stops drawing `{dialog}`), one still waiting is
- *   answered `false` and never shows again.
+ *   `onConfirm` done), `false` when cancelled. Questions show one at a time, in order; while
+ *   one's `onConfirm` runs, the next shows over it (one asked from that `onConfirm`, say), and
+ *   the focus goes back, in the end, where the first began. They belong to the component: when
+ *   it goes (or stops drawing `{dialog}`), one still waiting is answered `false` and never shows
+ *   again.
  * - **`ConfirmDialog`**, a component: a dialog View at an address, or one the screen's state
  *   opens. It's open while `open` (`true` by default), and `onClose` says it's done: cancelled,
  *   or confirmed and done. One element is one question: when what it asks about changes while
@@ -24,7 +26,9 @@
  *
  * An operation that ends after its question is gone (the component went, the dialog closed, or
  * a new `key` replaced it) closes nothing: its outcome is a toast, `toast` when it's done, its
- * words (`destructive`) when it failed.
+ * words (`destructive`) when it failed. A question ends once (cancelled, or done) and then takes
+ * no more actions; its actions use what it was last drawn with on the screen, never a render
+ * React didn't commit. It answers only its own close, not a dialog's shown inside it.
  *
  * ```tsx
  * const [dialog, confirm] = useConfirm();
@@ -60,7 +64,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { Button } from "./button.tsx";
-import { type Questions, questions } from "./confirm-state.ts";
+import { type Questions, questions, visibleOf } from "./confirm-state.ts";
 import { Dialog } from "./dialog.tsx";
 import { wordsOf } from "./form-submit.ts";
 import { Notice } from "./notice.tsx";
@@ -154,7 +158,10 @@ export function useConfirm(): [
   return [dialog, confirm];
 }
 
-/** Where `useConfirm`'s questions show: the first one waiting, if this host is the first drawn. */
+/**
+ * Where `useConfirm`'s questions show, if this host is the first drawn: those whose operation
+ * runs, and over them the first one waiting.
+ */
 function ConfirmHost({ asked }: { asked: Questions<ConfirmOptions> }): ReactNode {
   const [token] = useState(() => ({}));
   useLayoutEffect(() => asked.host(token), [asked, token]);
@@ -164,37 +171,45 @@ function ConfirmHost({ asked }: { asked: Questions<ConfirmOptions> }): ReactNode
     () => asked.shower() === token,
     () => false,
   );
-  const first = shows ? queue[0] : undefined;
+  const shown = shows ? visibleOf(queue) : [];
+  const first = shown[0];
   useEffect(() => {
     if (!first) return;
-    // The last question answered: the focus goes back to what had it as it was asked.
+    // The last question answered: the focus goes back to what had it as the first was asked.
     return () => {
       if (!asked.queue().length) giveBack(first.opener);
     };
   }, [first, asked]);
-  if (!first) return null;
-  return (
+  return shown.map((q) => (
     <Question
-      key={first.id}
-      question={first.options}
-      onCancel={() => asked.settle(first.id, false)}
-      onRunning={(yes) => asked.running(first.id, yes)}
+      key={q.id}
+      question={q.options}
+      onCancel={() => asked.settle(q.id, false)}
+      onRunning={(yes) => asked.running(q.id, yes)}
       onOutcome={(done, here) => {
         // A failure shown in the dialog waits for a try again, or a cancel.
-        if (done || !here) asked.settle(first.id, done);
+        if (done || !here) asked.settle(q.id, done);
       }}
-      onDismissed={() => asked.drop(first.id)}
+      onDismissed={() => asked.drop(q.id)}
     />
-  );
+  ));
 }
 
-/** One question, for as long as it's shown: what it asks, and what its operation is doing. */
+/** Where a question is in its life: asking, running what confirming does, or ended. */
+type Phase = "open" | "busy" | "done";
+
+/**
+ * One question, for as long as it's shown: what it asks, and what its operation is doing. It
+ * ends once: cancelled, dismissed while its operation runs, or done while it's still on the
+ * screen; then it takes no more actions. Its actions use what it was drawn with when last
+ * committed, never a render React didn't show.
+ */
 function Question(
   props: {
     question: ConfirmOptions;
     /** Cancelled while nothing runs: Cancel, Escape, the backdrop, ×. */
     onCancel(): void;
-    /** Its operation ended, done or not, and whether its question was still shown. */
+    /** Its operation ended, done or not, and whether its question was still on the screen. */
     onOutcome(done: boolean, here: boolean): void;
     /** The browser closed it while its operation runs: it goes on, out of view. */
     onDismissed(): void;
@@ -203,59 +218,80 @@ function Question(
 ): ReactNode {
   const { question } = props;
   const id = useId();
-  const [state, setState] = useState<{ busy: boolean; error?: ReactNode }>({ busy: false });
-  const latest = useRef(props);
-  latest.current = props;
-  const running = useRef(false);
-  /** Shown, and not dismissed: what its operation's end may still act on. */
-  const here = useRef(false);
+  const [state, setState] = useState<{ busy: boolean; error?: ReactNode; ended?: true }>({
+    busy: false,
+  });
+  /** The props as last committed: what the person sees. */
+  const committed = useRef(props);
   useLayoutEffect(() => {
-    here.current = true;
+    committed.current = props;
+  });
+  const phase = useRef<Phase>("open");
+  const mounted = useRef(false);
+  useLayoutEffect(() => {
+    mounted.current = true;
     return () => {
-      here.current = false;
+      mounted.current = false;
     };
   }, []);
+  /** Its `<dialog>`, which the browser may have closed before its `close` event comes. */
+  const element = () =>
+    globalThis.document?.getElementById(`${id}-cancel`)?.closest("dialog") ?? null;
+  const end = () => {
+    phase.current = "done";
+    setState((now) => ({ ...now, ended: true }));
+  };
   // The focus on the safe button: Cancel for a delete, Confirm otherwise; again after a failure.
   const safe = question.danger ? "cancel" : "confirm";
   useEffect(() => {
-    if (!state.busy) document.getElementById(`${id}-${safe}`)?.focus();
+    if (!state.busy && !state.ended) document.getElementById(`${id}-${safe}`)?.focus();
   }, [state, id, safe]);
 
   const confirmIt = async () => {
-    if (running.current) return;
-    running.current = true;
-    const asked = latest.current.question;
-    latest.current.onRunning?.(true);
+    if (phase.current !== "open") return;
+    phase.current = "busy";
+    const asked = committed.current;
+    asked.onRunning?.(true);
     setState({ busy: true });
     let done = true;
     let failure: unknown;
     try {
-      await asked.onConfirm?.();
+      await asked.question.onConfirm?.();
     } catch (error) {
       done = false;
       failure = error;
     }
-    running.current = false;
-    const now = latest.current;
+    const now = committed.current;
     now.onRunning?.(false);
-    const shown = here.current;
+    // Closed by the browser meanwhile, its close event maybe still on its way: dismissed now.
+    if (phase.current === "busy" && mounted.current && element()?.open !== true) {
+      end();
+      now.onDismissed();
+    }
+    const here = mounted.current && phase.current === "busy";
     if (done) {
-      setState({ busy: false });
+      end();
+      setState({ busy: false, ended: true });
       if (now.question.toast) toast(now.question.toast, "success");
     } else {
       const words = wordsOf(failure) ?? say("notDone");
-      setState({ busy: false, error: shown ? words : undefined });
-      if (!shown) toast(words, "destructive");
+      if (here) {
+        phase.current = "open";
+        setState({ busy: false, error: words });
+      } else toast(words, "destructive");
     }
-    now.onOutcome(done, shown);
+    now.onOutcome(done, here);
   };
   const cancel = () => {
-    if (!running.current) latest.current.onCancel();
+    if (phase.current !== "open") return;
+    end();
+    committed.current.onCancel();
   };
   const closed = () => {
-    if (!running.current) return latest.current.onCancel();
-    here.current = false;
-    latest.current.onDismissed();
+    if (phase.current === "open") return cancel();
+    if (phase.current !== "busy") return;
+    end();
+    committed.current.onDismissed();
   };
 
   const body = question.message || question.children || state.error;
@@ -267,17 +303,19 @@ function Question(
       size="sm"
       role="alertdialog"
       busy={state.busy}
+      isolated
       aria-describedby={question.message ? `${id}-message` : undefined}
       bare
       footer={
         <>
-          <Button id={`${id}-cancel`} onClick={cancel} disabled={state.busy}>
+          <Button id={`${id}-cancel`} onClick={cancel} disabled={state.busy || state.ended}>
             {question.cancelLabel ?? say("cancel")}
           </Button>
           <Button
             id={`${id}-confirm`}
             variant={question.danger ? "destructive" : "primary"}
             loading={state.busy}
+            disabled={state.ended}
             onClick={() => void confirmIt()}
           >
             {question.confirmLabel ?? say(question.danger ? "delete" : "confirm")}

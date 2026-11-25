@@ -104,13 +104,15 @@ export type SendmailSettings = {
 /** The `email` resource: how the app sends email. */
 export type EmailSettings = {
   /**
-   * Which adapter sends: `resend` (Resend's API), `smtp` (a mail server, on
+   * Which adapter sends: `capture` (keeps messages for tests), `resend` (Resend's API), `smtp` (a mail server, on
    * Node, Deno and Bun), `sendmail` (a sendmail program, on Node, Deno and
    * Bun), or `console` on a laptop, which writes each message
    * to the log (refused where the app's `links` origin is public: a code in a
    * log is a way in).
    */
   adapter: string;
+  /** With the capture adapter, also write each delivered message as an .eml file in this directory. */
+  capture?: { directory?: string };
   /** Who messages are from: `"Example <noreply@example.com>"`. */
   from?: string;
   /**

@@ -220,6 +220,9 @@ export {
   formatDayTime,
   TimeFields,
 } from "./toolkit/date-time-picker.tsx";
+// Typed day-times read back by a pattern, a language's own pattern, and the moment one names.
+export { dayTimePattern, parseDayTime, patternProblem } from "./toolkit/day-time-text.ts";
+export { dateOfDayTime } from "./toolkit/day-time-zone.ts";
 export { LiveClock } from "./toolkit/live-clock.tsx";
 // Telling: a few seconds' word over the page.
 export {

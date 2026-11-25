@@ -316,7 +316,7 @@
         {
           "title": "The web toolkit",
           "slug": "guides/the-web-toolkit",
-          "description": "The pieces web front ends are made of, laid out and themed without CSS: layout, forms, confirmations, records in dialogs and refused fields, table exports and totals, dates, bars, toasts, shortcuts, printing, PDF logos, Code 39, Code 128 and EAN barcodes, a route's own page and a sign-in (`Screen`), and every token a theme sets."
+          "description": "The pieces web front ends are made of, laid out and themed without CSS: layout, forms, confirmations, records in dialogs and refused fields, table exports and totals, dates (ranges to the second, typed day-times read back), bars, toasts, shortcuts, printing, PDF logos, Code 39, Code 128 and EAN barcodes, a route's own page and a sign-in (`Screen`), and every token a theme sets."
         },
         {
           "title": "A business app's screens",

@@ -8,8 +8,10 @@
  * - its queries `account.providers` (what can be connected, and how) and
  *   `account.uses` (which models would run on the asker's accounts);
  * - its Actions `account.connect`, `account.complete`, `account.disconnect`
- *   (a person's), and `account.token` (trusted code only: a model provider,
- *   a tool calling the provider's API for its person);
+ *   (a person's), `account.token` (trusted code only: a model provider, a
+ *   tool calling the provider's API for its person) and `account.connected`
+ *   (trusted code only: the plans a person has connected, for the models
+ *   plugin's `connectedPlans` resource);
  * - its event `account.changed`, as an account is connected, lost or
  *   disconnected;
  * - on the web, the `accountSections` resource: a section of another front

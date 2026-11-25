@@ -33,6 +33,8 @@ export const chatgptModels: Provider = {
   options: { store: false },
   tags: { paid: "subscription" },
   headers: accountHeaders("chatgpt"),
+  // A plan: OpenAI's models by their own names; the first way a ChatGPT plan runs them.
+  harness: { order: 20, serves: { "openai/*": "*" }, plan: "ChatGPT" },
 };
 
 /** What its uses cost the app: nothing (the person's plan pays). */

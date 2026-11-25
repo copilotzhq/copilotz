@@ -69,6 +69,10 @@ const peek = definePlugin({
       run: async (ctx, input: { doc: AccountDoc }) =>
         (await renew(ctx.as(), input.doc, providersOf(ctx).chatgpt)).access,
     }),
+    "peek.connected": defineAction({
+      input: { type: "object" },
+      run: (ctx, input: { actor: Actor }) => ctx.as(input.actor).call("account.connected", {}),
+    }),
     "peek.token": defineAction({
       input: { type: "object" },
       run: (ctx, input: { actor?: Actor; person?: string }) =>
@@ -259,6 +263,34 @@ test("agents run on the plan of whom they work for, and on the app's model witho
       }),
       {},
     );
+  } finally {
+    await s.close();
+  }
+});
+
+test("which plans a person has connected: their ChatGPT, once it's connected and while it works", async () => {
+  // Its tokens due for renewal at once, so a call finds out when OpenAI has ended it.
+  const s = await setup({ expiresIn: 30 });
+  try {
+    const plans = (who: Actor) => s.rt.call<string[]>("peek.connected", { actor: who });
+    assertEquals(await plans(lead(ana)), []);
+    await connect(s, ana);
+    // As them, or an agent working for them; never anyone else's.
+    assertEquals(await plans(ana), ["chatgpt"]);
+    assertEquals(await plans(lead(ana)), ["chatgpt"]);
+    assertEquals(await plans(lead(bob)), []);
+    // Its models: OpenAI's, by their own names, on a person's ChatGPT plan.
+    assertEquals(
+      await s.rt.call("models.check", {
+        model: { model: "chatgpt/gpt-6.1-sol", harnesses: ["chatgpt"] },
+        port: "llm",
+      }),
+      ["chatgpt/gpt-6.1-sol"],
+    );
+    // One that needs signing in again isn't: its calls would fail.
+    s.openai.revokeAll("ana");
+    await s.rt.call("peek.token", { actor: lead(ana) }).catch(() => {});
+    assertEquals(await plans(lead(ana)), []);
   } finally {
     await s.close();
   }

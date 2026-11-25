@@ -42,6 +42,12 @@ const threadSchema = {
      * views say what it is around it, in the reader's words.
      */
     held: { type: "object", properties: { from: { type: "string" } }, required: ["from"] },
+    /**
+     * When it was archived (`chat.archive`): left out of lists of chats, until
+     * it's restored or a message brings it back. Only a chat's own document
+     * says it: its staff notes and subthreads go with it, and never carry it.
+     */
+    archived: { type: "string" },
     /** Its summary, kept as messages come (shared/summary.ts): how many, its first and latest. */
     messages: { type: "integer" },
     opened: { type: "string" },
@@ -122,16 +128,38 @@ export const thread = defineCollection({
     /**
      * The latest conversations (in a space, with `in`), newest first, each
      * with how many messages it has and what its first and latest say, as
-     * the asker may read them: two reads in all. Forks (subthreads) show
-     * under the message they start at instead.
+     * the asker may read them: at most `limit` (20), in two reads. Forks
+     * (subthreads) show under the message they start at instead. Archived
+     * chats (`chat.archive`) are left out, with their staff notes (one more
+     * read, when it lists notes); `archived: true` answers the archived chats
+     * instead (their notes and subthreads go with them, unlisted).
      */
     recent: {
       allow: people,
-      run: async (threads, params: { limit?: number; in?: string } = {}, ctx) => {
-        const recent = await threads.find(
-          { fork: { $ne: true }, ...(params.in ? { in: params.in } : {}) },
+      run: async (
+        threads,
+        params: { limit?: number; in?: string; archived?: boolean } = {},
+        ctx,
+      ) => {
+        const shelved = params.archived === true;
+        const found = await threads.find(
+          {
+            fork: { $ne: true },
+            archived: { $exists: shelved },
+            ...(params.in ? { in: params.in } : {}),
+          },
           { sort: { at: -1 }, limit: params.limit ?? 20 },
         );
+        // Staff notes go with their chat: an archived chat's are put away with it.
+        const about = shelved ? [] : [...new Set(found.flatMap((t) => t.about ? [t.about] : []))];
+        const away = about.length
+          ? new Set(
+            (await threads.find({ _id: { $in: about }, archived: { $exists: true } }, {
+              projection: { _id: 1 },
+            })).map((t) => t._id),
+          )
+          : undefined;
+        const recent = away ? found.filter((t) => !t.about || !away.has(t.about)) : found;
         // What they open and end with, read as whoever asks: what they may read, nothing more.
         const ids = [...new Set(recent.flatMap((t) => [t.opened, t.latest]))]
           .filter((id): id is string => !!id);

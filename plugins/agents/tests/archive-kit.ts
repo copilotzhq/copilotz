@@ -12,7 +12,9 @@
  * - `deep <words>`: asks Scout in a subthread, who asks Deep in one of its own;
  * - `ask ana`: asks Ana, in the chat, and waits for her answer;
  * - `tell <thread>`: tells Scout in another chat that's there already;
+ * - `hand <space>: <words>`: hands the work to who answers in another space;
  * - `note`: takes a note (a private step), then answers;
+ * - `check`: runs a tool that asks Ana first, and goes on with her answer;
  * - after a tool's answer, "lead done"; anything else, "lead heard: <it>".
  */
 import {
@@ -63,7 +65,10 @@ const moves: Record<string, (last: LlmMessage) => Move> = {
     if (verb === "tell") {
       return { send: [{ to: "scout", text: "For you.", thread: arg, expectReply: false }] };
     }
+    const hand = said.match(/^hand (\S+): (.+)$/s);
+    if (hand) return { send: [{ space: hand[1], text: hand[2] }] };
     if (said === "note") return { use: [{ name: "note" }] };
+    if (said === "check") return { use: [{ name: "check" }] };
     return `lead heard: ${said}`;
   },
   scout: (last) => {
@@ -145,12 +150,22 @@ export async function archiveKit(
           instructions: "Lead.",
           model: "s/lead",
           default: true,
-          tools: ["send_message", "list_conversations", "read_conversation", "note"],
+          tools: ["send_message", "list_conversations", "read_conversation", "note", "check"],
         },
         scout: { instructions: "Scout.", model: "s/scout", tools: ["send_message"] },
         deep: { instructions: "Deep.", model: "s/deep" },
       },
-      tools: { note: tool({ description: "Takes a note.", run: () => "noted" }) },
+      tools: {
+        note: tool({ description: "Takes a note.", run: () => "noted" }),
+        check: tool({
+          description: "Checks with Ana first.",
+          run: (_, ctx) => {
+            if (ctx.answer) return `ana said ${ctx.answer.text}`;
+            ctx.ask?.({ to: "ana", text: "Sure?" });
+            return "asked";
+          },
+        }),
+      },
     },
     adapters: { llm: { s: script } },
     actions: {

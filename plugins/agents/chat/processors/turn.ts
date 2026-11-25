@@ -36,7 +36,8 @@ import { originOf } from "../shared/origin.ts";
 import { prepare, type Send } from "../shared/send.ts";
 import { previewOf, type Refused, refusedShare, shareAsk } from "../shared/share.ts";
 import { audience } from "../../../access/spaces/contract.ts";
-import { noted, startedWith } from "../shared/summary.ts";
+import { chatOf } from "../shared/chat-of.ts";
+import { noted, revived, startedWith } from "../shared/summary.ts";
 import { runTool, type ToolAt, toolsOf, toolText } from "../shared/tools.ts";
 import {
   type Agent,
@@ -441,6 +442,9 @@ const turn = async (ctx: Context, event: Event, acting: Acting) => {
     const deliveries = await Promise.all(
       sends.map((s) => delivery(writer, s.message!, s.message!.subthread)),
     );
+    // The chat this conversation belongs to (its own, its notes', a subthread's): archived, what
+    // this step says here brings it back.
+    const chat = await chatOf(ctx.as().db, current);
     await live.settle();
     await writer.transaction(async (tx) => {
       // What showed live becomes the step, and so does what was written of it.
@@ -468,12 +472,14 @@ const turn = async (ctx: Context, event: Event, acting: Acting) => {
             ...send.thread,
             ...startedWith(send.message!),
           });
-        } else await noted(tx, send.message!);
+          // A subthread's opening is said here, and moves no summary: it brings the chat back.
+          if (send.message!.thread === t.thread) await revived(tx, chat);
+        } else await noted(tx, send.message!, send.chat ?? chat);
         await tx.db.collection("message").insertOne(send.message!);
         await deliveries[i](tx);
       }
       for (const question of questions) {
-        await noted(tx, question);
+        await noted(tx, question, chat);
         await tx.db.collection("message").insertOne(question);
       }
       if (waitingFor.length) {

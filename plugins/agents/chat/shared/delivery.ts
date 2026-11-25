@@ -14,6 +14,7 @@ import type { Thread } from "../collections/thread.ts";
 import type { Wait } from "../collections/wait.ts";
 import { agentsNamed, NO_ANSWER, now, SEND } from "./agents.ts";
 import { originOf } from "./origin.ts";
+import { chatOf, chatOfId } from "./chat-of.ts";
 import { noted, startedWith } from "./summary.ts";
 import { beyond } from "../../../access/spaces/contract.ts";
 import { DELEGATED, settingsOf, type Step, type Told, type Turn } from "./types.ts";
@@ -114,7 +115,7 @@ export const answer = async (
     knew?: string;
   } = {},
   /** The turn's thread, when it has it already. */
-  known?: Pick<Thread, "in">,
+  known?: Pick<Thread, "in" | "about" | "parent" | "fork">,
 ) => {
   const messages = ctx.db.collection<Message>("message");
   const [trigger, thread, open] = await Promise.all([
@@ -180,6 +181,11 @@ export const answer = async (
   const there = returned ?? kept;
   const writer = there ? ctx.as(grant("chat.hand-back")) : ctx;
   const deliver = await delivery(writer, there ?? reply, (there ?? reply).thread, !how.stopped);
+  // The chats they're said in (each the conversation's own, its notes', a subthread's): archived,
+  // they come back with them.
+  const system = ctx.as().db;
+  const chat = await chatOf(system, { _id: t.thread, ...thread });
+  const home = there ? await chatOfId(system, there.thread) : undefined;
   await writer.transaction(async (tx) => {
     // What showed live while it was written becomes the reply.
     await tx.db.collection("live").deleteOne({ _id: run }, NO_ANSWER);
@@ -189,10 +195,10 @@ export const answer = async (
       await tx.db.collection("message").insertOne(stepOf(open, run, thread?.in));
     }
     await tx.db.collection("message").insertOne(reply);
-    await noted(tx, reply);
+    await noted(tx, reply, chat);
     if (there) {
       await tx.db.collection("message").insertOne(there);
-      await noted(tx, there);
+      await noted(tx, there, home);
     }
     if (asked) await tx.db.collection("approval").insertOne(asked);
     await deliver(tx);
@@ -286,9 +292,10 @@ export async function handBack(ctx: Context, asked: Approval, to: "here" | "me")
   if (to === "here") {
     const returned = backOf(reply, trigger, back, reply.in);
     const deliver = await delivery(writer, returned, returned.thread);
+    const chat = await chatOfId(ctx.as().db, returned.thread);
     await writer.transaction(async (tx) => {
       await tx.db.collection("message").insertOne(returned);
-      await noted(tx, returned);
+      await noted(tx, returned, chat);
       await deliver(tx);
     });
     return;
@@ -300,6 +307,7 @@ export async function handBack(ctx: Context, asked: Approval, to: "here" | "me")
   const mine = `${reply.turn}:mine`;
   const word = keptOf(reply, trigger, back, reply.in, { for: person });
   const deliver = await delivery(writer, word, word.thread);
+  const chat = await chatOfId(ctx.as().db, word.thread);
   await writer.transaction(async (tx) => {
     const message = {
       _id: `${mine}:answer`,
@@ -321,7 +329,7 @@ export async function handBack(ctx: Context, asked: Approval, to: "here" | "me")
     });
     await tx.db.collection("message").insertOne(message);
     await tx.db.collection("message").insertOne(word);
-    await noted(tx, word);
+    await noted(tx, word, chat);
     await deliver(tx);
   });
 }

@@ -1,6 +1,24 @@
-import { existsSync, readdirSync, statSync, watch } from "node:fs";
+import { readdirSync, statSync, watch } from "node:fs";
 import { join } from "node:path";
 import { regenerate } from "./run.ts";
+
+// Imports can take a declaration's type outside plugins/. Skip installed packages
+// and build output, including the declaration gen itself writes at the app root.
+function sources(dir: string, plugin = false): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const name = entry.name;
+    if (!plugin && (name.startsWith(".") || name === "node_modules" || name === "dist")) continue;
+    const path = join(dir, name);
+    if (entry.isDirectory()) {
+      if (plugin) files.push(path);
+      files.push(...sources(path, plugin || name === "plugins"));
+    } else if (plugin || (name !== "copilotz-env.d.ts" && /(?:\.[cm]?tsx?|\.jsonc?)$/.test(name))) {
+      files.push(path);
+    }
+  }
+  return files;
+}
 
 /** Watches the app and its plugin tree. A timestamp scan also catches dropped filesystem events. */
 export function watchApp(root: string, cli: string): void {
@@ -8,11 +26,7 @@ export function watchApp(root: string, cli: string): void {
   let previous: string | undefined;
   const refresh = () => {
     try {
-      const paths = [
-        join(root, "app.ts"),
-        ...(existsSync(plugins) ? readdirSync(plugins, { recursive: true, encoding: "utf8" }) : [])
-          .sort().map((p) => join(plugins, p)),
-      ];
+      const paths = sources(root).sort();
       const state = paths.map((p) => {
         const stat = statSync(p, { throwIfNoEntry: false });
         return [p, stat?.mtimeMs, stat?.size];

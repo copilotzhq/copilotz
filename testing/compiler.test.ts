@@ -49,6 +49,12 @@ function run(dir: string, command: string, args: string[], fails = false) {
 
 const gen = (dir: string, flags: string[] = [], fails = false) =>
   run(dir, process.execPath, [...args, "gen", ...flags], fails);
+const verify = (dir: string) =>
+  run(
+    dir,
+    process.execPath,
+    runtime === "deno" ? [...args.slice(0, -1), "verify.ts"] : ["verify.ts"],
+  );
 const tsc = (dir: string, fails = false) =>
   run(dir, "node", [join(root, "node_modules/typescript/bin/tsc"), "--noEmit"], fails);
 const host = ".copilotz/build/plugins/orders";
@@ -69,6 +75,7 @@ test("gen assembles each host and gets the names of the composed app, including 
     "../../plugins/orders/actions/order.ship.ts",
   );
   tsc(dir);
+  verify(dir);
   writeFileSync(
     join(dir, "typo.ts"),
     'import type { Runtime } from "copilotz";\ndeclare const r: Runtime;\nr.call("oder.ship");\n',
@@ -106,6 +113,31 @@ test("check catches stale, missing and extra output without writing, and reports
   assert.match(gen(dir, ["--check"], true), /default/i);
 });
 
+test("check detects a changed type and schema diagnostics leave all generated files alone", () => {
+  const dir = app();
+  gen(dir);
+  const mod = host + "/mod.ts";
+  const before = read(dir, mod);
+  const contract = "plugins/orders/contract.ts";
+  const original = read(dir, contract);
+  writeFileSync(join(dir, contract), original.replace("@minimum 1", "@minimum 3"));
+  assert.match(gen(dir, ["--check"], true), /mod.ts is stale/);
+  assert.equal(read(dir, mod), before);
+  gen(dir);
+  assert.match(read(dir, mod), /"minimum": 3/);
+  const extra = join(dir, host, "unreconciled.ts");
+  writeFileSync(extra, "");
+  writeFileSync(join(dir, contract), original.replace("quantity: number", "quantity: Date"));
+  for (const flags of [[], ["--eject", "orders"]]) {
+    const output = gen(dir, flags, true);
+    assert.match(output, /invoice.issue.ts: input.quantity: Date/);
+    assert.match(output, /invoice.ts: schema.quantity: Date/);
+    assert.ok(existsSync(extra));
+    assert.match(read(dir, mod), /"minimum": 3/);
+    assert.ok(!existsSync(join(dir, "plugins/orders/mod.ts")));
+  }
+});
+
 test("eject keeps the app's imports working and gen leaves both hand-written plugins alone", () => {
   const dir = app();
   gen(dir);
@@ -120,14 +152,15 @@ test("eject keeps the app's imports working and gen leaves both hand-written plu
   assert.equal(statSync(join(dir, "copilotz-env.d.ts")).mtimeMs, names);
   assert.equal(statSync(join(dir, path)).mtimeMs, ejected);
   tsc(dir);
+  verify(dir);
 });
 
 test("watch reloads the app's imported collection when its query changes", async () => {
   const dir = app();
   const child = spawn(process.execPath, [...args, "gen", "--watch"], { cwd: dir, stdio: "ignore" });
   const exited = new Promise((resolve) => child.once("exit", resolve));
-  const waitFor = async (word: string) => {
-    const file = join(dir, "copilotz-env.d.ts");
+  const waitFor = async (word: string, output = "copilotz-env.d.ts") => {
+    const file = join(dir, output);
     const until = Date.now() + 12000;
     while (Date.now() < until) {
       if (existsSync(file) && readFileSync(file, "utf8").includes(word)) return;
@@ -140,6 +173,14 @@ test("watch reloads the app's imported collection when its query changes", async
     const path = "plugins/orders/collections/order.ts";
     writeFileSync(join(dir, path), read(dir, path).replace("pending:", "unshipped:"));
     await waitFor("order.unshipped");
+    const contract = "plugins/orders/contract.ts";
+    const source = read(dir, contract);
+    writeFileSync(join(dir, "invoice.ts"), source);
+    writeFileSync(join(dir, contract), 'export type { Invoice, OrderId } from "../../invoice.ts";');
+    writeFileSync(join(dir, "invoice.ts"), source.replace("@minimum 1", "@minimum 4"));
+    await waitFor('"minimum": 4', host + "/mod.ts");
+    writeFileSync(join(dir, "invoice.ts"), source.replace("@minimum 1", "@minimum 5"));
+    await waitFor('"minimum": 5', host + "/mod.ts");
   } finally {
     child.kill();
     await exited;

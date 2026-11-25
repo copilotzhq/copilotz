@@ -20,3 +20,15 @@ export function caller(runtime: Runtime, ctx: Context, view: ViewContext, client
   // @ts-expect-error A runtime query uses its qualified name.
   runtime.query("pending");
 }
+
+export async function invoice(ctx: Context, view: ViewContext, client: Client) {
+  const row = await ctx.db.collection("invoice").findOne({});
+  row?.customerId.toUpperCase();
+  row?._id.toUpperCase();
+  const quantity: number | undefined = view.db.collection("invoice").findOne({}).value?.quantity;
+  // @ts-expect-error A quantity is a number.
+  row?.quantity.toUpperCase();
+  // @ts-expect-error An invoice needs a quantity.
+  await client.db.collection("invoice").insertOne({ customerId: "west" });
+  return quantity;
+}

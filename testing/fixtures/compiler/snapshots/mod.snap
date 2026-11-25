@@ -1,7 +1,9 @@
 import { definePlugin } from "copilotz";
 import plugin from "../../../../plugins/orders/plugin.ts";
+import actionInvoiceIssue from "../../../../plugins/orders/actions/invoice.issue.ts";
 import actionOrderShip from "../../../../plugins/orders/actions/order.ship.ts";
 import adapterMailLocal from "../../../../plugins/orders/adapters/mail/local.ts";
+import collectionInvoice from "../../../../plugins/orders/collections/invoice.ts";
 import collectionOrder from "../../../../plugins/orders/collections/order.ts";
 import eventOrderShipped from "../../../../plugins/orders/events/order.shipped.ts";
 import processorReceipt from "../../../../plugins/orders/processors/receipt.ts";
@@ -9,14 +11,65 @@ import resourceTools from "../../../../plugins/orders/resources/tools.ts";
 import routeOrders from "../../../../plugins/orders/routes/orders.ts";
 import scheduleDispatch from "../../../../plugins/orders/schedules/dispatch.ts";
 import viewToolShipOrder from "../../../../plugins/orders/views/tool/ship_order.ts";
+import type { DocumentOf } from "copilotz";
+
+declare module "copilotz" {
+  interface AppDocuments {
+    "orders": {
+      "invoice": DocumentOf<typeof collectionInvoice>;
+    };
+  }
+}
 
 export default definePlugin({
   name: "orders",
   ...plugin,
   actions: {
+    "invoice.issue": {
+      ...actionInvoiceIssue,
+      input: {
+        "type": "object",
+        "properties": {
+          "customerId": {
+            "type": "string",
+            "description": "The customer to bill."
+          },
+          "quantity": {
+            "type": "number",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "customerId",
+          "quantity"
+        ],
+        "additionalProperties": false
+      },
+    },
     "order.ship": actionOrderShip,
   },
   collections: {
+    "invoice": {
+      ...collectionInvoice,
+      schema: {
+        "type": "object",
+        "properties": {
+          "customerId": {
+            "type": "string",
+            "description": "The customer to bill."
+          },
+          "quantity": {
+            "type": "number",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "customerId",
+          "quantity"
+        ],
+        "additionalProperties": false
+      },
+    },
     "order": collectionOrder,
   },
   events: {

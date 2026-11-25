@@ -41,6 +41,9 @@ export type CatalogProduct = Infer<typeof productSchema>;
 /** How an order will reach its customer. */
 export type Delivery = { kind: "collect"; location: string } | { kind: "ship"; postalCode: string };
 
+/** @format date-time */
+type Timestamp = string;
+
 /** An order placed for a customer. */
 export interface Order {
   /** Who placed the order. */
@@ -52,7 +55,7 @@ export interface Order {
    */
   lines: readonly Line[];
   delivery: Delivery;
-  window?: readonly [Date, Date?];
+  window?: readonly [Timestamp, Timestamp?];
   counts?: [label: string, ...counts: number[]];
   marker?: [];
   weights?: Record<string, number>;

@@ -164,6 +164,10 @@ function emit(program: ts.Program): string[] {
   }
   const written: string[] = [];
   const emitted = program.emit(undefined, (file, text) => {
+    // The CLI exports only its executable entry. Its private build helpers use
+    // the app's TypeScript devDependency, which the runtime package needn't install.
+    const output = relative(program.getCompilerOptions().outDir!, file).split(sep).join("/");
+    if (output.startsWith("cli/") && output.endsWith(".d.ts") && output !== "cli/mod.d.ts") return;
     const code = /\.(js|d\.ts)$/.test(file)
       ? renamed(file.endsWith(".d.ts") ? declared(text) : text)
       : text;

@@ -1,4 +1,4 @@
-/** Build-time Action input schemas. The app's modules are type-checked, never loaded. */
+/** Build-time schemas for Actions and collections. The app's modules are type-checked, never loaded. */
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -11,7 +11,8 @@ import type { JSONSchema } from "../runtime/define.ts";
 type TS = typeof ts;
 type Schema = Exclude<JSONSchema, boolean> & { prefixItems?: Schema[] };
 type Result = { schema: JSONSchema; error?: never } | { error: string; schema?: never };
-const hint = "write `input` by hand for this Action";
+type Source = { file: string; kind: "actions" | "collections" };
+type Options = { tsconfig?: string; ts?: TS };
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 
 async function appCompiler(file: string): Promise<TS> {
@@ -40,9 +41,12 @@ async function appCompiler(file: string): Promise<TS> {
     const entry = fromApp.resolve("typescript");
     return (await import(pathToFileURL(entry).href)).default;
   } catch (cause) {
-    throw new Error("Add typescript as a devDependency of the app to generate Action inputs.", {
-      cause,
-    });
+    throw new Error(
+      "Add typescript as a devDependency of the app to generate schemas from types.",
+      {
+        cause,
+      },
+    );
   }
 }
 
@@ -227,7 +231,7 @@ function unresolved(type: ts.Type, api: TS): boolean {
     (type.isUnionOrIntersection() && type.types.some((t) => unresolved(t, api)));
 }
 
-function converter(r: Reader, input: ts.TypeNode) {
+function converter(r: Reader, input: ts.TypeNode, document: boolean) {
   const { api, checker } = r;
   const F = api.TypeFlags;
   const active = new Set<ts.Type>();
@@ -267,6 +271,28 @@ function converter(r: Reader, input: ts.TypeNode) {
         if (helper) names.delete(helper);
       }
       let schema = kept ?? shape(type, path, written);
+      if (
+        document && path === "schema" && schema.properties &&
+        Object.hasOwn(schema.properties, "_id")
+      ) {
+        // The owner validates the fields after stripping the top-level _id.
+        // Nested ids and Action inputs are ordinary user fields.
+        const field = type.getProperty("_id");
+        if (field) {
+          const id = checker.getTypeOfSymbolAtLocation(field, input);
+          const parts = id.isUnion() ? id.types : [id];
+          if (
+            !parts.some((p) => p.flags & F.String) ||
+            parts.some((p) => !(p.flags & (F.String | F.Undefined)))
+          ) {
+            throw new Error("schema._id: use string or omit the runtime's id");
+          }
+        }
+        const { _id, ...properties } = schema.properties;
+        const { required, ...rest } = schema;
+        const fields = required?.filter((name) => name !== "_id");
+        schema = { ...rest, properties, ...(fields?.length ? { required: fields } : {}) };
+      }
       const resolved = type.aliasSymbol ?? type.symbol;
       if (!kept && resolved) names.add(resolved);
       for (const name of [...names].reverse()) schema = documented(schema, name, r, path);
@@ -301,6 +327,10 @@ function converter(r: Reader, input: ts.TypeNode) {
     }
     if (type.getCallSignatures().length || type.getConstructSignatures().length) {
       return fail("functions cannot be sent as JSON");
+    }
+    const members = type.isIntersection() ? type.types : [type];
+    if (members.some((t) => t.symbol?.name === "Date" && r.standard(t.symbol))) {
+      return fail("Date cannot be sent as JSON: use `string` with `/** @format date-time */`");
     }
     if (type.isIntersection()) {
       if (!type.types.every((t) => t.flags & F.Object)) {
@@ -356,9 +386,6 @@ function converter(r: Reader, input: ts.TypeNode) {
         ),
       };
     }
-    if (type.symbol?.name === "Date" && r.standard(type.symbol)) {
-      return { type: "string", format: "date-time" };
-    }
     if ((type.symbol?.flags ?? 0) & api.SymbolFlags.Class) {
       return fail(`class instance ${checker.typeToString(type)}`);
     }
@@ -413,11 +440,27 @@ function converter(r: Reader, input: ts.TypeNode) {
   return convert;
 }
 
-function actionSchema(source: ts.SourceFile, r: Reader): Schema | undefined {
+function declarationSchema(
+  source: ts.SourceFile,
+  kind: Source["kind"],
+  r: Reader,
+): Schema | undefined {
   const { api, checker } = r;
-  const exported = source.statements.find(api.isExportAssignment);
-  if (!exported) throw new Error("input: expected a default Action export");
-  let expr = exported.expression;
+  const module = checker.getSymbolAtLocation(source);
+  const symbol = module && checker.getExportsOfModule(module).find((s) => s.name === "default");
+  const exported = symbol &&
+    (symbol.flags & api.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol)
+      .valueDeclaration;
+  const collection = kind === "collections";
+  const key = collection ? "schema" : "input";
+  const initial = exported &&
+    (api.isExportAssignment(exported)
+      ? exported.expression
+      : api.isVariableDeclaration(exported)
+      ? exported.initializer
+      : undefined);
+  if (!initial) throw new Error(`${key}: expected a default export`);
+  let expr = initial;
   const seen = new Set<ts.Expression>();
   while (!seen.has(expr)) {
     seen.add(expr);
@@ -431,37 +474,56 @@ function actionSchema(source: ts.SourceFile, r: Reader): Schema | undefined {
       expr = decl.initializer;
     } else break;
   }
-  if (api.isCallExpression(expr)) {
-    if (
-      (r.symbolAt(expr.expression)?.name !== "defineAction" &&
-        expr.expression.getText() !== "defineAction") || !expr.arguments[0]
-    ) {
-      throw new Error("input: expected defineAction({...}) or an Action object");
-    }
-    expr = expr.arguments[0];
+  const call = api.isCallExpression(expr) ? expr : undefined;
+  const factory = collection ? "defineCollection" : "defineAction";
+  const definition = call?.arguments[0] ?? expr;
+  const object = checker.getTypeAtLocation(definition);
+  if (object.getProperty(key)) return;
+  if (
+    call && r.symbolAt(call.expression)?.name !== factory && call.expression.getText() !== factory
+  ) {
+    // Existing factories can return complete declarations of their own.
+    if (checker.getTypeAtLocation(call).getProperty(key)) return;
+    throw new Error(`${key}: expected ${factory}({...}) or a declaration object`);
   }
-  const action = checker.getTypeAtLocation(expr);
-  if (action.getProperty("input")) return;
-  const run = action.getProperty("run");
+  if (collection) {
+    if (!call) return; // A plain { indexes } extends an earlier collection.
+    const type = call.typeArguments?.[0];
+    if (!type) throw new Error("schema: give defineCollection a document type or a schema");
+    const doc = checker.getTypeFromTypeNode(type);
+    const members = doc.isUnion() ? doc.types : [doc];
+    if (
+      members.some((t) =>
+        !(t.flags & (api.TypeFlags.Object | api.TypeFlags.Intersection)) ||
+        checker.isArrayType(t) || checker.isTupleType(t)
+      )
+    ) {
+      throw new Error("schema: a document must be an object");
+    }
+    return converter(r, type, true)(doc, key, type);
+  }
+  const run = object.getProperty("run");
   const signatures = run && checker.getTypeOfSymbolAtLocation(run, expr).getCallSignatures();
   const decl = signatures?.length === 1 && signatures[0].getDeclaration();
   if (!decl) throw new Error("input: expected a single run signature");
   const input = decl.parameters.filter((p) => p.name.getText() !== "this")[1];
   if (!input) return;
   if (!input.type) throw new Error("input: declare the type of run's second parameter");
-  return converter(r, input.type)(checker.getTypeFromTypeNode(input.type), "input", input.type);
+  return converter(r, input.type, false)(
+    checker.getTypeFromTypeNode(input.type),
+    "input",
+    input.type,
+  );
 }
 
-/**
- * Read the annotated input of each default-exported Action with one TypeScript program.
- * Keys are the paths supplied. An undefined value means the Action declares its own input or
- * has no input parameter. A conversion error belongs to that file alone. TypeScript comes from
- * the app containing the tsconfig (or first Action), or can be supplied by the generator.
+/** Read Action input annotations and collection type arguments with one app TypeScript program.
+ * Results use the supplied file paths. Explicit schemas and declarations needing none are skipped.
  */
-export async function inputSchemas(
-  files: readonly string[],
-  options: { tsconfig?: string; ts?: TS } = {},
+export async function schemasFromTypes(
+  sources: readonly Source[],
+  options: Options = {},
 ): Promise<Map<string, Result | undefined>> {
+  const files = sources.map((s) => s.file);
   const results = new Map<string, Result | undefined>();
   if (!files.length) return results;
   const api = options.ts ?? await appCompiler(options.tsconfig ?? files[0]);
@@ -492,21 +554,33 @@ export async function inputSchemas(
     noEmit: true,
   });
   const r = reader(api, program);
-  for (const file of files) {
+  for (const { file, kind } of sources) {
+    const key = kind === "actions" ? "input" : "schema";
     try {
       const source = program.getSourceFile(resolve(file));
-      if (!source) throw new Error("input: cannot read the Action file");
+      if (!source) throw new Error(`${key}: cannot read the file`);
       const syntax = program.getSyntacticDiagnostics(source)[0];
       if (syntax) {
-        throw new Error(`input: ${api.flattenDiagnosticMessageText(syntax.messageText, "\n")}`);
+        throw new Error(`${key}: ${api.flattenDiagnosticMessageText(syntax.messageText, "\n")}`);
       }
-      const schema = actionSchema(source, r);
+      const schema = declarationSchema(source, kind, r);
       results.set(file, schema ? { schema } : undefined);
     } catch (error) {
+      const hint = kind === "actions"
+        ? "write `input` by hand for this Action"
+        : "write `schema` by hand for this collection";
       results.set(file, {
         error: `${file}: ${error instanceof Error ? error.message : error}; ${hint}`,
       });
     }
   }
   return results;
+}
+
+/** Read only Action inputs. Each result is keyed by the supplied Action path. */
+export function inputSchemas(
+  files: readonly string[],
+  options: Options = {},
+): Promise<Map<string, Result | undefined>> {
+  return schemasFromTypes(files.map((file) => ({ file, kind: "actions" })), options);
 }

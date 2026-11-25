@@ -18,8 +18,7 @@ async function main(args: string[]) {
     return regenerate(dir, import.meta.url);
   }
   if (command === "gen" && option === "--eject" && !rest.length) {
-    await generate(root);
-    eject(root, name);
+    await eject(root, name);
     return regenerate(root, import.meta.url);
   }
   if (command === "gen" && !name) {

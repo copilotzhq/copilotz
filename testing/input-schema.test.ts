@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { inputSchemas } from "../cli/input-schema.ts";
+import { inputSchemas, schemasFromTypes } from "../cli/input-schema.ts";
 import { validator } from "../runtime/mod.ts";
 import { productSchema } from "./fixtures/input-schema/contracts.ts";
 import { runtime, tempDir, test } from "./mod.ts";
@@ -219,6 +219,61 @@ test("a type the generator cannot represent names its Action, property and reaso
   }
 });
 
+test("Date names the JSON string annotation for Action inputs and collection fields", async () => {
+  const dir = tempDir();
+  const action = join(dir, "order.place.ts");
+  const collection = join(dir, "order.ts");
+  writeFileSync(action, "export default { run(_ctx: unknown, input: { at: Date }) {} }");
+  writeFileSync(
+    collection,
+    "interface Order { at: Date }; export default defineCollection<Order>({})",
+  );
+  const results = await schemasFromTypes([{ file: action, kind: "actions" }, {
+    file: collection,
+    kind: "collections",
+  }], { ts });
+  for (const [file, path] of [[action, "input.at"], [collection, "schema.at"]]) {
+    const error = results.get(file)?.error ?? "";
+    assert.ok(error.includes(file) && error.includes(path), error);
+    assert.ok(error.includes("use `string` with `/** @format date-time */`"), error);
+  }
+});
+
+test("collections keep nested ids, omit the runtime id, and respect explicit declarations", async () => {
+  const dir = tempDir();
+  const collection = join(dir, "order.ts");
+  const explicit = join(dir, "product.ts");
+  const action = join(dir, "order.place.ts");
+  writeFileSync(
+    collection,
+    `type Order = { _id: string; line: { _id: number } };
+    export default defineCollection<Order>({});`,
+  );
+  writeFileSync(
+    explicit,
+    "export default defineCollection<{ at: Date }>({ schema: { type: 'object' } })",
+  );
+  writeFileSync(
+    action,
+    "export default { input: {type: 'object'}, run(_ctx: unknown, date: Date) {} }",
+  );
+  const results = await schemasFromTypes([{ file: collection, kind: "collections" }, {
+    file: explicit,
+    kind: "collections",
+  }, { file: action, kind: "actions" }], { ts });
+  const schema = generated(results, collection);
+  assert.deepEqual(schema.required, ["line"]);
+  assert.deepEqual(Object.keys(schema.properties!), ["line"]);
+  assert.deepEqual(schema.properties!.line, {
+    type: "object",
+    properties: { _id: { type: "number" } },
+    required: ["_id"],
+    additionalProperties: false,
+  });
+  assert.equal(results.get(explicit), undefined);
+  assert.equal(results.get(action), undefined);
+});
+
 test("a supplied tsconfig resolves app path aliases and preserves nullable types", async () => {
   const dir = tempDir();
   const config = join(dir, "tsconfig.app.json");
@@ -254,10 +309,9 @@ test({
       JSON.stringify({ imports: { typescript: `npm:typescript@${ts.version}` }, lock: false }),
     );
     const file = join(dir, "order.ts");
-    writeFileSync(file, "export default {run(_ctx: unknown, date: Date) {}}");
+    writeFileSync(file, "export default {run(_ctx: unknown, name: string) {}}");
     assert.deepEqual(generated(await inputSchemas([file]), file), {
       type: "string",
-      format: "date-time",
     });
   },
 });

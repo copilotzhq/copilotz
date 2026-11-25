@@ -1,6 +1,8 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
+import type { JSONSchema } from "../runtime/define.ts";
+
 const primitives = [
   "collections",
   "actions",
@@ -102,7 +104,11 @@ export function specifier(path: string): string {
 }
 
 /** Makes the three host modules in memory. Ejection changes only where their imports start. */
-export function modules(folder: Folder, dest: string): Map<string, string> {
+export function modules(
+  folder: Folder,
+  dest: string,
+  schemas: ReadonlyMap<string, JSONSchema>,
+): Map<string, string> {
   const files = new Map<string, string>();
   for (const host of ["mod", "web", "terminal"] as const) {
     const imports = ['import { definePlugin } from "copilotz";'];
@@ -117,6 +123,7 @@ export function modules(folder: Folder, dest: string): Map<string, string> {
     }
     const groups = new Map<string, string[]>();
     const ports = new Map<string, string[]>();
+    const documents: string[] = [];
     const bindings = new Set<string>();
     for (const entry of folder.entries[host]) {
       const words = [entry.port, entry.key].filter(Boolean).join(" ").match(/[a-zA-Z0-9]+/g) ?? [];
@@ -129,7 +136,26 @@ export function modules(folder: Folder, dest: string): Map<string, string> {
       const group = entry.port ? ports : groups;
       const key = entry.port ?? entry.kind;
       const lines = group.get(key) ?? [];
-      lines.push(`${JSON.stringify(entry.key)}: ${id},`);
+      const schema = schemas.get(entry.file);
+      const name = JSON.stringify(entry.key);
+      if (schema === undefined) lines.push(`${name}: ${id},`);
+      else {
+        const key = entry.kind === "actions" ? "input" : "schema";
+        // In a JS object literal this key needs brackets to remain an own property.
+        const literal = JSON.stringify(schema, null, 2).replace(
+          /^(\s*)"__proto__":/gm,
+          '$1["__proto__"]:',
+        );
+        lines.push(
+          `${name}: {`,
+          `  ...${id},`,
+          ...`${key}: ${literal},`.split("\n").map((line) => "  " + line),
+          "},",
+        );
+        if (entry.kind === "collections") {
+          documents.push(`      ${name}: DocumentOf<typeof ${id}>;`);
+        }
+      }
       group.set(key, lines);
     }
     if (ports.size) {
@@ -149,9 +175,23 @@ export function modules(folder: Folder, dest: string): Map<string, string> {
         "  },",
       );
     }
+    const types: string[] = [];
+    if (documents.length) {
+      imports.push('import type { DocumentOf } from "copilotz";');
+      types.push(
+        'declare module "copilotz" {',
+        "  interface AppDocuments {",
+        `    ${JSON.stringify(folder.name)}: {`,
+        ...documents,
+        "    };",
+        "  }",
+        "}",
+        "",
+      );
+    }
     files.set(
       join(dest, host + ".ts"),
-      [...imports, "", "export default definePlugin({", ...props, "});", ""].join("\n"),
+      [...imports, "", ...types, "export default definePlugin({", ...props, "});", ""].join("\n"),
     );
   }
   return files;

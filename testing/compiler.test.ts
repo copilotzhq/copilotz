@@ -195,3 +195,31 @@ test("init uses the linked local package offline and makes a working checked Typ
   run(dir, "node", ["--import", "./tsx.ts", "--test", "tests/orders.test.ts"]);
   assert.match(run(dir, process.execPath, [...args, "init"], true), /empty directory/);
 });
+
+test("the npm entry dispatches through a symlink on early Node 24 and stays inert on import", () => {
+  const dir = app(false);
+  const entry = join(dir, "copilotz.ts");
+  // Windows npm uses a command shim, while POSIX uses a file symlink.
+  const bin = process.platform === "win32" ? cli : entry;
+  if (bin === entry) symlinkSync(cli, entry, "file");
+  // Run the installed entry's code with the same missing metadata as Node 24.0 and 24.1.
+  const hook = join(dir, "early-node.mjs");
+  writeFileSync(
+    hook,
+    `import { registerHooks } from "node:module";
+    registerHooks({load(url, context, next) {
+      const loaded = next(url, context);
+      if (url === ${JSON.stringify(new URL("../cli/mod.ts", import.meta.url).href)}) {
+        return {...loaded, source: String(loaded.source).replaceAll("import.meta.main", "undefined")};
+      }
+      return loaded;
+    }});`,
+  );
+  assert.match(run(dir, "node", ["--import", hook, bin, "unknown"], true), /Usage: copilotz/);
+  const importer = join(dir, "import.mjs");
+  writeFileSync(
+    importer,
+    `import ${JSON.stringify(new URL("../cli/mod.ts", import.meta.url).href)};`,
+  );
+  run(dir, "node", ["--import", hook, importer, "unknown"]);
+});

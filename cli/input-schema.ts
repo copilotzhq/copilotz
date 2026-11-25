@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { execPath } from "node:process";
 import { pathToFileURL } from "node:url";
 import type ts from "typescript";
+import { importMapHost } from "./import-map.ts";
 import type { JSONSchema } from "../runtime/define.ts";
 
 type TS = typeof ts;
@@ -67,9 +68,31 @@ function reader(api: TS, program: ts.Program) {
     symbol.declarations?.some((d) => program.isSourceFileDefaultLibrary(d.getSourceFile()));
   function symbolAt(node: ts.Node) {
     const symbol = checker.getSymbolAtLocation(node);
-    return symbol && symbol.flags & api.SymbolFlags.Alias
-      ? checker.getAliasedSymbol(symbol)
-      : symbol;
+    if (!symbol || !(symbol.flags & api.SymbolFlags.Alias)) return symbol;
+    const target = checker.getAliasedSymbol(symbol);
+    if (!target.declarations?.length) {
+      // Follow re-exports to the actual missing import, also in the input's nested types.
+      const seen = new Set<ts.Symbol>();
+      let alias: ts.Symbol | undefined = symbol;
+      while (alias && !seen.has(alias)) {
+        seen.add(alias);
+        let at: ts.Node | undefined = alias.declarations?.[0];
+        while (at && !api.isImportDeclaration(at) && !api.isExportDeclaration(at)) at = at.parent;
+        const specifier = at?.moduleSpecifier;
+        if (specifier && !checker.getSymbolAtLocation(specifier)) {
+          const file = specifier.getSourceFile();
+          const { line, character } = file.getLineAndCharacterOfPosition(specifier.getStart(file));
+          throw new Error(
+            `${file.fileName}:${line + 1}:${character + 1} cannot resolve import ${
+              specifier.getText(file)
+            }`,
+          );
+        }
+        alias = checker.getImmediateAliasedSymbol(alias);
+        if (alias && !(alias.flags & api.SymbolFlags.Alias)) break;
+      }
+    }
+    return target;
   }
   return { api, checker, standard, symbolAt };
 }
@@ -231,10 +254,19 @@ function unresolved(type: ts.Type, api: TS): boolean {
     (type.isUnionOrIntersection() && type.types.some((t) => unresolved(t, api)));
 }
 
+function hasLocalRef(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  return Object.entries(value).some(([key, child]) =>
+    (key === "$ref" || key === "$recursiveRef" || key === "$dynamicRef") &&
+      typeof child === "string" && child.startsWith("#") || hasLocalRef(child)
+  );
+}
+
 function converter(r: Reader, input: ts.TypeNode, document: boolean) {
   const { api, checker } = r;
   const F = api.TypeFlags;
   const active = new Set<ts.Type>();
+  let embedded = 0;
 
   function convert(type: ts.Type, path: string, node?: ts.TypeNode): Schema {
     if (active.has(type)) throw new Error(`${path}: recursive type ${checker.typeToString(type)}`);
@@ -271,6 +303,11 @@ function converter(r: Reader, input: ts.TypeNode, document: boolean) {
         if (helper) names.delete(helper);
       }
       let schema = kept ?? shape(type, path, written);
+      // A literal with fragment references is a schema resource of its own. A relative id
+      // preserves its base directory and keeps two embedded copies independently addressable.
+      if (kept && node !== input && !kept.$id && hasLocalRef(kept)) {
+        schema = { ...kept, $id: `./copilotz-embedded-${++embedded}` };
+      }
       if (
         document && path === "schema" && schema.properties &&
         Object.hasOwn(schema.properties, "_id")
@@ -548,11 +585,12 @@ export async function schemasFromTypes(
     compilerOptions = { ...compilerOptions, ...parsed.options };
     ambient = parsed.fileNames.filter((f) => /\.d\.[cm]?ts$/.test(f));
   }
-  const program = api.createProgram([...files.map((f) => resolve(f)).sort(), ...ambient], {
-    ...compilerOptions,
-    strictNullChecks: true,
-    noEmit: true,
-  });
+  compilerOptions = { ...compilerOptions, strictNullChecks: true, noEmit: true };
+  const program = api.createProgram(
+    [...files.map((f) => resolve(f)).sort(), ...ambient],
+    compilerOptions,
+    importMapHost(api, files, compilerOptions),
+  );
   const r = reader(api, program);
   for (const { file, kind } of sources) {
     const key = kind === "actions" ? "input" : "schema";

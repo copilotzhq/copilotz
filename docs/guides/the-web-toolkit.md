@@ -758,6 +758,9 @@ be left out. With no pattern, it reads the language's own short date and time, a
 toolkit keeps one (`2026-11-16 14:30`, or with a `T`). `locale` names the months and AM and PM: the
 page's is `lang()`.
 
+A date alone is `parsePattern(text, pattern, locale)`: `parsePattern("31/12/2026", "dd/MM/yyyy")` is
+`"2026-12-31"`, and `"31/02/2026"` is `undefined`.
+
 `dateOfDayTime(value, timeZone)` is the moment a day-time (or a day, at its start) names in the
 app's time zone, as a `Date`, for what needs one: a timestamp, an ISO string (`.toISOString()`), a
 time to count from. Without a zone, the page's own.

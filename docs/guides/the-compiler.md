@@ -25,9 +25,12 @@ npm run dev
 dependencies and runs the compiler. Open the address the server prints and sign in by name on this
 machine. The example shows how many orders await shipment. It uses an in-memory store.
 
-`npm test` checks the example plugin with `describe()`. `npm run check` also checks the generated
-files, the types, unused code, lint and formatting. ESLint and Prettier belong to the app.
-`npm run build` generates the modules and type-checks the app. `npm start` serves it.
+`npm test` checks the example plugin with `describe()`. `npm run check` runs, in order:
+`copilotz gen --check` (the generated files are current), `tsc --noEmit` (with `noUnusedLocals` and
+`noUnusedParameters` in `tsconfig.json`), `eslint .` (`typescript-eslint`'s recommended rules, and
+`@typescript-eslint/no-unused-vars` as an error; a parameter starting with `_` may go unused),
+`prettier --check .` and `npm test`. ESLint and Prettier belong to the app. `npm run build`
+generates the modules and type-checks the app. `npm start` serves it.
 
 ## The files and their names
 

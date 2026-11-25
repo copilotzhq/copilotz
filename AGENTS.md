@@ -89,6 +89,8 @@ It runs on Node 24+, Deno 2.9+ and Bun.
   [Forms](docs/guides/the-web-toolkit.md#forms).
 - A date range to the second → `DateRangePicker` `seconds` →
   [Date ranges with seconds](docs/guides/the-web-toolkit.md#date-ranges-with-seconds).
+- Read a typed date alone (`31/02/2026` is refused) → `parsePattern(text, pattern)` →
+  [Reading typed dates and times](docs/guides/the-web-toolkit.md#reading-typed-dates-and-times).
 - Read typed date-time text (day/month order, 12 h or 24 h, seconds) → `parseDayTime` →
   [Reading typed dates and times](docs/guides/the-web-toolkit.md#reading-typed-dates-and-times).
 - A day-time as a `Date` or an ISO timestamp, in the app's time zone → `dateOfDayTime` →

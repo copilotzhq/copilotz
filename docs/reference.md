@@ -450,9 +450,11 @@ const expire = defineAction({
 #### One permission check for Actions and queries
 
 A plugin can set `defaults: { allow: people }` in `definePlugin`, or in the default export of its
-`plugin.ts`. This applies to its own Actions and named queries, including bare query functions. An
-explicit `allow` replaces the default. Plugin code calling a collection's query directly keeps the
-existing query rules. A query's `allow` controls callers from outside.
+`plugin.ts`. `people` lets in a signed-in person and what acts for them (their keys, agents and
+routines); use `inPerson` for the person themselves only (see [Who may call](#who-may-call-allow)).
+This applies to its own Actions and named queries, including bare query functions. An explicit
+`allow` replaces the default. Plugin code calling a collection's query directly keeps the existing
+query rules. A query's `allow` controls callers from outside.
 
 For inventory staff, put the check in the plugin's `lib/`. Each permission document names the
 person, module and space. Its collection's guard controls who can read or change it.

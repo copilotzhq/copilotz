@@ -40,7 +40,7 @@ const computerSchema = {
     },
     /**
      * The plans' CLIs it runs agents' model calls on, by engine (`claude`,
-     * `codex`, `antigravity`, `grok`), as it last said (see shared/engines.ts):
+     * `codex`, `antigravity`, `grok`, `cursor`), as it last said (see shared/engines.ts):
      * installed, signed in, as whom, and when.
      */
     engines: { type: "object" },

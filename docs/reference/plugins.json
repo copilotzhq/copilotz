@@ -5857,7 +5857,8 @@
                   "claude",
                   "codex",
                   "antigravity",
-                  "grok"
+                  "grok",
+                  "cursor"
                 ]
               },
               "model": {
@@ -5958,7 +5959,8 @@
                   "claude",
                   "codex",
                   "antigravity",
-                  "grok"
+                  "grok",
+                  "cursor"
                 ]
               },
               "input": {
@@ -6005,7 +6007,8 @@
                   "claude",
                   "codex",
                   "antigravity",
-                  "grok"
+                  "grok",
+                  "cursor"
                 ]
               }
             },
@@ -7371,6 +7374,7 @@
           "cost": {
             "claude-plan/*": {},
             "codex-plan/*": {},
+            "cursor-plan/*": {},
             "gemini-plan/*": {},
             "grok-plan/*": {}
           },
@@ -7380,6 +7384,9 @@
             },
             "codex-plan": {
               "title": "ChatGPT plan, through Codex"
+            },
+            "cursor-plan": {
+              "title": "Cursor plan"
             },
             "gemini-plan": {
               "title": "Google AI plan, through Antigravity"

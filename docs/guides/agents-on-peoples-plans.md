@@ -1,17 +1,17 @@
 ---
 title: "Agents on people's own plans"
-description: "An agent's model calls can run on the plan of the person it works for (Claude, ChatGPT, Google AI through Antigravity, Grok), through the plan's CLI on a computer of theirs: the providers, plans first and in the person's order, connecting plans in one flow (a computer readied, a missing CLI installed, signed in, tested), Your AI, signing out, which computer a call runs on, a plan at its limit, what a cloud computer keeps, what runs where, waking a computer that sleeps, and what a plan costs."
+description: "An agent's model calls can run on the plan of the person it works for (Claude, ChatGPT, Google AI through Antigravity, Grok, Cursor), through the plan's CLI on a computer of theirs: the providers, plans first and in the person's order, connecting plans in one flow (a computer readied, a missing CLI installed, signed in, tested), Your AI, signing out, which computer a call runs on, a plan at its limit, what a cloud computer keeps, what runs where, waking a computer that sleeps, and what a plan costs."
 section: Guides
 order: 6
 ---
 
 # Agents on people's own plans
 
-People who pay for a plan (Claude, ChatGPT, Google AI, Grok) can have their agents run on it instead
-of on the app's API key. The plan's CLI does the model call on a computer of theirs: Claude Code,
-Codex, Antigravity or Grok Build. It is signed in once there, and serves every conversation and
-space of theirs in the org. (ChatGPT also runs on the server, with no computer: the accounts
-plugin's `chatgpt`.)
+People who pay for a plan (Claude, ChatGPT, Google AI, Grok, Cursor) can have their agents run on it
+instead of on the app's API key. The plan's CLI does the model call on a computer of theirs: Claude
+Code, Codex, Antigravity, Grok Build, or Cursor's SDK. It is signed in once there, and serves every
+conversation and space of theirs in the org. (ChatGPT also runs on the server, with no computer: the
+accounts plugin's `chatgpt`.)
 
 The CLI is only the engine. The agent stays the app's own: its instructions replace the CLI's, the
 CLI's built-in tools are off (files, shell, the web), and the agent's tools reach it from the
@@ -19,14 +19,21 @@ computer program, as MCP tools, and run where every tool runs, with the same rul
 
 ## The providers
 
-The computers plugin adds four model providers:
+The computers plugin adds five model providers:
 
-| Provider      | Runs on                     | The CLI     | Serves                     |
-| ------------- | --------------------------- | ----------- | -------------------------- |
-| `claude-plan` | the person's Claude plan    | Claude Code | Anthropic's models         |
-| `codex-plan`  | the person's ChatGPT plan   | Codex       | OpenAI's models            |
-| `gemini-plan` | the person's Google AI plan | Antigravity | Google's models            |
-| `grok-plan`   | the person's Grok plan      | Grok Build  | xAI's models (`grok-4.7`…) |
+| Provider      | Runs on                     | The CLI      | Serves                                                       |
+| ------------- | --------------------------- | ------------ | ------------------------------------------------------------ |
+| `claude-plan` | the person's Claude plan    | Claude Code  | Anthropic's models                                           |
+| `codex-plan`  | the person's ChatGPT plan   | Codex        | OpenAI's models                                              |
+| `gemini-plan` | the person's Google AI plan | Antigravity  | Google's models                                              |
+| `grok-plan`   | the person's Grok plan      | Grok Build   | xAI's models (`grok-4.7`…)                                   |
+| `cursor-plan` | the person's Cursor plan    | Cursor's SDK | the makers' models Cursor runs, and its own (`composer-2.5`) |
+
+Cursor has no CLI to drive: its SDK is installed into the folder the program keeps for it, and a
+small runner the program writes beside it runs it, with Node. Cursor's own prompt can't be replaced
+on most plans, so the agent's instructions go on top of it, as the one project rule of the session's
+folder (`.cursor/rules/agent.mdc`, always applied). It has none of Cursor's tools but MCP's: the
+agent's own.
 
 An agent may name one first, and an API model next for when it can't run:
 
@@ -64,11 +71,11 @@ plan at its limit hands over to the next entry at once, so to the next plan whil
   `serves` maps API ids, or a whole provider (`"anthropic/*"`), to the plan's own names (`"*"`: the
   same). `plan` is the plan people know it as ("ChatGPT"), shared by `chatgpt` and `codex-plan`.
 - **The order** is the plans' own until the person changes it: Claude Code (10), ChatGPT on the
-  server (20), Codex (30), Grok Build (40), Antigravity (50). The person reorders their plans with
-  `tiers.harnesses` `{ harnesses: ["codex-plan"] }`, kept on their own tier choice: theirs first,
-  the rest after. Their order ranks the plans that serve one model; the tier's model order still
-  comes first. `modelChoice.harnesses` lists the app's plans (those a tier's model runs on) in their
-  order, each with whether they have it.
+  server (20), Codex (30), Grok Build (40), Antigravity (50), Cursor (60). The person reorders their
+  plans with `tiers.harnesses` `{ harnesses: ["codex-plan"] }`, kept on their own tier choice:
+  theirs first, the rest after. Their order ranks the plans that serve one model; the tier's model
+  order still comes first. `modelChoice.harnesses` lists the app's plans (those a tier's model runs
+  on) in their order, each with whether they have it.
 - **Which they have** is asked on each turn, of the plugins that keep plans (the `connectedPlans`
   resource): their ChatGPT account, connected; a plan signed in on a computer of theirs that's on,
   or that wakes when asked (a cloud computer), and none while nobody's there. A stale answer costs
@@ -157,6 +164,9 @@ while (step.state === "running") {
 
 What runs is the app's own command for the plan (`curl -fsSL https://claude.ai/install.sh | bash`,
 `npm i -g @openai/codex`, Antigravity's and Grok Build's scripts), never one the caller gives.
+Cursor's is `npm install --prefix "$ENGINE_HOME" @cursor/sdk@1.5.0`: the program says where its
+folder is (`ENGINE_HOME`). Its sign-in is Cursor's: a link to sign in on Cursor's page, and nothing
+to paste back. It keeps a user API key Cursor makes for it (90 days), in that folder.
 
 ### A test, on the plan
 
@@ -195,11 +205,11 @@ welcome: {
 
 `computer.engine.logout` (Sign out on that computer, in the plan card's menu on Your AI) runs the
 CLI's own sign-out on that computer, in the folder the program keeps for it: `claude auth logout`,
-`codex logout`, `grok logout`. Their sign-ins are kept there, so when that fails the folder goes
-instead. The person's own sign-in (`~/.claude`, `~/.codex`) is never touched. Antigravity has no
-sign-out of its own here (its sign-in may be in the system's keyring): signing it out fails
-(`unsupported`), saying to sign out in Antigravity on that computer. A cloud computer wakes to sign
-out; a laptop must be on.
+`codex logout`, `grok logout`, and Cursor's runner's `logout`. Their sign-ins are kept there, so
+when that fails the folder goes instead. The person's own sign-in (`~/.claude`, `~/.codex`) is never
+touched. Antigravity has no sign-out of its own here (its sign-in may be in the system's keyring):
+signing it out fails (`unsupported`), saying to sign out in Antigravity on that computer. A cloud
+computer wakes to sign out; a laptop must be on.
 
 ```ts
 await runtime.call("computer.engine.logout", { computer, engine: "claude" }, { actor: person });
@@ -254,9 +264,10 @@ conversation is the truth, a session only saves time.
 A step whose stream breaks (the app redeployed, the network) comes back to the same answer, from
 where the step began.
 
-The computer program speaks the Agent Client Protocol to the CLIs: Antigravity speaks it itself, and
-the program's own adapters speak it for Claude Code, Codex and Grok Build. None of them is shipped
-with the program: people install the CLI they use, or Sign in installs it.
+The computer program speaks the Agent Client Protocol to the CLIs: Antigravity speaks it itself, the
+program's own adapters speak it for Claude Code, Codex and Grok Build, and Cursor's runner speaks it
+for Cursor's SDK. None of them is shipped with the program: people install the CLI they use, or Sign
+in installs it.
 
 ## Waking a computer
 
@@ -336,8 +347,14 @@ it is charged while it's awake."
 - Plans run at their CLI's own effort, whatever the chain says.
 - Grok Build reaches an agent's tools through its own search: a tool call takes it a few more model
   turns. Its built-in skills stay in its prompt. Grok keeps a copy of each session at xAI.
-- A computer program older than 1.0.0-rc.66 has no Grok Build: Sign in says it doesn't know it until
-  it updates.
+- A computer program older than 1.0.0-rc.66 has no Grok Build or Cursor: Sign in says it doesn't
+  know them until it updates.
+- Cursor's own prompt stays underneath the agent's instructions, which go on top of it as a rule.
+- A call on Cursor takes about 15,000 input tokens of the person's plan, its own prompt included.
+- Cursor needs Node 22.13 or later on the computer: cloud computers have it; on a laptop without it,
+  Cursor can't run.
+- What each agent's use of Cursor costs isn't available: only its tokens.
+- Installing Cursor's SDK by hand means into the program's folder for it: Sign in does it.
 - On a laptop, a CLI installed where the program doesn't look (npm's prefix under a version manager,
   not on the program's `PATH`) isn't found: the page then shows the command to run by hand.
 - A computer program older than 1.0.0-rc.65 neither installs a CLI nor signs one out. The connect

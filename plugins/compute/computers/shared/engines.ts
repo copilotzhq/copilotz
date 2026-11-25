@@ -1,6 +1,6 @@
 /**
  * Engines: a plan's CLI on a person's own computer (Claude Code, Codex,
- * Antigravity, Grok Build), which an agent's model call can run on instead of an API
+ * Antigravity, Grok Build; Cursor's SDK), which an agent's model call can run on instead of an API
  * key. The CLI is only the engine: the agent's instructions replace its
  * own, its built-in tools are off, and the agent's tools reach it from the
  * computer program (see program/agents/), where each engine keeps a home of
@@ -22,7 +22,7 @@ import { servingOrder } from "./serving.ts";
 import { type EngineStatus, type Failed, WORK } from "./workloads.ts";
 
 /** The engines a computer program runs, by its own name for each. */
-export const ENGINES = ["claude", "codex", "antigravity", "grok"] as const;
+export const ENGINES = ["claude", "codex", "antigravity", "grok", "cursor"] as const;
 export type EngineName = (typeof ENGINES)[number];
 
 /** What a computer last said of an engine (`computer.engines` keeps it on the computer). */
@@ -96,6 +96,7 @@ const PLAN: Record<EngineName, string> = {
   codex: "ChatGPT plan",
   antigravity: "Google AI plan",
   grok: "Grok plan",
+  cursor: "Cursor plan",
 };
 
 /**

@@ -360,6 +360,8 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.costHour` | one: About {price} per hour of work, and it sleeps {count} minute after. / other: About {price} per hour of work, and it sleeps {count} minutes after. |
 | `computers.costMonth` | This month: {awake} awake · {price} · disk {disk} |
 | `computers.costMonthNoDisk` | This month: {awake} awake · {price} |
+| `computers.cursorCli` | Cursor |
+| `computers.cursorTitle` | Cursor plan |
 | `computers.done` | Done |
 | `computers.dropTitle` | Drop to upload |
 | `computers.dropTo` | To {folder} on {computer} |
@@ -424,7 +426,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.output` | What {cli} says |
 | `computers.paletteConnect` | Connect your {plan} |
 | `computers.paletteGroup` | General |
-| `computers.paletteKeywords` | plan, subscription, sign in, computer, Claude, ChatGPT, Codex, Gemini, Google, Grok |
+| `computers.paletteKeywords` | plan, subscription, sign in, computer, Claude, ChatGPT, Codex, Gemini, Google, Grok, Cursor |
 | `computers.plansAbout` | Your agents run on AI plans you already pay for, instead of the app's models. Connect each one once, and it works in every conversation and space here. |
 | `computers.plansCloud` | A cloud computer you use for it is charged while it's awake. |
 | `computers.plansPaid` | Your plan pays for the AI. |

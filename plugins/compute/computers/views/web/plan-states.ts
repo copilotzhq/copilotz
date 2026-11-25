@@ -23,6 +23,7 @@ export const ENGINE_OF: Readonly<Record<string, EngineName>> = {
   "codex-plan": "codex",
   "gemini-plan": "antigravity",
   "grok-plan": "grok",
+  "cursor-plan": "cursor",
 };
 
 /** A CLI's name, as people know it. */
@@ -32,6 +33,7 @@ export const cliOf = (engine: EngineName): string =>
     codex: say("codexCli"),
     antigravity: say("antigravityCli"),
     grok: say("grokCli"),
+    cursor: say("cursorCli"),
   })[engine] ?? engine;
 
 /** A way into a plan: a CLI on a computer (`engine`), or a sign-in on the server (`account`). */
@@ -127,6 +129,7 @@ const titleOf = (engine: EngineName): string =>
     codex: say("codexTitle"),
     antigravity: say("antigravityTitle"),
     grok: say("grokTitle"),
+    cursor: say("cursorTitle"),
   })[engine];
 
 /** The ways the flow connects for each plan picked: its first, unless one was asked for. */

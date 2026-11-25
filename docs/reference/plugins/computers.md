@@ -127,8 +127,9 @@ Its Views show to the model.
 - **Front ends:** [`computers-terminal`](computers-terminal.md) and
   [`computers-web`](computers-web.md).
 - **What it adds to resources:** `connectedPlans` (`computers`), `context` (`computer`), `cost`
-  (`claude-plan/*`, `codex-plan/*`, `gemini-plan/*`, `grok-plan/*`), `provider` (`claude-plan`,
-  `codex-plan`, `gemini-plan`, `grok-plan`), `usageNames` (`computer`).
+  (`claude-plan/*`, `codex-plan/*`, `cursor-plan/*`, `gemini-plan/*`, `grok-plan/*`), `provider`
+  (`claude-plan`, `codex-plan`, `cursor-plan`, `gemini-plan`, `grok-plan`), `usageNames`
+  (`computer`).
 
 ## What it needs
 

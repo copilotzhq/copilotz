@@ -14,6 +14,10 @@
  * - `grok`: Grok Build, through our adapter (grok.ts), its home its `HOME`
  *   (with `GROK_HOME` in it: Grok reads the person's Claude Code and Cursor
  *   settings from their home too). It signs in with a device code.
+ * - `cursor`: a person's Cursor plan, which has no CLI: Cursor's SDK, which
+ *   Sign in installs into its home (`npm install`), run by a runner of ours
+ *   written beside it (cursor-runner.ts), with Node: an ACP agent itself,
+ *   and its own sign-in, status and sign-out. Its home is its `HOME`.
  *
  * A session works in a folder of its own under its engine's home, named by
  * its instructions (so a session loaded later is in the same one), and kept
@@ -44,6 +48,7 @@ import { fail } from "../workloads/answer.ts";
 import { childEnv, homeEnv, OWN, signalGroup, WINDOWS } from "../workloads/processes.ts";
 import { claude } from "./claude.ts";
 import { codex } from "./codex.ts";
+import { CURSOR_RUNNER } from "./cursor-runner.ts";
 import { grok } from "./grok.ts";
 import { agentError, spawnPeer } from "./rpc.ts";
 import type { Engine, Peer, Ran } from "./types.ts";
@@ -70,6 +75,7 @@ const CREDENTIALS = [
   "GOOGLE_APPLICATION_CREDENTIALS",
   "XAI_API_KEY",
   "GROK_DEPLOYMENT_KEY",
+  "CURSOR_API_KEY",
   "CLAUDECODE",
 ];
 
@@ -172,6 +178,33 @@ export const ENGINES: Record<string, Engine> = {
       };
     },
   },
+  cursor: {
+    name: "cursor",
+    // Cursor has no CLI: its SDK, in its home, run by our runner (cursor-runner.ts), with Node.
+    binary: "node",
+    places: (
+      user,
+    ) => [join(user, ".local", "bin", "node"), "/opt/homebrew/bin/node", "/usr/local/bin/node"],
+    homeEnv: (home) => ({ HOME: home }),
+    args: ["runner.mjs"],
+    needs: join("node_modules", "@cursor", "sdk", "package.json"),
+    prepare: (home) => writeWhole(join(home, "runner.mjs"), CURSOR_RUNNER),
+    version: ["runner.mjs", "version"],
+    login: ["runner.mjs", "login"],
+    logout: ["runner.mjs", "logout"],
+    async signedIn(run) {
+      const { stdout } = await run(["runner.mjs", "status"]);
+      try {
+        const said = JSON.parse(stdout.trim().split("\n").at(-1) ?? "");
+        return {
+          signedIn: said.signedIn === true,
+          ...(said.signedIn && said.account ? { account: String(said.account) } : {}),
+        };
+      } catch {
+        return { signedIn: false };
+      }
+    },
+  },
 };
 
 /** An engine found on this computer: its CLI, its home, its environment. */
@@ -256,6 +289,9 @@ export function createEngines(options: EnginesOptions): Engines {
     return env;
   };
 
+  /** An engine's own home on this computer. */
+  const homeOf = (name: string) => join(options.root, ".copilotz", "engines", name);
+
   const engineOf = (name: unknown): Engine => {
     if (typeof name !== "string" || !Object.hasOwn(ENGINES, name)) {
       fail(`Unknown engine "${name}": ${Object.keys(ENGINES).join(", ")}`);
@@ -279,8 +315,11 @@ export function createEngines(options: EnginesOptions): Engines {
     const engine = engineOf(name);
     const command = await commandOf(engine);
     if (!command) throw agentError("missing", `${engine.binary} isn't installed on this computer`);
-    const home = join(options.root, ".copilotz", "engines", engine.name);
+    const home = homeOf(engine.name);
     await mkdir(home, { recursive: true, mode: 0o700 });
+    if (engine.needs && !await access(join(home, engine.needs)).then(() => true, () => false)) {
+      throw agentError("missing", `${engine.name} isn't installed on this computer`);
+    }
     await engine.prepare?.(home);
     return { engine, command, home, env: { ...cleanEnv(), ...engine.homeEnv(home) } };
   };
@@ -370,7 +409,7 @@ export function createEngines(options: EnginesOptions): Engines {
       return { engine: name, installed: false, signedIn: false };
     }
     const [ran, signed] = await Promise.all([
-      run(found, ["--version"]),
+      run(found, found.engine.version ?? ["--version"]),
       signedIn(found).catch(() => ({ signedIn: false })),
     ]);
     const line = `${ran.stdout}\n${ran.stderr}`.trim().split("\n")[0] ?? "";
@@ -400,11 +439,14 @@ export function createEngines(options: EnginesOptions): Engines {
       ...OWN,
     });
 
-  /** Its official installer, in the computer's home (nothing to answer: it reads no input). */
-  const installer = (command: string) =>
+  /**
+   * Its official installer, in the computer's home, told the engine's own
+   * (`ENGINE_HOME`: Cursor's SDK goes there). Nothing to answer: it reads no input.
+   */
+  const installer = (command: string, engine: string) =>
     spawn("/bin/sh", ["-c", command], {
       cwd: user,
-      env: cleanEnv(),
+      env: { ...cleanEnv(), ENGINE_HOME: homeOf(engine) },
       stdio: ["ignore", "pipe", "pipe"],
       ...OWN,
     });
@@ -491,7 +533,7 @@ export function createEngines(options: EnginesOptions): Engines {
           .catch((error) => install ? undefined : fail(error.message, "missing"));
         login = found
           ? startLogin(signIn(found))
-          : startLogin(installer(install!), () => find(engine).then(signIn));
+          : startLogin(installer(install!, engine), () => find(engine).then(signIn));
         logins.set(engine, login);
       } else if (input.input && !login.done) {
         login.child.stdin?.write(input.input.endsWith("\n") ? input.input : `${input.input}\n`);

@@ -11,4 +11,6 @@ export const INSTALL: Record<EngineName, string> = {
   codex: "npm i -g @openai/codex",
   antigravity: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
   grok: "curl -fsSL https://x.ai/cli/install.sh | bash",
+  // Cursor's SDK, into the engine's own home (the program says where: ENGINE_HOME).
+  cursor: 'npm install --prefix "$ENGINE_HOME" --no-fund --no-audit @cursor/sdk@1.5.0',
 };

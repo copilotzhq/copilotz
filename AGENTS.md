@@ -156,6 +156,8 @@ It runs on Node 24+, Deno 2.9+ and Bun.
   [Plans first](docs/guides/agents-on-peoples-plans.md#plans-first).
 - Run agents on a person's Grok plan → `grok-plan`, engine `grok` →
   [The providers](docs/guides/agents-on-peoples-plans.md#the-providers).
+- Run agents on a person's Cursor plan → `cursor-plan`, engine `cursor` (Cursor's SDK, with Node) →
+  [The providers](docs/guides/agents-on-peoples-plans.md#the-providers).
 - Connect a person's plans without a terminal → the connect flow, `/accounts?connect=<plan>` →
   [Connecting plans: one flow](docs/guides/agents-on-peoples-plans.md#connecting-plans-one-flow).
 - Ready a computer for plans (woken, updated, checked) → `computer.prepare` →

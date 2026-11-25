@@ -237,10 +237,10 @@ test("what pays: their plan for the AI; a cloud computer, where the app has them
 
 test("with tiers: the plans they list, ways of a plan as one card, in the person's order; the order to change", () => {
   const plans = plansOf(LISTED, [CHATGPT]);
-  // Cursor's way in isn't one this front end connects: left out.
   assertEquals(plans.map((p) => [p.plan, p.ways.map((w) => w.provider)]), [
     ["Claude plan", ["claude-plan"]],
     ["ChatGPT plan", ["chatgpt", "codex-plan"]],
+    ["Cursor plan", ["cursor-plan"]],
   ]);
   assertEquals(plans[1].ways[0], {
     provider: "chatgpt",
@@ -816,7 +816,7 @@ test("its words are the app's: nothing English left once they're all given", () 
     ].join(" ")
       // What the app's tiers and accounts say (the app words them: `text.<English>`), and names.
       .replace(
-        /Claude plan|ChatGPT plan, through Codex|ChatGPT plan|ChatGPT|Google AI plan, through Antigravity/g,
+        /Claude plan|ChatGPT plan, through Codex|ChatGPT plan|ChatGPT|Google AI plan, through Antigravity|Cursor plan/g,
         "",
       )
       .replace(/MacBook|Cloud computer|Studio PC|ana@example\.com|Plus|Acme/g, "");

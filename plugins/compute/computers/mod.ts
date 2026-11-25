@@ -22,15 +22,17 @@
  * there from the computer's page (`PUT /computers/upload`, streamed through
  * to it: routes/upload.ts), where they may change it (`computer.upload`).
  *
- * A computer also runs its owner's plans: Claude Code, Codex, Antigravity or
- * Grok Build, signed in there once (`computer.prepare` readies the computer:
- * awake, on the app's release, its CLIs as they are; `computer.engines`,
- * `computer.engine.login`, out with `computer.engine.logout`), so an agent's
- * model calls for them run on their plan, through the CLI, instead of on an
- * API key (the `claude-plan`, `codex-plan`, `gemini-plan` and `grok-plan`
- * providers, see resources/engines.ts and shared/engines.ts). The CLI is
- * only the engine: the agent's instructions replace its own, its built-in
- * tools are off, and the agent's tools reach it from the computer program.
+ * A computer also runs its owner's plans: Claude Code, Codex, Antigravity,
+ * Grok Build or Cursor (its SDK), signed in there once (`computer.prepare`
+ * readies the computer: awake, on the app's release, its CLIs as they are;
+ * `computer.engines`, `computer.engine.login`, out with
+ * `computer.engine.logout`), so an agent's model calls for them run on their
+ * plan, through the CLI, instead of on an API key (the `claude-plan`,
+ * `codex-plan`, `gemini-plan`, `grok-plan` and `cursor-plan` providers, see
+ * resources/engines.ts and shared/engines.ts). The CLI is only the engine:
+ * the agent's instructions replace its own (on Cursor, they go on top of its
+ * own, as a rule), its built-in tools are off, and the agent's tools reach
+ * it from the computer program.
  * Each is a person's plan to the models plugin (`harness`), and
  * `computer.connected` (trusted code only) says which they've signed in.
  *

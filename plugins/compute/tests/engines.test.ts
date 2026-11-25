@@ -268,6 +268,14 @@ test("which plans someone has connected: signed in on a computer of theirs that'
       }),
       plansOnly,
     );
+    // Cursor serves every maker's it names, by the same names (not GPT-6 Luna), and its own.
+    assertEquals(
+      await s.rt.call("models.check", {
+        model: { model: [...plansOnly, "cursor-plan/composer-2.5"], harnesses: ["cursor-plan"] },
+        port: "llm",
+      }),
+      ["cursor-plan/claude-haiku-5-5", "cursor-plan/composer-2.5"],
+    );
   });
 });
 

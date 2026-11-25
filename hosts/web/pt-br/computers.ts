@@ -37,6 +37,8 @@ export const computers: Words = {
   },
   "computers.costMonth": "Este mês: {awake} acordado · {price} · disco {disk}",
   "computers.costMonthNoDisk": "Este mês: {awake} acordado · {price}",
+  "computers.cursorCli": "Cursor",
+  "computers.cursorTitle": "Plano do Cursor",
   "computers.done": "Pronto",
   "computers.dropTitle": "Solte para enviar",
   "computers.dropTo": "Para {folder} em {computer}",
@@ -78,7 +80,7 @@ export const computers: Words = {
   "computers.output": "O que o {cli} diz",
   "computers.paletteGroup": "Geral",
   "computers.paletteKeywords":
-    "plano, assinatura, entrar, login, computador, Claude, ChatGPT, Codex, Gemini, Google, Grok",
+    "plano, assinatura, entrar, login, computador, Claude, ChatGPT, Codex, Gemini, Google, Grok, Cursor",
   "computers.plansAbout":
     "Seus agentes rodam nos planos de IA que você já paga, em vez dos modelos do app. " +
     "Conecte cada um uma vez, e ele vale em todas as conversas e espaços daqui.",

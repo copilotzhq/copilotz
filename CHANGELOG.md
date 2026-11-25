@@ -1,9 +1,9 @@
 ## 1.0.0-rc.66 — 2026-11-26
 
 Agents run on the plans people already pay for, before the app's API. For each model a tier names, a
-person's connected plans come first, in their own order, and Grok Build joins Claude Code, Codex and
-Antigravity. A person connects their plans in one flow, with no terminal and a button for every
-failure, from Your AI, which replaces Connected accounts. A tier is priced at what the person
+person's connected plans come first, in their own order, and Grok Build and Cursor join Claude Code,
+Codex and Antigravity. A person connects their plans in one flow, with no terminal and a button for
+every failure, from Your AI, which replaces Connected accounts. A tier is priced at what the person
 looking would run, a cloud computer says what it costs, and a call that wakes one says so. Rare
 cases are known limits, listed below, not code.
 
@@ -45,6 +45,14 @@ cases are known limits, listed below, not code.
   offers it tools of its own fails before the model acts. It signs in by device code, reports its
   status with `grok models`, signs out with its own `grok logout` and installs with its official
   installer. It serves xAI's models by their own names, at no cost to the app.
+- **Cursor: `cursor-plan`.** A fifth engine, `cursor`, on a person's Cursor plan, which has no CLI:
+  Cursor's SDK (`@cursor/sdk@1.5.0`), installed into the engine's home by Sign in, run with Node by
+  a runner the program writes beside it, an ACP agent itself. A session is a Cursor local agent with
+  none of Cursor's tools but MCP's, the session's MCP server alone, resumed in a later process. The
+  agent's instructions go on top of Cursor's own prompt, as the session folder's one rule
+  (`.cursor/rules/agent.mdc`, always applied). Its sign-in is Cursor's (a link, nothing pasted
+  back): a user API key kept in its home. It serves the makers' models Cursor runs by the same names
+  (Claude, GPT-5.x, Gemini 4, Grok 4.x), last among a person's plans (60), at no cost to the app.
 - **One connect flow.** "Connect your plans" opens for the plans its door picked: a plan's card on
   Your AI (Connect, Fix), the address `/accounts?connect=<plan or provider>` (every fix-it link), or
   a step of the app's welcome, which picks several at once. It asks where the plans run only when
@@ -128,6 +136,9 @@ cases are known limits, listed below, not code.
   - Antigravity serves Google's models; others once their names are checked.
   - Grok Build reaches an agent's tools through its own search (a few more model turns), keeps its
     built-in skills in its prompt, and keeps a copy of each session at xAI.
+  - Cursor's own prompt stays underneath the agent's instructions; a call takes about 15,000 input
+    tokens of the person's plan; it needs Node 22.13 or later on the computer; what each agent's use
+    costs isn't available, only its tokens.
 - **Connecting plans:**
   - On Windows a plan's CLI is installed from the computer's Terminal: the flow shows its command.
   - "On this computer" needs one line in its terminal, once: the program's download isn't signed

@@ -21,6 +21,7 @@ import {
 } from "../../../../../hosts/web/mod.ts";
 import { byDay, lastOf, type Listed, matches, titleOf } from "./listed.ts";
 import { moveStep } from "./move.tsx";
+import { renameStep } from "./rename.tsx";
 import { STYLE } from "./style.ts";
 import { say } from "./words.ts";
 
@@ -157,11 +158,18 @@ function Row(
           label={say("rowMore", { title })}
           align="end"
           size="sm"
-          items={[{
-            label: say("moveToSpace"),
-            icon: "move",
-            onSelect: () => openPalette(moveStep({ thread: t._id, title, from: t.in, call })),
-          }]}
+          items={[
+            {
+              label: say("rename"),
+              icon: "pencil",
+              onSelect: () => openPalette(renameStep({ thread: t._id, title, call })),
+            },
+            {
+              label: say("moveToSpace"),
+              icon: "move",
+              onSelect: () => openPalette(moveStep({ thread: t._id, title, from: t.in, call })),
+            },
+          ]}
         />
       </span>
     </li>

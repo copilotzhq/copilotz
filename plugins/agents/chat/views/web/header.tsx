@@ -2,7 +2,7 @@
  * A chat's header: what it's about, the space it's in (a link to its page),
  * and who's in it (agents as they're named, with their emoji); what the
  * chat offers beside it (`tools`: its staff notes' button); its menu, to
- * move it to another space (the command palette's space picker, then who'll
+ * rename it, move it to another space (the command palette's space picker, then who'll
  * see it there) or start another chat there. On a phone, a way to start
  * another (the sidebar is tucked away there). Its end keeps clear of what
  * the shell puts at the page's top right (`--copilotz-inset-end`: the side
@@ -20,6 +20,7 @@ import {
   Title,
 } from "../../../../../hosts/web/mod.ts";
 import { moveStep } from "./move.tsx";
+import { renameStep } from "./rename.tsx";
 import { say } from "./words.ts";
 
 /** Someone in a chat, as it shows: an agent by its name and emoji; a person, with their picture. */
@@ -96,6 +97,11 @@ export function Header(
         label={say("chatMore")}
         align="end"
         items={[
+          {
+            label: say("rename"),
+            icon: "pencil",
+            onSelect: () => openPalette(renameStep({ thread, title, call })),
+          },
           {
             label: say("moveToSpace"),
             icon: "move",

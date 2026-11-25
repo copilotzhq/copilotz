@@ -48,6 +48,7 @@ export const say = defineWords("chat", {
   openSpace: "Open {space}",
   inThisChat: "In this chat: {names}",
   chatMore: "This chat: more",
+  rename: "Rename…",
   moveToSpace: "Move to another space…",
   // Messages
   messages: "Messages",
@@ -206,6 +207,7 @@ export const say = defineWords("chat", {
   // The command palette
   thisChat: "this chat",
   thisChatGroup: "This chat",
+  renameThisChat: "Rename this chat…",
   moveThisChat: "Move this chat to another space…",
   chats: "Chats",
   create: "Create",
@@ -213,8 +215,14 @@ export const say = defineWords("chat", {
   newChatIn: "New chat in…",
   findSpace: "Find a space",
   keywordSpace: "space",
+  keywordTitle: "change title",
   keywordStart: "start",
   keywordConversation: "conversation",
+  renameTitle: "Rename “{title}”",
+  renamePlaceholder: "Its new title",
+  renameNote: "Everyone who sees this chat sees its new title.",
+  renameTo: "Rename to “{title}”",
+  titleAtMost: "At most {count} characters",
   moveTitle: "Move “{title}” to…",
   moveNote: "Its messages, files and subthreads go with it, for the people in that space to see.",
   // Moving: who'll see it, before it's done

@@ -2,6 +2,10 @@
 
 **New:**
 
+- **Renaming a chat** (`chat.rename`): "Rename…" in its header's menu, a chat list's row and the
+  command palette, its title ready to type over. A person who may write in its space renames it, for
+  everyone there; its staff notes take the title too, and an agent that might have named it (a
+  routine's run) no longer does.
 - **The models catalog, refreshed from models.dev:** GPT-6.2 Astra and GPT-6.2 Sol, with their
   prices, among others; models.dev's retired ones are gone (none Copilotz names).
 

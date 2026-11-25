@@ -3944,6 +3944,41 @@
           "internal": true
         },
         {
+          "name": "chat.rename",
+          "summary": "Renames a conversation",
+          "input": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "type": "string",
+                "minLength": 1
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              }
+            },
+            "required": [
+              "thread",
+              "title"
+            ],
+            "additionalProperties": false
+          },
+          "recorded": true,
+          "private": [],
+          "callers": {
+            "person": "yes",
+            "agent": "no",
+            "contact": "no",
+            "anonymous": "no",
+            "key": "no",
+            "routine": "no",
+            "maintenance": "no"
+          },
+          "helper": "inPerson"
+        },
+        {
           "name": "chat.say",
           "summary": "An agent's fixed message in a chat, with files if any, without a model call",
           "input": {

@@ -96,6 +96,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.keywordConversation` | conversation |
 | `chat.keywordSpace` | space |
 | `chat.keywordStart` | start |
+| `chat.keywordTitle` | change title |
 | `chat.kilobytes` | {n} KB |
 | `chat.latestAreHere` | The latest {count} are here. |
 | `chat.latestChats` | Latest chats |
@@ -178,6 +179,12 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.recordingStopped` | The recording stopped unexpectedly. Try again. |
 | `chat.recordVoice` | Record a voice message |
 | `chat.remove` | Remove {name} |
+| `chat.rename` | Rename… |
+| `chat.renameNote` | Everyone who sees this chat sees its new title. |
+| `chat.renamePlaceholder` | Its new title |
+| `chat.renameThisChat` | Rename this chat… |
+| `chat.renameTitle` | Rename “{title}” |
+| `chat.renameTo` | Rename to “{title}” |
 | `chat.result` | Result |
 | `chat.retry` | Retry |
 | `chat.retrying` | Retrying… |
@@ -217,6 +224,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.thisMonth` | This month |
 | `chat.thisWeek` | This week |
 | `chat.timeLeft` | {time} left |
+| `chat.titleAtMost` | At most {count} characters |
 | `chat.to` | to |
 | `chat.today` | Today |
 | `chat.tooShort` | That was too short to send. Hold on a moment longer. |

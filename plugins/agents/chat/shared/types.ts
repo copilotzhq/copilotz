@@ -112,6 +112,9 @@ export type Offer =
   | string[]
   | ((agent: string, thread: Thread, ctx: ViewContext) => boolean);
 
+/** The longest title a chat takes: given as it starts (`chat.send`, `chat.open`) or after (`chat.rename`). */
+export const LONGEST_TITLE = 120;
+
 /** What a tool's code reaches: the runtime, and whose turn it runs in. */
 /** A message's `via` when it's handed from one space to another, either way. */
 export const DELEGATED = "delegated";

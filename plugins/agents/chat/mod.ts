@@ -51,6 +51,9 @@
  *   everything in it; not while an agent is writing in it. Moving it is
  *   sharing it: front ends say first who'll see it there and what it drew
  *   on (`thread.moving`, from its messages' `drew`).
+ * - A person renames a conversation (`chat.rename`), from its header's menu,
+ *   a list's row or the palette; its notes take the title too, and an agent
+ *   that might have named it (`renamable`) no longer does.
  * - A chat shared with someone outside its space (a contact's) has notes
  *   beside it (`chat.notes`): a thread of its own in the same space, made
  *   the first time it's asked for, where its people work with agents about
@@ -119,6 +122,7 @@ import { forgetGrantAction } from "./actions/forget-grant.ts";
 import { forkAction } from "./actions/fork.ts";
 import { importAction } from "./actions/import.ts";
 import { moveAction } from "./actions/move.ts";
+import { renameAction } from "./actions/rename.ts";
 import { notesAction } from "./actions/notes.ts";
 import { unmarkAction } from "./actions/unmark.ts";
 import { openAction } from "./actions/open.ts";
@@ -216,6 +220,7 @@ export const chat: Plugin = definePlugin({
     "chat.fork": forkAction,
     "chat.stop": stopAction,
     "chat.move": moveAction,
+    "chat.rename": renameAction,
     "chat.notes": notesAction,
     "chat.unmark": unmarkAction,
     "chat.import": importAction,

@@ -15,6 +15,7 @@ import { AudioPlayer } from "../toolkit/audio-player.tsx";
 import { CodeBlock } from "../toolkit/code-block.tsx";
 import { CopyButton } from "../toolkit/copy-button.tsx";
 import { DetailValue } from "../toolkit/detail-value.tsx";
+import { ConfirmDialog } from "../toolkit/confirm-dialog.tsx";
 import { Dialog } from "../toolkit/dialog.tsx";
 import { Drawer } from "../toolkit/drawer.tsx";
 import { Formula } from "../toolkit/formula.tsx";
@@ -22,6 +23,7 @@ import { humanize } from "../toolkit/humanize.ts";
 import { InlineEdit } from "../toolkit/inline-edit.tsx";
 import { LongText } from "../toolkit/long-text.tsx";
 import { Markdown } from "../toolkit/markdown/markdown.tsx";
+import { RecordDialog } from "../toolkit/record-dialog.tsx";
 import { Terminal } from "../toolkit/terminal.tsx";
 import { Time } from "../toolkit/time.tsx";
 import { ago } from "../toolkit/ago.ts";
@@ -61,6 +63,9 @@ function screens(): ReactNode[] {
     <DetailValue value={1234567} />,
     <Dialog open={true} onClose={() => {}} title="Ana">body</Dialog>,
     <Drawer open={true} onClose={() => {}} label="Menu">body</Drawer>,
+    <ConfirmDialog title="Ana" danger onConfirm={() => {}} onClose={() => {}} />,
+    <ConfirmDialog title="Ana" onConfirm={() => {}} onClose={() => {}} />,
+    <RecordDialog title="Ana" onSave={() => {}} onClose={() => {}}>{() => null}</RecordDialog>,
     <Formula tex="x^2" pending />,
     <Formula tex="x^2" />,
     <InlineEdit value="Ana" label="Name" save={async () => {}} done={() => {}} />,

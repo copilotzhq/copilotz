@@ -1,6 +1,6 @@
 ---
 title: "The web toolkit"
-description: "The pieces web front ends are made of, laid out and themed without CSS: layout, forms, table exports and totals, dates, bars, toasts, shortcuts, printing, PDF logos, Code 39, Code 128 and EAN barcodes, a route's own page and a sign-in (`Screen`), and every token a theme sets."
+description: "The pieces web front ends are made of, laid out and themed without CSS: layout, forms, confirmations, records in dialogs and refused fields, table exports and totals, dates, bars, toasts, shortcuts, printing, PDF logos, Code 39, Code 128 and EAN barcodes, a route's own page and a sign-in (`Screen`), and every token a theme sets."
 section: Guides
 order: 8
 ---
@@ -266,7 +266,235 @@ const { inForm } = useFormSubmit(() => (valid(rows) ? { hours: rows } : false));
 
 **Dialogs:** `Dialog` is the browser's modal `<dialog>`. `placement="top"` opens it near the top
 instead of centred, and `focus="dialog"` gives the focus to the dialog itself rather than its first
-field (Tab then goes to it). `size` is `sm`, `md`, `lg` or `auto`.
+field (Tab then goes to it). `size` is `sm`, `md`, `lg` or `auto`. `busy` (a save it started is
+under way) keeps it open: Escape, a press on the backdrop and its × wait, and it says so
+(`aria-busy`). `role="alertdialog"` is for one that interrupts to ask, and `aria-describedby` names
+what describes it when that isn't its `description`. `isolated` makes its close and Escape its own:
+React passes a dialog's `close` and `cancel` up through the components, so without it a dialog shown
+inside another (a confirmation over a form) closing closes the outer one too. `ConfirmDialog`,
+`useConfirm`'s questions and `RecordDialog` are isolated always: dismissing one never closes the
+`Dialog` or `Drawer` it's shown in.
+
+## Confirming an action
+
+A delete, or anything that can't be undone, asks first. `useConfirm()` asks from a handler: draw its
+`dialog` once in the component, then `await confirm({ … })`. It's `true` once confirmed, and `false`
+when cancelled.
+
+```tsx
+import { IconButton, useConfirm } from "copilotz/web";
+
+/** A customer's Delete, in their row: asks, then deletes. */
+export function DeleteCustomer({ customer, remove }: {
+  customer: { _id: string; name: string };
+  remove(): Promise<unknown>;
+}) {
+  const [dialog, confirm] = useConfirm();
+  return (
+    <>
+      <IconButton
+        icon="trash"
+        label={`Delete ${customer.name}`}
+        size="sm"
+        onClick={() =>
+          confirm({
+            title: `Delete ${customer.name}?`,
+            message: "Their visits stay, under their name. This can't be undone.",
+            danger: true,
+            toast: "Customer deleted.",
+            onConfirm: remove,
+          })}
+      />
+      {dialog}
+    </>
+  );
+}
+```
+
+- **`onConfirm`** runs once it's confirmed, and may be async. While it runs, the confirm button is
+  busy, Cancel waits, and Escape and the backdrop do nothing. A throw shows its words in the dialog
+  (`toolkit.notDone`, "It wasn't done. Try again.", when it has none), which stays open to try again
+  or cancel. Done, the dialog says `toast` and closes. Without `onConfirm`, confirming just closes
+  it, and the caller acts on `true`.
+- **`danger`** makes the button destructive and its words "Delete" (`toolkit.delete`; otherwise
+  "Confirm", `toolkit.confirm`), and gives Cancel the focus, so Enter never deletes. Without it,
+  Confirm has the focus. `confirmLabel` and `cancelLabel` change the words; `message` describes the
+  question; `children` go under it (what's affected).
+- **The questions belong to the component.** They show one at a time, in order. When the component
+  goes (its row deleted, the screen left) or stops drawing `{dialog}`, a question still waiting is
+  answered `false` and never shows again. One whose `onConfirm` runs is answered by how it ends, and
+  says so with a toast: `toast` when it's done, its words when it failed. Asking with no `{dialog}`
+  ever drawn rejects, so the mistake shows. `confirm` is the same function on every render.
+
+**`ConfirmDialog`** is the same question as a component: a dialog View at an address
+(`/customers/12/delete`), or one the screen's state opens. It's open while `open` (`true` by
+default); `onConfirm` is what confirming does, and `onClose` says it's done (cancelled, or confirmed
+and done), once. Closing it yourself (`open={false}`, or not drawing it) calls nothing. **One
+element is one question**: give it the `key` of what it asks about, so that when the address moves
+to another record the question is a new one. An operation whose question has gone (closed, reopened,
+or replaced by a new `key`) closes nothing, and its outcome is a toast.
+
+A question ends once, cancelled or done, and until its owner closes it, it takes no more actions.
+What it does is what it shows: its actions use the props it was last drawn with on the screen, never
+those of a render React didn't commit (a transition that suspended).
+
+```tsx
+<ConfirmDialog
+  key={customer._id}
+  title={`Delete ${customer.name}?`}
+  message="Their visits stay, under their name."
+  danger
+  toast="Customer deleted."
+  onConfirm={() => customers.deleteOne({ _id: customer._id })}
+  onClose={() => go(back)}
+/>;
+```
+
+Both are an `alertdialog`, named by the title and described by the message, and give the focus back
+to what opened them.
+
+## A record in a dialog
+
+`RecordDialog` adds a record, or edits one: a `Dialog` holding a `Form`, with Cancel and Save. Its
+children are a function of `form`, whose binders tie each control to a field of the record. It keeps
+a draft of what was edited, over the record as the View reads it, so a field nobody touched always
+shows its newest value. Save gives `onSave` a change of only what changed.
+
+```tsx
+import { DatePicker, Field, Input, RecordDialog } from "copilotz/web";
+
+<RecordDialog<Customer>
+  title={customer ? customer.name : "New customer"}
+  record={customer}
+  defaults={{ since: today }}
+  errors={{ name: "Give the customer's name.", email: "That email address isn't complete." }}
+  toast="Customer saved."
+  onSave={(change) =>
+    change.kind === "create"
+      ? customers.insertOne(change.values)
+      : customers.updateOne({ _id: change._id }, change.update)}
+  onClose={close}
+>
+  {(form) => (
+    <>
+      <Field layout="row" label="Name" required error={form.error("name")}>
+        {(control) => <Input {...control} {...form.text("name")} required />}
+      </Field>
+      <Field layout="row" label="Email" error={form.error("email")}>
+        {(control) => <Input {...control} {...form.text("email")} type="email" />}
+      </Field>
+      <Field layout="row" label="Visits a year" error={form.error("visits")}>
+        {(control) => <Input {...control} {...form.number("visits")} min={0} />}
+      </Field>
+      <Field layout="row" label="Customer since" htmlFor="since" error={form.error("since")}>
+        <DatePicker id="since" {...form.value("since")} today={today} format={dayFormat} />
+      </Field>
+    </>
+  )}
+</RecordDialog>;
+```
+
+- **Binders**, by field name or dot path (`address.city`), each spread on its control:
+  `form.text(name)` for an `Input`, a `Textarea` or a `Select`; `form.number(name)` for a number
+  `Input` (`type="number"`, any step: its text while typed, a number once saved);
+  `form.checked(name)` for a `Checkbox` or a `Switch`; `form.radio(name, option)` for each `Radio`;
+  `form.value(name)` for a control that gives its value (`Picker`, `DatePicker`, `DateTimePicker`);
+  `form.list(name)` for several values (`TagsInput`, `MultiPicker`). A control of the app's own uses
+  `form.get(name)` and `form.set(name, value)`. `form.record` is the record as the form shows it,
+  and `form.saving` says a save is under way. Bind each field once; `_id` isn't a field.
+- **A new record** (no `record`): `onSave` gets `{ kind: "create", values }`, the `defaults` with
+  the edits, for `insertOne(change.values)`. TypeScript calls it the record's type, but the browser
+  doesn't check that: the collection's schema does, on insert.
+- **A stored record**: `onSave` gets `{ kind: "update", _id, set, unset, update, record }`, only
+  what changed:
+  - a field nobody touched is never in it, nor a field with no control, so a newer value someone
+    else saved stays;
+  - an edit back to the stored value isn't either;
+  - a field given a value is in `set`;
+  - **a text, number or choice emptied is a clear**, in `unset` (clearing a field that holds
+    nothing, `null` or `""` changes nothing);
+  - **a list emptied is `[]`**, a value, in `set` unless the record holds `[]` already (`[]` over
+    `null` is sent); a checkbox is `true` or `false`, and unchecked over nothing changes nothing;
+  - `update` is the same as a MongoDB update (`$set`, `$unset`), for
+    `updateOne({ _id: change._id }, change.update)`. To keep `null` for a cleared field, set `null`
+    for each name in `unset`. An Action takes `set` and `unset` as its input.
+- **Nothing changed**: `onSave` isn't called, and the dialog just closes.
+- **Parts**: a `useFormSubmit` part shown in the fields (another plugin's View) takes part in the
+  save; what it hands up goes over the edits, compared with the record as an edit is (a part handing
+  back the stored value writes nothing). The values are read when the save starts, after the parts,
+  so what was typed while a part uploaded is saved. In a dialog View, call `ctx.show` in the View's
+  body and put what it gives in the function.
+- **While it saves**, Save is busy, Cancel waits, and Escape and the backdrop do nothing; the fields
+  are left as they are. Done, it says `toast` and closes (`onClose`, once). Cancel, Escape, the
+  backdrop and × close it while nothing runs; closing it yourself (`open={false}`, or not drawing
+  it) calls nothing. A session ends once and tells `onClose` once: it then takes no more saves. Its
+  actions use the props it was last drawn with on the screen, never a render React didn't commit.
+- **Each record is a session of its own** (its `_id`, or a new one), and so is each time it opens: a
+  draft or a refusal never shows on another record. A save runs to its end in the session it started
+  in, with that record and its handlers. If the dialog moved to another record, closed or went
+  meanwhile, the save still happens, calls no `onClose` and shows nothing: a toast says how it
+  ended.
+- `saveLabel`, `cancelLabel`, `description`, `size`, `placement` (`top` by default) and `id` (the
+  form's) are as their names say. Focus goes to the first field, and back to what opened it.
+
+## Known limits
+
+The confirmations and the record dialog keep their guarantees on the common paths. These are the
+rarer ones they leave to the app:
+
+- What's typed while the save runs isn't in it; on success the dialog closes.
+- A part's value wins over an edit of the same field, even one typed while the part runs.
+- A field made invalid while a part runs isn't checked again; the schema refuses it.
+- A path through a list or a map that isn't there yet (`lines.0.qty`) makes an object: give it a
+  value in `defaults` or the record, or set it whole with `form.set`.
+- Don't put a `RecordDialog` inside a form, or a form in its fields: a submit goes to every form
+  around it.
+- Questions show one at a time: don't await another `confirm()` inside `onConfirm`.
+- Draw `useConfirm`'s `{dialog}` once.
+- If a browser closes a busy confirmation anyway, its answer comes when the operation ends. If it
+  closes a dialog just as its operation ends, the outcome may show in the closed dialog.
+- A `ConfirmDialog` given a new `key` while open gives the focus back to the page, not to the first
+  opener.
+- An app's own `Dialog` closing still closes an app's own dialog or `Drawer` around it, as in rc.64,
+  unless the outer one is an `isolated` `Dialog`.
+
+## Showing a refused field
+
+A save the schema refuses names the field in `detail.field` (`price`, `lines.0.qty`), and an
+Action's `failure` can too
+(`Object.assign(failure("invalid", "Give the name.", { public: true }), { detail: { field: "name" } })`).
+Its words are for developers, so a form says each field's refusal its own way.
+
+In a `RecordDialog`, give each `Field` its `error={form.error(name)}`, and `errors` the words by
+field. A refusal shows under the field that asks for it, or under a field that holds it (`lines` for
+`lines.0.qty`), in `errors`' words for it, else its own, and the focus goes to its control. A
+refusal no field asks for, or of no field, shows at the form's top. It goes when a new save starts,
+when its field is edited, and with the session.
+
+With a plain `Form`, catch it in `onSubmit`: `refusedField(error)` reads the field, and anything
+else thrown again shows at the form's top.
+
+```tsx
+const [refused, setRefused] = useState<{ field: string; words: string }>();
+const errorOf = (field: string) => (refused?.field === field ? refused.words : undefined);
+
+<Form
+  onSubmit={async (_values, form) => {
+    setRefused(undefined);
+    try {
+      await save(new FormData(form));
+    } catch (error) {
+      const field = refusedField(error);
+      if (!field) throw error;
+      setRefused({ field, words: SAYS[field] ?? (error as Error).message });
+    }
+  }}
+>
+  <Field label="Price" error={errorOf("price")}>
+    {(control) => <Input {...control} name="price" inputMode="decimal" />}
+  </Field>
+</Form>;
+```
 
 ## Tables and their files
 

@@ -717,8 +717,9 @@ named by the protocol it speaks. The [models page](reference/plugins/models.md) 
   Copilotz's values as defaults. The default fonts are served under `/assets/copilotz/`. A theme's
   own come from Google Fonts or from the app's `page.assets`.
 - **The toolkit:** front ends compose the host's pieces (`Button`, `DataTable`, `DateRangePicker`,
-  `Dialog`, `Stack`, `Grid`…) and write no CSS: the theme is their look. A route's own page uses
-  them too (`routePage` from `copilotz/web/server`, with `Screen` to centre a card in the window).
+  `Dialog`, `ConfirmDialog`, `EntityDialog`, `Stack`, `Grid`…) and write no CSS: the theme is their
+  look. An app's own components, made of them, live in `lib/`. A route's own page uses them too
+  (`routePage` from `copilotz/web/server`, with `Screen` to centre a card in the window).
   [The web toolkit](guides/the-web-toolkit.md) shows every piece and lists every token.
 - **Words:** every word the web front ends show is English by key (`chat.send`), and an app changes
   any with a `words` resource. The keys and their English are in

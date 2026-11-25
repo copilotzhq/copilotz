@@ -196,6 +196,8 @@ export {
   formatDayTime,
   TimeFields,
 } from "./toolkit/date-time-picker.tsx";
+// Typed day-times read back in the app's pattern, and the moment one names.
+export { dateOfDayTime, parseDayTime } from "./toolkit/dates.ts";
 export { LiveClock } from "./toolkit/live-clock.tsx";
 // Telling: a few seconds' word over the page.
 export {

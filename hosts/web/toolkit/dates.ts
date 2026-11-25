@@ -270,69 +270,140 @@ export function formatPattern(at: string | Moment, pattern: string, locale = "en
 
 const escaped = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** Words between a pattern's letters, as people type them: any spaces, and a comma or none. */
+const loosely = (text: string): string => escaped(text).replace(/\s+/g, "\\s*").replace(/,/g, ",?");
+
+/** The letters that write a time of day. */
+const TIME_LETTERS = new Set(["HH", "H", "hh", "h", "mm", "ss", "a"]);
+
+/** Whether a pattern writes a time of day (`HH:mm`, `h:mm a`), not only a day. */
+export const hasTime = (pattern: string): boolean =>
+  [...pattern.matchAll(TOKENS)].some(([token]) => TIME_LETTERS.has(token));
+
+/** What a pattern's letters read from text: a day's parts, and a time's (when it writes one). */
+type Read = {
+  year?: number;
+  month?: number;
+  day?: number;
+  hour?: number;
+  /** The hour was read on a 12-hour clock (`h`, `hh`). */
+  twelve?: boolean;
+  /** AM or PM, as typed. */
+  period?: string;
+  minute?: number;
+  second?: number;
+};
+
+/** A month (1–12) by its name in a language, any case, with or without its dot; 0 for none. */
+const monthNamed = (name: string, token: string, locale: string): number => {
+  const wanted = name.toLowerCase().replace(/\.$/, "");
+  return Array.from({ length: 12 }, (_, m) => m + 1).find((m) =>
+    formatPattern(dayOf(2000, m, 1), token, locale).toLowerCase().replace(/\.$/, "") === wanted
+  ) ?? 0;
+};
+
 /**
- * A day read from text written by a pattern (what `formatPattern` writes: `dd/MM/yyyy`,
- * `d MMM yyyy`, `yyyy-MM-dd`), or `undefined` when the text isn't a real day. Day and month take
- * one or two digits, `yyyy` four, `yy` two (20xx); month names are read in the language's, in any
- * case; weekday names are skipped. A pattern with no year, month or day can't be read.
+ * Text read by a pattern, letter by letter (see `formatPattern`), or `undefined` when it doesn't
+ * fit. Days and months take one or two digits, `yyyy` four, `yy` two; month names are the
+ * language's; weekday names are skipped. Hours, minutes and seconds take one or two digits, and
+ * seconds may be left out (with the words before them), or typed where the pattern has none.
  */
-export function parsePattern(text: string, pattern: string, locale = "en"): string | undefined {
+function readPattern(text: string, pattern: string, locale: string): Read | undefined {
   const order: string[] = [];
+  const tokens = [...pattern.matchAll(TOKENS)];
+  const seconds = tokens.some(([token]) => token === "ss");
   let source = "";
   let last = 0;
+  // Where the words since the last letter start, in `source`: what seconds left out take along.
+  let words = 0;
   const literal = (end: number) => {
-    source += escaped(pattern.slice(last, end)).replace(/\s+/g, "\\s*");
+    source += loosely(pattern.slice(last, end));
   };
-  for (const hit of pattern.matchAll(TOKENS)) {
+  const digits = (kind: string) => {
+    source += "(\\d{1,2})";
+    order.push(kind);
+  };
+  for (const hit of tokens) {
     literal(hit.index);
     last = hit.index + hit[0].length;
     const token = hit[0];
     if (token[0] === "'") {
-      source += escaped(token.slice(1, -1));
-    } else if (token === "yyyy") {
+      source += loosely(token.slice(1, -1));
+      continue;
+    }
+    if (token === "yyyy") {
       source += "(\\d{4})";
       order.push("y");
     } else if (token === "yy") {
-      source += "(\\d{2})";
+      // Two digits, or the whole year typed.
+      source += "(\\d{4}|\\d{2})";
       order.push("yy");
     } else if (token === "MMMM" || token === "MMM") {
       source += "(\\p{L}+\\.?)";
       order.push(token);
-    } else if (token === "MM" || token === "M") {
-      source += "(\\d{1,2})";
-      order.push("M");
-    } else if (token === "dd" || token === "d") {
-      source += "(\\d{1,2})";
-      order.push("d");
-    } else if (token === "EEEE" || token === "EEE") {
-      source += "\\p{L}+\\.?";
-    } else return undefined; // a time's letters: not a day
+    } else if (token === "MM" || token === "M") digits("M");
+    else if (token === "dd" || token === "d") digits("d");
+    else if (token === "EEEE" || token === "EEE") source += "\\p{L}+\\.?";
+    else if (token === "HH" || token === "H") digits("H");
+    else if (token === "hh" || token === "h") digits("h");
+    else if (token === "mm") {
+      digits("m");
+      // Seconds the pattern doesn't write may still be typed.
+      if (!seconds) {
+        source += "(?::(\\d{1,2}))?";
+        order.push("s");
+      }
+    } else if (token === "ss") {
+      // Seconds may be left out, and the words before them too.
+      source = `${source.slice(0, words)}(?:${source.slice(words)}(\\d{1,2}))?`;
+      order.push("s");
+    } else if (token === "a") {
+      source += "(\\p{L}+\\.?(?:\\s?\\p{L}+\\.?)?)";
+      order.push("a");
+    }
+    words = source.length;
   }
   literal(pattern.length);
-  if (!order.some((o) => o === "y" || o === "yy") || !order.includes("d")) return undefined;
-  if (!order.some((o) => o === "M" || o === "MMM" || o === "MMMM")) return undefined;
   const match = new RegExp(`^${source}$`, "iu").exec(text.trim());
   if (!match) return undefined;
-  let year = 0, month = 0, day = 0;
+  const read: Read = {};
   for (const [i, kind] of order.entries()) {
     const part = match[i + 1];
-    if (kind === "y") year = +part;
-    else if (kind === "yy") year = 2000 + +part;
-    else if (kind === "d") day = +part;
-    else if (kind === "M") month = +part;
-    else {
-      const wanted = part.toLowerCase().replace(/\.$/, "");
-      month = Array.from({ length: 12 }, (_, m) => m + 1).find((m) => {
-        const name = formatPattern(dayOf(2000, m, 1), kind, locale).toLowerCase();
-        return name.replace(/\.$/, "") === wanted;
-      }) ?? 0;
-    }
+    if (part === undefined) continue; // seconds left out
+    if (kind === "y") read.year = +part;
+    else if (kind === "yy") read.year = part.length === 4 ? +part : 2000 + +part;
+    else if (kind === "M") read.month = +part;
+    else if (kind === "MMM" || kind === "MMMM") read.month = monthNamed(part, kind, locale);
+    else if (kind === "d") read.day = +part;
+    else if (kind === "H") read.hour = +part;
+    else if (kind === "h") Object.assign(read, { hour: +part, twelve: true });
+    else if (kind === "m") read.minute = +part;
+    else if (kind === "s") read.second = +part;
+    else if (kind === "a") read.period = part;
   }
+  return read;
+}
+
+/** The day a reading names, if it's a real one: no February 30th, no 13th month. */
+const dayRead = ({ year, month, day }: Read): string | undefined => {
+  if (year === undefined || month === undefined || day === undefined) return undefined;
+  if (month < 1 || month > 12 || day < 1) return undefined;
   const result = dayOf(year, month, day);
-  return month >= 1 && month <= 12 && day >= 1 && isDay(result) && partsOf(result)[1] === month &&
-      partsOf(result)[2] === day
-    ? result
-    : undefined;
+  const [, m, d] = partsOf(result);
+  return isDay(result) && m === month && d === day ? result : undefined;
+};
+
+/**
+ * A day read from text written by a pattern (what `formatPattern` writes: `dd/MM/yyyy`,
+ * `d MMM yyyy`, `yyyy-MM-dd`), or `undefined` when the text isn't a real day. Day and month take
+ * one or two digits, `yyyy` four, `yy` two (20xx); month names are read in the language's, in any
+ * case; weekday names are skipped. A pattern with no year, month or day can't be read, nor one
+ * with a time's letters: `parseDayTime` reads those.
+ */
+export function parsePattern(text: string, pattern: string, locale = "en"): string | undefined {
+  if (hasTime(pattern)) return undefined;
+  const read = readPattern(text, pattern, locale);
+  return read && dayRead(read);
 }
 
 /** Whether a pattern shows seconds: a clock that doesn't ticks once a minute. */
@@ -508,4 +579,150 @@ export function nowIn(
     seconds ? m.minute : roundMinute(m.minute, step),
     seconds ? m.second : undefined,
   );
+}
+
+/** A word reduced to its letters, lower case: `"P.M."` and `"pm"` are one. */
+const letters = (text: string): string => text.toLowerCase().replace(/[^\p{L}]/gu, "");
+
+/** Whether typed text says PM (`true`) or AM (`false`), in a language or in English. */
+function afternoon(text: string, locale: string): boolean | undefined {
+  const said = letters(text);
+  const pm = letters(formatPattern("2000-01-01 21:00", "a", locale));
+  const am = letters(formatPattern("2000-01-01 09:00", "a", locale));
+  if (said === pm || said === "pm" || said === "p") return true;
+  if (said === am || said === "am" || said === "a") return false;
+  return undefined;
+}
+
+/** The page language's short date and time, as a pattern (`M/d/yyyy, h:mm:ss a`), by language. */
+const shortPatterns = new Map<string, string>();
+
+/**
+ * The pattern a language writes a short date and time by, read off a sample (`M/d/yyyy, h:mm:ss
+ * a` in English, `dd/MM/yyyy, HH:mm:ss` in Brazilian Portuguese): what a day-time field shows and
+ * reads when the app gives it no pattern of its own.
+ */
+export function dayTimePattern(locale = "en"): string {
+  const known = shortPatterns.get(locale);
+  if (known) return known;
+  const sample = new Date(Date.UTC(2003, 3, 5, 13, 6, 7));
+  const options = { dateStyle: "short", timeStyle: "medium", timeZone: "UTC" } as const;
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat(locale, options).formatToParts(sample);
+  } catch {
+    parts = new Intl.DateTimeFormat("en", options).formatToParts(sample);
+  }
+  const twelve = parts.some((part) => part.type === "dayPeriod");
+  const pattern = parts.map(({ type, value }) => {
+    const long = value.length === 2;
+    switch (type) {
+      case "year":
+        return long ? "yy" : "yyyy";
+      case "month":
+        return /^\d+$/.test(value) ? (long ? "MM" : "M") : "MMM";
+      case "day":
+        return long ? "dd" : "d";
+      case "hour":
+        return twelve ? (long ? "hh" : "h") : (long ? "HH" : "H");
+      case "minute":
+        return "mm";
+      case "second":
+        return "ss";
+      case "dayPeriod":
+        return "a";
+      case "literal":
+        return value ? `'${value.replaceAll("'", "")}'` : "";
+      default:
+        return "";
+    }
+  }).join("");
+  shortPatterns.set(locale, pattern);
+  return pattern;
+}
+
+/**
+ * A day and a time of it, read from text typed in the app's pattern, the inverse of
+ * `formatPattern` (and of `formatDayTime` with a pattern): `"16/11/2026 14:30:05"` by
+ * `dd/MM/yyyy HH:mm:ss` is `"2026-11-16 14:30:05"`, and `"11/16/2026 2:30 PM"` by
+ * `M/d/yyyy h:mm a` is `"2026-11-16 14:30"`. Day and month come in the pattern's order; hours
+ * are 0–23 (`HH`), or 1–12 with AM or PM (`hh`, `a`: the language's words, or English's).
+ * Seconds may be left out, or typed where the pattern has none; the value has them when the
+ * pattern writes them, or when they were typed. Spaces between the parts may differ, and a comma may be
+ * left out. Text that isn't a real day and time (February 30th, 25:00, 13 PM) is `undefined`.
+ *
+ * With no pattern, it reads the language's own short date and time (`dayTimePattern`), and a
+ * day-time as the toolkit keeps one (`2026-11-16 14:30`, or with a `T`). `locale` is the
+ * language of month names and AM and PM (English by default; the page's is `lang()`). For the
+ * moment it names, `dateOfDayTime`.
+ */
+export function parseDayTime(text: string, pattern?: string, locale = "en"): DayTime | undefined {
+  const typed = text.trim();
+  if (pattern === undefined) {
+    const kept = typed.replace(/^(\d{4}-\d{2}-\d{2})T/, "$1 ");
+    if (isDayTime(kept)) return kept;
+  }
+  const by = pattern ?? dayTimePattern(locale);
+  const read = readPattern(typed, by, locale);
+  const day = read && dayRead(read);
+  if (!read || !day || read.hour === undefined) return undefined;
+  let hour = read.hour;
+  if (read.twelve) {
+    const pm = read.period === undefined ? false : afternoon(read.period, locale);
+    if (hour < 1 || hour > 12 || pm === undefined) return undefined;
+    hour = (hour % 12) + (pm ? 12 : 0);
+  }
+  const minute = read.minute ?? 0;
+  if (hour > 23 || minute > 59 || (read.second ?? 0) > 59) return undefined;
+  // Seconds the app's pattern writes are always there; the language's, only when typed.
+  const second = read.second ?? (pattern !== undefined && showsSeconds(pattern) ? 0 : undefined);
+  return dayTimeOf(day, hour, minute, second);
+}
+
+/**
+ * A day-time pattern's day alone, what a field of the day shows: `dd/MM/yyyy HH:mm:ss` is
+ * `dd/MM/yyyy`, `d 'de' MMMM 'às' HH:mm` is `d 'de' MMMM`. A pattern of a day stays as it is.
+ */
+export function dayPatternOf(pattern: string): string {
+  const times = [...pattern.matchAll(TOKENS)].filter(([token]) => TIME_LETTERS.has(token));
+  if (!times.length) return pattern;
+  const last = times[times.length - 1];
+  const before = pattern.slice(0, times[0].index).replace(/(?:\s|[,;]|'[^']*')+$/, "");
+  const after = pattern.slice(last.index + last[0].length).replace(/^(?:\s|[,;]|'[^']*')+/, "");
+  return before && after ? `${before} ${after}` : before || after;
+}
+
+/** A moment's wall clock, in milliseconds as if it were UTC. */
+const wallOf = (m: Moment): number => {
+  const at = new Date(0);
+  at.setUTCFullYear(m.year, m.month - 1, m.day);
+  at.setUTCHours(m.hour, m.minute, m.second);
+  return at.getTime();
+};
+
+/**
+ * The moment a day-time (or a day, at its start) is in a time zone (the app's, IANA), as a
+ * `Date`: for what needs one, a timestamp to store or a time to count from
+ * (`dateOfDayTime("2026-11-16 14:30", "America/Sao_Paulo").toISOString()` is
+ * `"2026-11-16T17:30:00.000Z"`). Without a zone, the page's own. `undefined` for text that's
+ * neither.
+ */
+export function dateOfDayTime(value: string, timeZone?: string): Date | undefined {
+  const timed = isDayTime(value);
+  const day = timed ? value.slice(0, 10) : isDay(value) ? value : undefined;
+  if (!day) return undefined;
+  const { hour, minute, second = 0 } = timed ? partsOfDayTime(value) : { hour: 0, minute: 0 };
+  const [year, month, date] = partsOf(day);
+  if (!timeZone) {
+    const at = new Date(0);
+    at.setFullYear(year, month - 1, date);
+    at.setHours(hour, minute, second, 0);
+    return at;
+  }
+  const wall = wallOf({ year, month, day: date, hour, minute, second });
+  // The zone's offset at a moment is its wall clock there less the moment; twice, for a moment
+  // across a change of offset (summer time).
+  const offset = (at: number) => wallOf(momentIn(new Date(at), timeZone)) - at;
+  const first = wall - offset(wall);
+  return new Date(wall - offset(first));
 }

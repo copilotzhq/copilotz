@@ -4,7 +4,11 @@
  * field's text). What the form shows is those edits over the record as it is now. A save sends
  * only the edits that change something: an untouched field never goes, an edit back to the
  * record's value doesn't either, and a field emptied is a clear (`unset`). A list emptied is
- * the empty list, a value of its own.
+ * the empty list, a value of its own. What the form's parts hand up is compared the same way.
+ *
+ * Only plain data is walked: plain objects and arrays are copied and compared by what's in
+ * them; anything else (a `Date`, a `File`) is kept as it is, and a date compared by its time.
+ * A step that's a number (`lines.0.qty`) is a list's: where nothing is there, it makes a list.
  */
 import type { ReactNode } from "react";
 import { wordsOf } from "./form-submit.ts";
@@ -30,8 +34,15 @@ export type RecordUpdate =
 /** What changed in a stored record, if anything. */
 export type Changed = { set: Record<string, unknown>; unset: string[]; update: RecordUpdate };
 
-const isPlain = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+/** A plain object: `{…}` or one with no prototype, not a `Date`, a `File` or an array. */
+const isPlain = (value: unknown): value is Record<string, unknown> => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
+
+/** A step of a path that indexes a list. */
+const isIndex = (key: string) => /^(0|[1-9]\d*)$/.test(key);
 
 /** A path's own keys; one through `__proto__` or `constructor` reaches nothing. */
 const keysOf = (path: string): string[] | undefined => {
@@ -56,10 +67,13 @@ export function withValue<T>(record: T, path: string, value: unknown): T {
   const keys = keysOf(path);
   if (!keys) return record;
   const put = (at: unknown, [key, ...rest]: string[]): unknown => {
+    // Nothing there: a list when the step is a number (`lines.0`), an object otherwise.
     const copy: Record<string, unknown> = Array.isArray(at)
       ? [...at] as unknown as Record<string, unknown>
       : isPlain(at)
       ? { ...at }
+      : isIndex(key)
+      ? [] as unknown as Record<string, unknown>
       : {};
     if (rest.length) copy[key] = put(Object.hasOwn(copy, key) ? copy[key] : undefined, rest);
     else if (value === undefined) delete copy[key];
@@ -71,9 +85,13 @@ export function withValue<T>(record: T, path: string, value: unknown): T {
   return put(record, keys) as T;
 }
 
-/** Whether two values hold the same: arrays and plain objects by what's in them. */
+/**
+ * Whether two values hold the same: arrays and plain objects by what's in them, dates by their
+ * time, anything else only if it's the very same.
+ */
 export function same(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
+  if (a instanceof Date && b instanceof Date) return Object.is(a.getTime(), b.getTime());
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length === b.length && a.every((item, i) => same(item, b[i]));
   }
@@ -128,25 +146,42 @@ export function savedOf({ kind, raw }: Edit): unknown {
   }
 }
 
-/** Whether an edit's saved value changes the stored one. */
+/**
+ * Whether what an edit (or a part) saves changes the stored value. A clear changes a field that
+ * holds something (`undefined`, `null` and `""` hold nothing). A checkbox changes whether it's
+ * checked (a field with no value isn't). Any other value changes the field unless it's the same
+ * as what's stored, exactly: `[]` over `null` is a change.
+ */
 export function changes(kind: DraftKind, saved: unknown, stored: unknown): boolean {
-  // A checkbox is checked or not: a field with no value isn't checked.
   if (kind === "checked") return (saved === true) !== (stored === true);
-  // A clear over nothing changes nothing.
   if (saved === undefined) return !empty(stored);
-  if (kind === "list" && Array.isArray(saved) && saved.length === 0) {
-    return !(empty(stored) || (Array.isArray(stored) && stored.length === 0));
-  }
   return !same(saved, stored);
 }
 
 /** Whether a path is `_id`, which a save names in its filter and never sets. */
 const isId = (path: string) => path === "_id" || path.startsWith("_id.");
 
+/** The edits and the parts' values, as what each path saves: a part's value over an edit. */
+function finalOf(
+  edits: Edits,
+  handed: Record<string, unknown>,
+): Map<string, Edit & { saved: unknown }> {
+  const final = new Map<string, Edit & { saved: unknown }>();
+  for (const [path, edit] of Object.entries(edits)) {
+    if (!isId(path)) final.set(path, { ...edit, saved: savedOf(edit) });
+  }
+  for (const [path, value] of Object.entries(handed)) {
+    if (isId(path) || value === undefined) continue;
+    final.set(path, { kind: "set", raw: value, saved: value });
+  }
+  return final;
+}
+
 /**
- * What changed in a stored record: the edits that change it (`set`, or `unset` for a clear),
- * then what the form's parts handed up (set, over an edit of the same field). `undefined` when
- * nothing did.
+ * What changed in a stored record: the edits and the parts' values that change it (`set`, or
+ * `unset` for a clear). A path through a list the record doesn't have (`lines.0.qty`) sets that
+ * list whole, from the first step that isn't there, so the store makes a list, not an object.
+ * `undefined` when nothing changed.
  */
 export function updateOf(
   record: unknown,
@@ -155,17 +190,20 @@ export function updateOf(
 ): Changed | undefined {
   const set: Record<string, unknown> = {};
   const unset: string[] = [];
-  for (const [path, edit] of Object.entries(edits)) {
-    if (isId(path)) continue;
-    const value = savedOf(edit);
-    if (!changes(edit.kind, value, valueAt(record, path))) continue;
-    if (value === undefined) unset.push(path);
-    else set[path] = value;
-  }
-  for (const [key, value] of Object.entries(handed)) {
-    if (isId(key) || value === undefined) continue;
-    set[key] = value;
-    if (unset.includes(key)) unset.splice(unset.indexOf(key), 1);
+  for (const [path, change] of finalOf(edits, handed)) {
+    if (!changes(change.kind, change.saved, valueAt(record, path))) continue;
+    if (change.saved === undefined) {
+      unset.push(path);
+      continue;
+    }
+    const keys = path.split(".");
+    const missing = keys.findIndex((_, i) =>
+      i < keys.length - 1 && valueAt(record, keys.slice(0, i + 1).join(".")) === undefined
+    );
+    if (missing >= 0 && keys.slice(missing + 1).some(isIndex)) {
+      const top = keys.slice(0, missing + 1).join(".");
+      set[top] = withValue(set[top], keys.slice(missing + 1).join("."), change.saved);
+    } else set[path] = change.saved;
   }
   const setting = Object.keys(set).length > 0;
   if (!setting && !unset.length) return undefined;
@@ -178,7 +216,7 @@ export function updateOf(
   return { set, unset, update };
 }
 
-/** A deep copy of plain data. */
+/** A deep copy of plain data; anything else (a `Date`, a `File`) as it is. */
 const copy = (value: unknown): unknown =>
   Array.isArray(value)
     ? value.map(copy)
@@ -196,15 +234,10 @@ export function createOf(
   handed: Record<string, unknown>,
 ): Record<string, unknown> {
   let values = copy(defaults) as Record<string, unknown>;
-  for (const [path, edit] of Object.entries(edits)) {
-    if (isId(path)) continue;
-    const value = savedOf(edit);
-    if (changes(edit.kind, value, valueAt(defaults, path))) {
-      values = withValue(values, path, value);
+  for (const [path, change] of finalOf(edits, handed)) {
+    if (changes(change.kind, change.saved, valueAt(defaults, path))) {
+      values = withValue(values, path, change.saved);
     }
-  }
-  for (const [key, value] of Object.entries(handed)) {
-    if (value !== undefined) values = withValue(values, key, value);
   }
   return values;
 }

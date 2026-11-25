@@ -110,11 +110,17 @@ test("R4: an edit back to the record's value isn't sent; numbers, checkboxes, li
   assert.deepEqual(updateOf(customer, { active: { kind: "checked", raw: false } }, {})?.set, {
     active: false,
   });
-  // A list emptied is the empty list; an absent list left empty is nothing.
+  // A list emptied is the empty list, a value: sent unless the record holds `[]` already.
   assert.deepEqual(updateOf(customer, { tags: { kind: "list", raw: [] } }, {})?.update, {
     $set: { tags: [] },
   });
-  assert.equal(updateOf({ _id: "x" }, { tags: { kind: "list", raw: [] } }, {}), undefined);
+  assert.deepEqual(updateOf({ _id: "x" }, { tags: { kind: "list", raw: [] } }, {})?.set, {
+    tags: [],
+  });
+  assert.equal(
+    updateOf({ _id: "x", tags: [] }, { tags: { kind: "list", raw: [] } }, {}),
+    undefined,
+  );
   assert.deepEqual(
     updateOf(customer, { "address.city": { kind: "text", raw: "Olinda" } }, {})?.update,
     { $set: { "address.city": "Olinda" } },

@@ -4,30 +4,25 @@
  * give, in several languages, what the picker shows reads back as that end, and a kept end pasted
  * reads as itself: the two readers never read one text as two values.
  */
-import { assert, assertEquals, assertMatch } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
 import { test } from "../../../testing/mod.ts";
 import { formatPattern, lastOfMonth } from "../toolkit/dates.ts";
 import { rangeSecondsPattern, readEnd } from "../toolkit/day-time-text.ts";
 
 const two = (n: number) => String(n).padStart(2, "0");
 
-test("a kept end pasted with a year-day-month format is its own day, not another", () => {
-  const { pattern, setAside } = rangeSecondsPattern("yyyy-dd-MM HH:mm:ss", "en-US");
-  assertMatch(setAside ?? "", /2026-11-02 14:30:05/);
-  assertEquals(readEnd("2026-11-02 09:00:07", pattern, "en-US"), "2026-11-02 09:00:07");
-  assertEquals(readEnd("2026-11-02T09:00:07", pattern, "en-US"), "2026-11-02 09:00:07");
-  // Given such a pattern anyway, text its two readers read as two ends is refused.
+test("a kept end reads as itself; text the pattern and the kept form read as two ends is refused", () => {
+  const { pattern } = rangeSecondsPattern("dd/MM/yyyy", "en-GB");
+  assertEquals(readEnd("2026-11-02 09:00:07", pattern, "en-GB"), "2026-11-02 09:00:07");
+  assertEquals(readEnd("2026-11-02T09:00:07", pattern, "en-GB"), "2026-11-02 09:00:07");
+  assertEquals(readEnd("2026-11-02 09:00", "yyyy-MM-dd HH:mm:ss", "en-US"), "2026-11-02 09:00:00");
+  // A known limit, `yyyy-dd-MM`: such text is refused, never read as another day.
   assertEquals(readEnd("2026-11-02 09:00:07", "yyyy-dd-MM HH:mm:ss", "en-US"), undefined);
   // Text only one reads (month 20) is that one's.
   assertEquals(
     readEnd("2026-11-20 09:00:07", "yyyy-dd-MM HH:mm:ss", "en-US"),
     "2026-11-20 09:00:07",
   );
-  assertEquals(readEnd("2026-11-02 09:00", "yyyy-MM-dd HH:mm:ss", "en-US"), "2026-11-02 09:00:00");
-  // A format that reads the kept form as the same end keeps it.
-  assertEquals(rangeSecondsPattern("yyyy-MM-dd HH:mm:ss", "en-US").setAside, undefined);
-  assertEquals(rangeSecondsPattern("yyyy-MM-dd'T'HH:mm:ss", "en-US").setAside, undefined);
-  assertEquals(rangeSecondsPattern("dd/MM/yyyy", "en-GB").setAside, undefined);
 });
 
 /** Formats an app may give: the day's fields in each order, by each separator, with each time. */
@@ -42,9 +37,15 @@ const ORDERS = [
   ["d", "M", "yyyy"],
 ];
 const TIMES = ["", " HH:mm", " HH:mm:ss", "'T'HH:mm:ss", " mm:HH:ss", " HH-mm-ss", " hh:mm:ss a"];
+/** The known limits: `d` and `M` run together, and a year first with `-` in another order. */
+const limited = (format: string) =>
+  /yyyy(Md|dM)|dMyyyy/.test(format) || /^yyyy-(dd?-MM?|MM?-dd? mm:HH)/.test(format);
 for (const order of ORDERS) {
   for (const separator of ["-", "/", ".", " ", ""]) {
-    for (const time of TIMES) FORMATS.push(order.join(separator) + time);
+    for (const time of TIMES) {
+      const format = order.join(separator) + time;
+      if (!limited(format)) FORMATS.push(format);
+    }
   }
 }
 

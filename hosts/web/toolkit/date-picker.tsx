@@ -32,8 +32,8 @@
  * write the ends by one pattern, which reads them back too. It's `format`
  * when that can be read back (a day's pattern gets the page language's time
  * after it), or else the language's own (`dayTimePattern`). A typed end is
- * kept within `min` and `max`, and within 200 years of `today` (and 0000 to
- * 9999) where they don't bound it.
+ * kept within `min` and `max`, and within 200 years of `today` where they
+ * don't bound it.
  *
  * The field, the presets and the foot take their look from `--date-picker-*`
  * tokens, and the days from the calendar's (`--calendar-*`).
@@ -59,11 +59,9 @@ import {
   type DateRange,
   dayTimeOf,
   formatPattern,
-  isDay,
   isDayTime,
   monthOf,
   monthsBetween,
-  partsOf,
   partsOfDayTime,
   type Preset,
   presetRange,
@@ -71,7 +69,7 @@ import {
 } from "./dates.ts";
 import { type Clock, TimeFields } from "./date-time-picker.tsx";
 import { DayTimeField, secondsPatternOf } from "./day-time-field.tsx";
-import { FIRST_DAY_TIME, LAST_DAY_TIME, readEnd } from "./day-time-text.ts";
+import { readEnd } from "./day-time-text.ts";
 import { Input } from "./input.tsx";
 import { Popover, type PopoverTrigger } from "./popover.tsx";
 import { sheet } from "./sheet.tsx";
@@ -314,13 +312,13 @@ const boundTo = (bound: string | undefined, end: "min" | "max") => {
 
 /**
  * The earliest and latest ends a range to the second takes: `min` and `max`, and on a side they
- * don't bound, `REACH` years from today, within the years read (0000 to 9999).
+ * don't bound, `REACH` years from today.
  */
 function windowOf(today: string, min?: string, max?: string): [low: string, high: string] {
-  const [year] = partsOf(today);
-  const before = year < REACH ? FIRST_DAY_TIME : `${addMonths(today, -REACH * 12)} 00:00:00`;
-  const after = year > 9999 - REACH ? LAST_DAY_TIME : `${addMonths(today, REACH * 12)} 23:59:59`;
-  return [boundTo(min, "min") ?? before, boundTo(max, "max") ?? after];
+  return [
+    boundTo(min, "min") ?? `${addMonths(today, -REACH * 12)} 00:00:00`,
+    boundTo(max, "max") ?? `${addMonths(today, REACH * 12)} 23:59:59`,
+  ];
 }
 
 /** A range whose start is typed: its end moves to that day if it was before it. */
@@ -396,10 +394,9 @@ export function DateRangePicker(
      * From and To and shown whole in the field (a preset runs from `00:00:00` to `23:59:59`). One
      * pattern writes and reads them: `format` when it can be read back (a day's pattern gets the
      * page language's time after it, and a day-time pattern to the minute gets `:ss`), or else the
-     * language's (`dayTimePattern`); a pattern that would read an end typed as the toolkit keeps
-     * it (`2026-11-02 14:30:05`) as another end is set aside too. What's typed is read when it's
-     * left, on Enter or on Apply: only then may it move either end, and while it can't be read, or
-     * the range would end before it starts, it's marked and Apply is off. Implies `time`.
+     * language's (`dayTimePattern`). What's typed is read when it's left, on Enter or on Apply:
+     * only then may it move either end, and while it can't be read, or the range would end before
+     * it starts, it's marked and Apply is off. Implies `time`.
      */
     seconds?: boolean;
   },
@@ -411,12 +408,8 @@ export function DateRangePicker(
   const [first, last] = seconds ? [START_SECOND, END_SECOND] : [START, END];
   const locale = lang();
   const pattern = seconds ? secondsPatternOf(format) : undefined;
-  // To the second, an end is within its window, typed or picked: the calendar's bounds are the
-  // window's days where `min` and `max` aren't given, so it shows no month past 0000 to 9999.
+  // To the second, a typed end is within its window.
   const [low, high] = pattern ? windowOf(today, min, max) : ["", ""];
-  const [dayMin, dayMax] = pattern
-    ? [min ?? low.slice(0, 10), max ?? high.slice(0, 10)]
-    : [min, max];
   const days = (v?: DateRange) => ({
     start: v?.start.slice(0, 10) ?? today,
     end: v?.end.slice(0, 10) ?? today,
@@ -428,20 +421,11 @@ export function DateRangePicker(
   const start = days(value);
   const [draft, setDraft] = useState<{ start: string; end?: string }>(start);
   const [times, setTimes] = useState(() => clocks(value));
-  const [month, setMonth] = useState(() => firstMonth(start, dayMin, dayMax));
+  const [month, setMonth] = useState(() => firstMonth(start, min, max));
   // What's typed in From and To is text until it's left, Enter, or Apply: only then is it read,
-  // and only then may it move either end. Text typed by one pattern (`by`: the range's to the
-  // second, else `format`) isn't read by another.
-  const by = `${
-    pattern ?? (typeof format === "function" ? String(format) : format)
-  }\u0000${locale}`;
-  const [typed, setTyped] = useState<{ by?: string; from?: string; to?: string }>({});
-  const typing = typed.by === by ? typed : {};
-  const offered = presets === true ? rangePresets(today, { min, max }) : presets || [];
-  // To the second, a preset whose days aren't real ones (before 0000) isn't offered.
-  const list = pattern
-    ? offered.filter((p) => isDay(p.range.start) && isDay(p.range.end))
-    : offered;
+  // and only then may it move either end.
+  const [typing, setTyping] = useState<{ from?: string; to?: string }>({});
+  const list = presets === true ? rangePresets(today, { min, max }) : presets || [];
   const written = (day: string, clock: Clock) =>
     pattern
       ? formatPattern(out(day, clock), pattern, locale)
@@ -473,8 +457,8 @@ export function DateRangePicker(
   const open = () => {
     setDraft(start);
     setTimes(clocks(value));
-    setMonth(firstMonth(start, dayMin, dayMax));
-    setTyped({});
+    setMonth(firstMonth(start, min, max));
+    setTyping({});
   };
   /** The text a field shows for its end. */
   const ownText = (which: "from" | "to") => {
@@ -534,16 +518,16 @@ export function DateRangePicker(
   const commit = (which: "from" | "to") => {
     const text = typing[which];
     if (text === undefined) return;
-    if (!text.trim()) return setTyped({ ...typing, by, [which]: undefined });
+    if (!text.trim()) return setTyping({ ...typing, [which]: undefined });
     const next = both ?? withTyped({ [which]: text });
     if (!next) return;
-    setTyped(both ? { by } : { ...typing, by, [which]: undefined });
+    setTyping(both ? {} : { ...typing, [which]: undefined });
     setTimes(next.clock);
     setDraft(next.range);
     const day = which === "from" ? next.range.start : next.range.end!;
-    if (which === "from") setMonth(firstMonth(next.range, dayMin, dayMax));
+    if (which === "from") setMonth(firstMonth(next.range, min, max));
     else if (monthOf(day) < month || monthOf(day) > addMonth(month, 1)) {
-      setMonth(firstMonth(next.range, dayMin, dayMax, "end"));
+      setMonth(firstMonth(next.range, min, max, "end"));
     }
   };
   /**
@@ -558,9 +542,9 @@ export function DateRangePicker(
     return !both && !withTyped({ [which]: text });
   };
   const typeIn = (which: "from" | "to") => (text: string) =>
-    setTyped((now) => ({ ...(now.by === by ? now : {}), by, [which]: text }));
+    setTyping((now) => ({ ...now, [which]: text }));
   const pick = (day: string) => {
-    setTyped({});
+    setTyping({});
     setDraft((range) =>
       range.end !== undefined
         ? { start: day }
@@ -703,8 +687,8 @@ export function DateRangePicker(
                   onMonth={setMonth}
                   value={draft}
                   onPick={pick}
-                  min={dayMin}
-                  max={dayMax}
+                  min={min}
+                  max={max}
                   today={today}
                   weekStart={weekStart}
                   monthFormat={monthFormat}

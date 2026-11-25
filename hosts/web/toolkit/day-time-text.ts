@@ -1,6 +1,6 @@
 /**
  * Day-times as people type them. A pattern is checked once (`patternProblem`): it can be read
- * back when no two values it writes look alike and none drops its century. Then `formatPattern`
+ * back when it has each field once, and none drops its century. Then `formatPattern`
  * writes with it and `parseDayTime` reads with it, so whatever was written reads back as the value
  * it was written from, in any language. `dayTimePattern` is a language's own: its order,
  * separators and clock, with a four-digit year and the Gregorian calendar.
@@ -8,7 +8,7 @@
  * ```ts
  * parseDayTime("02/11/2026 14:30:05", "dd/MM/yyyy HH:mm:ss"); // "2026-11-02 14:30:05"
  * parseDayTime("11/02/2026 02:30 PM", undefined, "en-US"); // "2026-11-02 14:30:00"
- * patternProblem("yyyy/dM HH:mm"); // "`d` is followed by a digit (`M`): …"
+ * patternProblem("dd/MM/yy HH:mm"); // "`yy` leaves out the century: write `yyyy`"
  * ```
  */
 import {
@@ -18,7 +18,6 @@ import {
   formatPattern,
   isDay,
   isDayTime,
-  lastOfMonth,
   partsOf,
   weekdayOf,
 } from "./dates.ts";
@@ -48,8 +47,8 @@ const FIELD_OF: Record<string, Field> = {
   a: "period",
 };
 
-/** A name a field reads: its value, the ways it may be typed, and the texts that say it. */
-type Name = { value: number; matches: RegExp[]; spellings: string[] };
+/** A name a field reads: its value, and the text that says it. */
+type Name = { value: number; match: RegExp; spellings: string[] };
 
 type Element =
   | { kind: "literal"; text: string; match: RegExp }
@@ -83,30 +82,11 @@ function knows(locale: string): boolean {
   return yes;
 }
 
-const tags = new Map<string, string | undefined>();
-/** The tag a language's case is changed by: its own when it's well formed, else none (Unicode's). */
-function caseTag(locale: string): string | undefined {
-  if (!tags.has(locale)) {
-    try {
-      tags.set(locale, Intl.getCanonicalLocales(locale)[0]);
-    } catch {
-      tags.set(locale, undefined);
-    }
-  }
-  return tags.get(locale);
-}
-
 /**
  * Text as it's compared, the pattern's and the typed alike: composed, without invisible format
- * marks (bidi marks, joiners), in one case by the language's rules (upper, then lower: Greek
- * capitals drop their accents, Turkish I is dotless), so any case it's typed in reads.
+ * marks (bidi marks, joiners), in lower case.
  */
-function keyOf(text: string, locale: string): string {
-  const tag = caseTag(locale);
-  const bare = text.normalize("NFC").replace(/\p{Cf}/gu, "");
-  const upper = tag ? bare.toLocaleUpperCase(tag) : bare.toUpperCase();
-  return (tag ? upper.toLocaleLowerCase(tag) : upper.toLowerCase()).normalize("NFC");
-}
+const keyOf = (text: string) => text.normalize("NFC").replace(/\p{Cf}/gu, "").toLowerCase();
 
 const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 
@@ -130,56 +110,16 @@ function digitsOf(locale: string): string[] {
 }
 
 const two = (n: number) => String(n).padStart(2, "0");
-const four = (n: number) => String(n).padStart(4, "0");
 
-/** The first day-time read: years are four digits, 0000 (1 BC, as ISO 8601 has it) to 9999. */
-export const FIRST_DAY_TIME = "0000-01-01 00:00:00";
-/** The last day-time read, 9999's last second. */
-export const LAST_DAY_TIME = "9999-12-31 23:59:59";
-
-/**
- * Years a calendar can name a Gregorian day's month wrongly in: the first and last read, the
- * centuries a Julian calendar drifts from the Gregorian over (Thai, Japanese and Taiwanese
- * calendars are Julian before October 1582), the change and around it, and now.
- */
-const YEARS = [
-  ...[0, 1, 4, 99, 100, 101, 200, 300, 500, 1000, 1500, 1581, 1582, 1583, 1700, 1873],
-  ...[1900, 1912, 2000, 2024, 2025, 2100, 9999],
-];
-
-/** A month name for each of a month's days in every year in `YEARS`, or undefined when they differ. */
-function monthName(token: string, month: number, locale: string): string | undefined {
-  const names = new Set<string>();
-  for (const year of YEARS) {
-    const last = +lastOfMonth(year, month).slice(8);
-    for (const day of [1, 15, last]) {
-      names.add(formatPattern(`${four(year)}-${two(month)}-${two(day)}`, token, locale));
-    }
-  }
-  return names.size === 1 ? [...names][0] : undefined;
-}
-
-/** A weekday's name, the same on that weekday in the first, last and other years, or undefined. */
-function weekdayName(token: string, weekday: number, locale: string): string | undefined {
-  const names = new Set<string>();
-  for (const year of [0, 1582, 2026, 9999]) {
-    for (let day = 1; day <= 7; day++) {
-      const date = `${four(year)}-01-0${day}`;
-      if (weekdayOf(date) === weekday) names.add(formatPattern(date, token, locale));
-    }
-  }
-  return names.size === 1 ? [...names][0] : undefined;
-}
-
-/** A name's expression: as written, any run of spaces for its spaces, its final dot optional. */
-const nameMatch = (key: string) =>
-  new RegExp(literalSource(key.replace(/\.$/, "")) + (key.endsWith(".") ? "\\.?" : ""), "uy");
+/** Whether a language's calendar is the Gregorian one, so its month names are the Gregorian months. */
+const gregorian = (locale: string) =>
+  ["gregory", "iso8601"].includes(new Intl.DateTimeFormat(locale).resolvedOptions().calendar);
 
 const nameCache = new Map<string, Name[] | string>();
 
 /**
- * A name field's names in a language, or why they can't be read: month names that aren't the
- * Gregorian months in every year from 0000 to 9999 (another calendar's), two that read alike.
+ * A name field's names in a language, or why they can't be read: another calendar's months, two
+ * that read alike.
  */
 function namesOf(token: string, locale: string): Name[] | string {
   const id = `${locale}\u0000${token}`;
@@ -187,89 +127,86 @@ function namesOf(token: string, locale: string): Name[] | string {
   if (cached) return cached;
   let result: Name[] | string;
   if (token === "a") result = periodNames(locale);
-  else {
-    const said = token[0] === "M"
-      ? Array.from({ length: 12 }, (_, i) => monthName(token, i + 1, locale))
-      : Array.from({ length: 7 }, (_, w) => weekdayName(token, w, locale));
-    if (said.some((name) => name === undefined)) {
-      result = token[0] === "M"
-        ? `\`${token}\` names in ${locale} aren't the Gregorian months in every year from 0000 ` +
-          "to 9999 (its calendar isn't the Gregorian one): write `MM`"
-        : `\`${token}\` names in ${locale} change from year to year: leave the weekday out`;
+  else if (token[0] === "M" && !gregorian(locale)) {
+    result = `\`${token}\` names in ${locale} are another calendar's months: write \`MM\``;
+  } else {
+    const keys = (token[0] === "M"
+      ? Array.from({ length: 12 }, (_, i) =>
+        formatPattern(`2026-${two(i + 1)}-15`, token, locale))
+      : Array.from({ length: 7 }, (_, w) =>
+        formatPattern(`2026-11-0${w + 1}`, token, locale)))
+      .map(keyOf);
+    const spellings = keys.map((key) => {
+      const bare = key.replace(/\.$/, "");
+      return bare === key ? [key] : [key, bare];
+    });
+    const all = spellings.flat();
+    if (
+      keys.some((key) =>
+        !key.trim()
+      ) || new Set(all).size !== all.length
+    ) {
+      result = `two \`${token}\` names read alike in ${locale}`;
     } else {
-      const keys = (said as string[]).map((name) => keyOf(name, locale));
-      const spellings = keys.map((key) => {
-        const bare = key.replace(/\.$/, "");
-        return bare === key ? [key] : [key, bare];
-      });
-      const all = spellings.flat();
-      if (keys.some((key) => !key.trim()) || new Set(all).size !== all.length) {
-        result = `two \`${token}\` names read alike in ${locale}`;
-      } else {
-        result = keys.map((key, i) => ({
-          value: token[0] === "M" ? i + 1 : i,
-          spellings: spellings[i],
-          matches: [nameMatch(key)],
-        }));
-      }
+      result = keys.map((key, i) => ({
+        value: token[0] === "M" ? i + 1 : i,
+        spellings: spellings[i],
+        match: new RegExp(
+          literalSource(key.replace(/\.$/, "")) + (key.endsWith(".") ? "\\.?" : ""),
+          "uy",
+        ),
+      }));
     }
   }
   nameCache.set(id, result);
   return result;
 }
 
-type Periods = { hours: string[]; spellings: Map<string, Set<string>> };
-const periodCache = new Map<string, Periods | string>();
+const periodCache = new Map<string, string[] | string>();
 
-/**
- * Each hour's AM or PM in a language, as its letters (what tells them apart), and each one's
- * spellings as the language writes them, its own marks and all (Tibetan's tsheg); or why they
- * can't be read.
- */
-function periodsOf(locale: string): Periods | string {
+/** Each hour's AM or PM in a language, as its letters, or why they can't be read. */
+function periodsOf(locale: string): string[] | string {
   const cached = periodCache.get(locale);
   if (cached) return cached;
   const hours: string[] = [];
-  const spellings = new Map<string, Set<string>>();
   let problem: string | undefined;
   for (let hour = 0; hour < 24 && !problem; hour++) {
-    const keys = [0, 1, 29, 30, 59].map((minute) =>
-      keyOf(
-        formatPattern({ year: 2026, month: 1, day: 5, hour, minute, second: 0 }, "a", locale),
-        locale,
-      )
+    const said = new Set(
+      [0, 1, 29, 30, 59].map((minute) =>
+        lettersOf(keyOf(
+          formatPattern({ year: 2026, month: 1, day: 5, hour, minute, second: 0 }, "a", locale),
+        ))
+      ),
     );
-    const said = new Set(keys.map(lettersOf));
     if (said.size !== 1 || [...said][0] === "") problem = `AM and PM (\`a\`) change within an hour`;
-    const letters = [...said][0];
-    hours.push(letters);
-    const known = spellings.get(letters) ?? new Set();
-    for (const key of keys) known.add(key);
-    spellings.set(letters, known);
+    hours.push([...said][0]);
   }
   for (let hour = 0; hour < 12 && !problem; hour++) {
     if (hours[hour] === hours[hour + 12]) {
       problem = `AM and PM (\`a\`) can't be told apart in ${locale}`;
     }
   }
-  const result = problem ?? { hours, spellings };
+  const result = problem ?? hours;
   periodCache.set(locale, result);
   return result;
 }
 
 function periodNames(locale: string): Name[] | string {
-  const periods = periodsOf(locale);
-  if (typeof periods === "string") return periods;
-  return [...periods.spellings].map(([letters, written]) => ({
-    value: periods.hours.indexOf(letters),
-    spellings: [...written, letters],
-    matches: [
-      // As the language writes it, its marks and all.
-      ...[...written].map(nameMatch),
-      // Its letters in order, with dots or spaces between them, and a dot after: P.M., pm, p. m.
-      new RegExp([...letters].map(escaped).join("[.\\s]*") + "\\.?", "uy"),
-    ],
-  }));
+  const hours = periodsOf(locale);
+  if (typeof hours === "string") return hours;
+  return [...new Set(hours)].map((letters) => {
+    const value = hours.indexOf(letters);
+    const at = { year: 2026, month: 1, day: 5, hour: value, minute: 0, second: 0 };
+    const written = keyOf(formatPattern(at, "a", locale));
+    // As the language writes it (Dzongkha's `སྔ་ཆ་`, Anii's `1ka`), or its letters in order, with
+    // dots or spaces between them, and a dot after: P.M., pm, p. m.
+    const spelled = [...letters].map(escaped).join("[.\\s]*") + "\\.?";
+    return {
+      value,
+      spellings: [written, letters],
+      match: new RegExp(`(?:${literalSource(written)}|${spelled})`, "uy"),
+    };
+  });
 }
 
 /** The kinds of character an element can start with. */
@@ -280,26 +217,6 @@ function startsOf(element: Element | undefined, digits: string[]): Set<string> {
   return new Set(
     element.names.flatMap((n) => n.spellings.map((s) => kindOf([...s][0], digits))),
   );
-}
-
-/** The kinds of character that could carry an element on past where one reading of it ends. */
-function continuationOf(element: Element, digits: string[]): Set<string> {
-  const out = new Set<string>();
-  if (element.kind === "number") {
-    if (element.min !== element.max) out.add("digit");
-  } else if (element.kind === "name") {
-    const all = element.names.flatMap((n) => n.spellings);
-    if (element.token === "a") out.add(".");
-    for (const a of all) {
-      for (const b of all) {
-        if (b.length > a.length && b.startsWith(a)) {
-          out.add(kindOf([...b.slice(a.length)][0], digits));
-          if (element.token === "a") out.add(".").add("space");
-        }
-      }
-    }
-  }
-  return out;
 }
 
 const compiled = new Map<string, Compiled>();
@@ -336,7 +253,7 @@ function build(pattern: string, locale: string): Compiled {
   const pieces: ({ token: string } | { text: string })[] = [];
   let last = 0;
   const literal = (text: string) => {
-    const kept = keyOf(text, locale);
+    const kept = keyOf(text);
     const before = pieces[pieces.length - 1];
     if (before && "text" in before) before.text += kept;
     else if (kept) pieces.push({ text: kept });
@@ -348,11 +265,6 @@ function build(pattern: string, locale: string): Compiled {
     else pieces.push({ token: hit[0] });
   }
   literal(pattern.slice(last));
-  // Spaces at its edges are left out, as they are from what's typed.
-  const head = pieces[0];
-  if (head && "text" in head && !(head.text = head.text.trimStart())) pieces.shift();
-  const tail = pieces[pieces.length - 1];
-  if (tail && "text" in tail && !(tail.text = tail.text.trimEnd())) pieces.pop();
 
   // P1, P2: the fields, once each.
   const tokens = pieces.flatMap((p) => ("token" in p ? [p.token] : []));
@@ -406,7 +318,7 @@ function build(pattern: string, locale: string): Compiled {
   if (result.twelve) {
     const periods = periodsOf(locale);
     if (typeof periods === "string") return fail(periods);
-    result.periods = periods.hours;
+    result.periods = periods;
   }
 
   // Seconds may be left out with a one-character separator before them.
@@ -419,8 +331,7 @@ function build(pattern: string, locale: string): Compiled {
     !startsOf(elements[s + 1], digits).has(kindOf(separator.text, digits))
   ) result.optional = s - 1;
 
-  // P3: what follows a field of no fixed length can't carry it on. Two-digit fields take one
-  // digit when what follows can't be a digit. The language's own digits are digits.
+  // Two-digit fields take one digit when what follows can't be a digit.
   for (const [i, element] of elements.entries()) {
     const next = startsOf(elements[i + 1], digits);
     // Before the seconds' separator: what follows the seconds may come next too.
@@ -429,20 +340,6 @@ function build(pattern: string, locale: string): Compiled {
     }
     if (element.kind === "number" && element.token.length === 2 && !next.has("digit")) {
       element.min = 1;
-    }
-    for (const kind of continuationOf(element, digits)) {
-      if (!next.has(kind)) continue;
-      const following = elements[i + 1];
-      const what = following?.kind === "literal"
-        ? `"${following.text}"`
-        : `\`${(following as { token: string }).token}\``;
-      if (element.kind === "number") {
-        return fail(
-          `\`${element.token}\` is followed by a digit (${what}): give it two digits or a separator`,
-        );
-      }
-      const token = (element as { token: string }).token;
-      return fail(`\`${token}\` in ${locale} can run into what follows it (${what})`);
     }
   }
   return result;
@@ -456,14 +353,11 @@ function build(pattern: string, locale: string): Compiled {
  *
  * A pattern that can be read back has one year (`yyyy`, never `yy`), month (`MM`, `M`, `MMM`,
  * `MMMM`), day (`dd`, `d`), hour (`HH`, `H`, or `hh`, `h` with `a`) and minutes (`mm`), and
- * maybe seconds (`ss`) and a weekday (`EEE`, `EEEE`). A field of no fixed length (`M`, `d`, `H`,
- * `h`, a name) is followed by something that can't carry it on: `yyyy/dM` can't be read (`2026/211`
- * is November 2nd or January 21st), nor `dMMM` where month names are numbers (Chinese `11月`, or
- * `一一` in Chinese digits: the language's own digits are digits). Its names, in the language, are
- * distinct in any case and are the Gregorian months in every year from 0000 to 9999: Persian `MMM`
- * changes within a month, and Thai `MMM` is the Julian month before 1582, so their patterns write
- * `MM`. A pattern with names needs a language the runtime supports. Spaces at its edges are left
- * out, as they are from what's typed.
+ * maybe seconds (`ss`) and a weekday (`EEE`, `EEEE`). Its names, in the language, are distinct,
+ * and its month names the Gregorian months: Persian and Thai patterns write `MM`. A pattern with
+ * names needs a language the runtime supports. Fields of no fixed length (`d`, `M`, names) need
+ * something between them: `yyyy/dM` writes `2026/211` for November 2nd and January 21st, and that
+ * text is refused.
  */
 export function patternProblem(pattern: string, locale = "en"): string | undefined {
   return compile(pattern, locale).problem;
@@ -517,12 +411,10 @@ function readings(input: string, c: Compiled): Set<DayTime> {
       }
     } else {
       for (const name of element.names) {
-        const ends = new Set<number>();
-        for (const match of name.matches) {
-          match.lastIndex = at;
-          if (match.test(input)) ends.add(match.lastIndex);
+        name.match.lastIndex = at;
+        if (name.match.test(input)) {
+          walk(i + 1, name.match.lastIndex, { ...read, [element.field]: name.value });
         }
-        for (const end of ends) walk(i + 1, end, { ...read, [element.field]: name.value });
       }
     }
   };
@@ -559,10 +451,9 @@ function valueOf(read: Read, c: Compiled): DayTime | undefined {
  * page's is `lang()`).
  *
  * It reads what the pattern writes, allowing only this: spaces of any kind and number where the
- * pattern has spaces, and at the text's edges; letters in any case, by the language's rules
- * (Greek capitals without accents, Turkish `MAYIS`); a month or weekday name without its final
- * dot; AM and PM as the language writes them, or their letters with or without dots (`p.m.`, `pm`);
- * one digit where the pattern writes two and no digit follows; the language's own digits
+ * pattern has spaces, and at the text's edges; letters in any case; a month or weekday name
+ * without its final dot; AM and PM with or without dots (`p.m.`, `pm`); one digit where the
+ * pattern writes two and no digit follows; the language's own digits
  * (Arabic-Indic, Persian, Bengali…), one kind to a field; invisible marks (right-to-left marks)
  * anywhere; and seconds left out with the `:` before them, when the pattern writes them (they're
  * `:00`).
@@ -585,7 +476,7 @@ function valueOf(read: Read, c: Compiled): DayTime | undefined {
 export function parseDayTime(text: string, pattern?: string, locale = "en"): DayTime | undefined {
   const c = compile(pattern ?? dayTimePattern(locale), locale);
   if (c.problem) return undefined;
-  const values = readings(keyOf(text, locale).trim(), c);
+  const values = readings(keyOf(text).trim(), c);
   return values.size === 1 ? [...values][0] : undefined;
 }
 
@@ -667,91 +558,17 @@ export function dayTimePattern(locale = "en", seconds = true): string {
 
 const TIME_FIELDS = new Set<Field>(["hour", "minute", "second", "period"]);
 
-/** The toolkit's own pattern: what a range to the second falls back to last. */
-const KEPT_PATTERN = "yyyy-MM-dd HH:mm:ss";
-
-/**
- * The form the toolkit keeps a day-time in, as a pattern's reader sees it (`#` a digit): with a
- * space or a `T` (compared in lower case), to the minute or the second.
- */
-const KEPT_SHAPES = [
-  "####-##-## ##:##",
-  "####-##-## ##:##:##",
-  "####-##-##t##:##",
-  "####-##-##t##:##:##",
-];
-
-/** Where each field is in the kept form. */
-const KEPT_PLACES: [Field, number, number][] = [
-  ["year", 0, 4],
-  ["month", 5, 7],
-  ["day", 8, 10],
-  ["hour", 11, 13],
-  ["minute", 14, 16],
-  ["second", 17, 19],
-];
-
-/**
- * Whether a pattern could read a day-time written in the form the toolkit keeps it
- * (`2026-11-02 14:30:05`, or with a `T`) as another one: whether some text of that form, of any
- * digits, reads by the pattern with a field anywhere but where the kept form has it. A name
- * counts as such a reading when it's made of the form's characters alone.
- */
-function readsKeptAsAnother(pattern: string, locale: string): boolean {
-  const c = compile(pattern, locale);
-  if (c.problem) return false;
-  return KEPT_SHAPES.some((shape) => {
-    const walk = (i: number, at: number, placed: Partial<Record<Field, number[]>>): boolean => {
-      if (i === c.elements.length) {
-        return at === shape.length && KEPT_PLACES.some(([field, from, to]) => {
-          const place = placed[field];
-          if (to > shape.length) return place !== undefined;
-          return !place || place[0] !== from || place[1] !== to;
-        });
-      }
-      if (i === c.optional && walk(i + 2, at, placed)) return true;
-      const element = c.elements[i];
-      if (element.kind === "literal") {
-        let end = at;
-        for (const part of element.text.split(/(\s+)/)) {
-          if (/^\s+$/.test(part)) {
-            if (shape[end++] !== " ") return false;
-            continue;
-          }
-          for (const char of part) {
-            const slot = shape[end++];
-            if (slot === "#" ? !/^[0-9]$/.test(char) : char !== slot) return false;
-          }
-        }
-        return walk(i + 1, end, placed);
-      }
-      if (element.kind === "number") {
-        for (let n = element.min; n <= element.max; n++) {
-          if (shape.slice(at, at + n) !== "#".repeat(n)) break;
-          if (walk(i + 1, at + n, { ...placed, [element.field]: [at, at + n] })) return true;
-        }
-        return false;
-      }
-      return element.names.some((name) => name.spellings.some((s) => /^[0-9\-: t.]+$/.test(s)));
-    };
-    return walk(0, 0, {});
-  });
-}
-
 /**
  * The pattern a range to the second (`DateRangePicker` with `seconds`) writes and reads its ends
  * by, in a language: `format` when it can be read back (a day's pattern with the language's time
  * after it; a day-time pattern to the minute with `:ss` after its minutes), or else the
- * language's own (`dayTimePattern`), with why `format` was set aside. Either is set aside too
- * when it could read an end typed as the toolkit keeps one (`2026-11-02 14:30:05`, which From and
- * To also read) as another end (`yyyy-dd-MM`), so no text reads as two ends.
+ * language's own (`dayTimePattern`), with why `format` was set aside.
  */
 export function rangeSecondsPattern(
   format: unknown,
   locale: string,
 ): { pattern: string; setAside?: string } {
-  const language = dayTimePattern(locale);
-  const own = readsKeptAsAnother(language, locale) ? KEPT_PATTERN : language;
+  const own = dayTimePattern(locale);
   if (format === undefined) return { pattern: own };
   if (typeof format !== "string") {
     return { pattern: own, setAside: "a function can't be read back" };
@@ -763,10 +580,7 @@ export function rangeSecondsPattern(
     : tokens.some(([token]) => token === "ss") || !mm
     ? format
     : `${format.slice(0, mm.index + 2)}:ss${format.slice(mm.index + 2)}`;
-  const problem = patternProblem(pattern, locale) ??
-    (readsKeptAsAnother(pattern, locale)
-      ? "it reads an end typed as the toolkit keeps it, `2026-11-02 14:30:05`, as another"
-      : undefined);
+  const problem = patternProblem(pattern, locale);
   return problem ? { pattern: own, setAside: problem } : { pattern };
 }
 
@@ -776,7 +590,7 @@ const KEPT = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)$/;
 /**
  * An end of a range to the second read from typed text, always with seconds: by the range's
  * pattern (`rangeSecondsPattern`), or as the toolkit keeps one. Text the two read as different
- * ends is refused (the range's pattern is chosen so none is).
+ * ends is refused (`yyyy-dd-MM` reads `2026-11-02` as February 11th).
  */
 export function readEnd(text: string, pattern: string, locale: string): DayTime | undefined {
   const read = parseDayTime(text, pattern, locale);

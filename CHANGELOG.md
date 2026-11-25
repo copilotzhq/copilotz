@@ -1,3 +1,197 @@
+## 1.0.0-rc.66 — 2026-11-26
+
+Agents run on the plans people already pay for, before the app's API. For each model a tier names, a
+person's connected plans come first, in their own order, and Grok Build joins Claude Code, Codex and
+Antigravity. A person connects their plans in one flow, with no terminal and a button for every
+failure, from Your AI, which replaces Connected accounts. A tier is priced at what the person
+looking would run, a cloud computer says what it costs, and a call that wakes one says so. Rare
+cases are known limits, listed below, not code.
+
+**Breaking:**
+
+- **`account.uses` is gone,** with the `accounts.uses` View, the line it drew over the composer
+  ("Runs on your ChatGPT Plus plan"), and the types `Uses`, `Use` and `UsesParams` from
+  `copilotz/plugins/access`. It read only the first of an agent's own models. The tiers' composer
+  line says what a chat's agents run on, and what it costs.
+- **`tiers.model`'s answer** is `{ model, harnesses }` in an app with plans: code that read it as a
+  list reads `.model`. An app without plans gets the list, as before.
+- **`/accounts?signin=<engine>` no longer opens a sign-in.** Link
+  `/accounts?connect=<plan or provider>`: it opens the connect flow.
+
+**New:**
+
+- **Plans first, native first.** A tier names models, and each turn runs them on its person's plans
+  first: for each model, in the chain's order, every plan of theirs that serves it, in their order;
+  then the APIs, as the chain lists them. Each plan serves its own maker's models: Claude Code
+  Anthropic's, ChatGPT (on the server, then through Codex) OpenAI's, Grok Build xAI's, Antigravity
+  Google's. Someone with only ChatGPT gets `chatgpt/…sol` before Anthropic's API. A plan at its
+  limit hands over to the next plan while there is one.
+- **Which models a plan serves** is data on its provider: `harness: { order, serves, plan }`.
+  `serves` maps API ids, or a whole provider (`"anthropic/*"`), to the plan's own names, and `plan`
+  is the name people know it by ("ChatGPT"). The default order is Claude Code (10), ChatGPT on the
+  server (20), Codex (30), Grok Build (40), Antigravity (50). A model list given `harnesses` runs on
+  them first; an entry naming a plan (`claude-plan/…`) stands for its model on plans only.
+  `models.check` answers what a list would try, in order.
+- **A person's order of their plans.** `tiers.harnesses` `{ harnesses }` sets it, kept on their own
+  tier choice: theirs first, the rest after. It ranks the plans that serve one model; the tier's
+  model order still comes first. `modelChoice.harnesses` lists the app's plans in their order, each
+  with the plan it's on and whether they have it.
+- **Which plans a person has** is asked on each turn, through the `connectedPlans` resource:
+  `account.connected` answers for their connected accounts, and `computer.connected` for plans
+  signed in on a computer of theirs that's on or wakes (none while nobody's there).
+- **Grok Build: `grok-plan`.** A fourth engine, `grok`, on a person's Grok plan: `grok -p` as only
+  the engine (the agent's prompt, none of its tools, no memory, subagents, plan mode or web search),
+  the session's MCP server alone, its own `HOME` and `GROK_HOME`, never an xAI key. A prompt that
+  offers it tools of its own fails before the model acts. It signs in by device code, reports its
+  status with `grok models`, signs out with its own `grok logout` and installs with its official
+  installer. It serves xAI's models by their own names, at no cost to the app.
+- **One connect flow.** "Connect your plans" opens for the plans its door picked: a plan's card on
+  Your AI (Connect, Fix), the address `/accounts?connect=<plan or provider>` (every fix-it link), or
+  a step of the app's welcome, which picks several at once. It asks where the plans run only when
+  one runs through an app on a computer and the person has none that can: in the cloud (made in a
+  click by a computer kind's `add.quick`), or on this computer (on a desktop browser, saying it
+  needs one line in a terminal, once). Then one checklist: the computer readied, then one line per
+  plan, one at a time, through its phases: its CLI installed as it signs in, signed in, and a test
+  answered on it. Every failure ends in Try again; a laptop that's off also offers a cloud computer.
+  A command shows only when an installer failed or can't run (Windows), with its output and the
+  computer's Terminal a click away.
+- **`computer.prepare`** `{ computer }` readies one of the person's computers for plans, checking
+  each time, never from the record: woken (a cloud computer), its program brought to the app's
+  release (a cloud computer is restarted on a new VM through `computerWake`'s new `sleep`; a laptop
+  is offered the release and waited for), then what its CLIs are now, kept on the computer field by
+  field. It fails `computer_shared` or `offline`, saying why. A finished sign-in says whether its
+  CLI is there (`installed`).
+- **`llm.test`** `{ model }` tries one model the person's own plan pays for (a provider tagged
+  `paid: "subscription"`), to show it answers there. It never spends the app's key.
+- **Your AI.** The accounts page lists other front ends' sections first, then "Other accounts", then
+  the person's own API keys. A section with `plans: true` shows the accounts that pay for models
+  among the plans. Computers' front end adds Your plans (a card per plan the app uses: where it runs
+  now and its backup, its limit, one action; in the person's order, from the tiers' `planList`) and
+  Your computers (each one's state, the plans it runs, its month, its Terminal). In the flow,
+  ChatGPT on the server's line is the `accounts.connect` View: a button that opens the account's own
+  dialog. The page's frame and its connect dialog are in Brazilian Portuguese too.
+- **The welcome's step.** `computer.plans.welcome`, for chat's `welcome` resource: "Which AI plans
+  do you have?", then the flow.
+- **A plan at its limit** is kept on the computer (`engines.<engine>.limited`) until a call there
+  answers. Your AI says since when.
+- **Pool VMs update themselves.** A free pool VM says what it is (`POOL.info`) and takes the app's
+  newer release (`POOL.update`), as a laptop does, then ends for its service to start it again. An
+  app offers it with `offerUpdate(ctx, POOL_KIND, vm)` in its pool's `ready`.
+- **What a message costs you.** Tiers price a typical message for the person looking, at the first
+  model their turn would try, plans first. On one of their plans a kind of work costs them nothing
+  (`ModelShown.plan`), and a tier says what it comes to for them (`TierShown.yours`). The composer
+  reads "Everyday · on your plans · model $0", or "Everyday · 2¢" with no plan connected. `price`
+  stays what it costs on the app's models: the org's and a space's pages, which choose for others,
+  show it.
+- **What a cloud computer costs.** `computer.cost` (a query, `{ computer? }`) says what one of the
+  asker's computers the app keeps costs them, or a new one: an hour awake; how long it stays awake
+  after; its disk a month; how far the plan's credits go after a month's disk; and this month so
+  far, from the usage ledger. The `computer.cost` View says it in a line, by mode (`price`, `cost`,
+  `month`). The app gives the prices: `computerWake.prices` names its query (`ComputerPrices`).
+  Nothing is priced in Copilotz.
+- **Waking, said.** A plan's call that wakes a computer says so first: a `waking` model chunk, with
+  the app's estimate (`computerWake.estimate`: `{ seconds, slower? }`). Chat shows "Waking the
+  computer… (about 5 seconds)", or that it takes longer at this hour, then "Still waking the
+  computer…" past it.
+
+**Changed:**
+
+- **Your AI replaces Connected accounts,** at the same address (`/accounts`). The user menu and
+  messages that said "Connected accounts" say "Your AI".
+- **The sign-in dialog is gone,** with its per-computer rows and the install command it always
+  showed: the connect flow replaces them. Its words go with it (`computers.signIn…`, `install…`,
+  `row…`, `shared…`, `step…` and others).
+- **Check, don't remember.** Once a plan's call has woken a computer, it asks what the plan's CLI is
+  now, and keeps it. One that isn't signed in any more is passed over for the next computer at once.
+- **A running step is use.** A plan's step touches its computer every minute while it runs, and once
+  more when it ends, so the app's idle check never puts it to sleep mid-step.
+- **Your plans' words.** Your plans says "Your plan pays for the AI.", and, where the app keeps
+  computers, "A cloud computer you use for it is charged while it's awake.", in place of "Nothing is
+  charged here for those calls."
+- **Model chunks.** `LlmChunk` has `waking`. `generate` passes it on without counting it as written,
+  so a call that fails after it still hands over to the next model.
+
+**Fixed:**
+
+- **A laptop that's off came before an asleep cloud computer.** Once none of a person's computers
+  was online, a plan's call went to the signed-in one seen last, so a closed laptop sent the call to
+  the API instead of waking the cloud computer. There's one order now (`servingOrder`): online
+  first, then those the app keeps, then the rest.
+
+**Known limits:** rare cases left to the app on purpose, a line each
+([the plans guide](docs/guides/agents-on-peoples-plans.md#known-limits)).
+
+- **Plans first:**
+  - With one plan, a tier's checker can run on the same maker's models as its builder.
+  - A plan at its limit is tried first on each call until it resets: it fails in seconds.
+  - Plans run at their CLI's own effort, whatever the chain says.
+  - Antigravity serves Google's models; others once their names are checked.
+  - Grok Build reaches an agent's tools through its own search (a few more model turns), keeps its
+    built-in skills in its prompt, and keeps a copy of each session at xAI.
+- **Connecting plans:**
+  - On Windows a plan's CLI is installed from the computer's Terminal: the flow shows its command.
+  - "On this computer" needs one line in its terminal, once: the program's download isn't signed
+    yet.
+  - A cloud computer awake on an older program when a plan is set up there is restarted: the jobs it
+    keeps start again; others stop.
+  - A computer that can't be brought to the app's program is used as it is.
+  - A computer shared with others' agents doesn't run plans: Your AI shows such a plan as not
+    connected, and Connect sets it up on another computer, or a cloud one.
+  - The flow connects a plan's first way in: ChatGPT through Codex isn't offered beside ChatGPT on
+    the server.
+  - The flow signs a plan in on the person's best computer: a backup is one they've signed in on
+    before.
+  - A test of a model the plan doesn't include shows as a failure, in the provider's words.
+  - ChatGPT on the server doesn't show its limit on its card.
+  - With tiers, the cards follow the app's tiers, not tiers an org saved of its own.
+- **Costs and waking:**
+  - The estimate takes a plan as it last said: a plan at its limit still shows $0.
+  - A wake's time is an estimate: past it, the notice says "Still waking…".
+  - A tool run on the server for longer than a cloud computer stays warm lets it sleep between
+    steps: the next step starts a fresh session, given the whole conversation.
+  - A CLI removed while its computer is awake still shows as signed in until the computer is asked
+    again.
+  - "This month" is the calendar month in UTC, and the disk shows at its monthly price, at the app's
+    disk size now.
+  - "Covers about N hours" counts the plan's credits, not what's left of them.
+
+**Docs:**
+
+- [Agents on people's own plans](docs/guides/agents-on-peoples-plans.md) has "Plans first",
+  "Connecting plans: one flow" (readying a computer, a missing CLI, a test on the plan), "Your AI",
+  "Which computer a call runs on", "A plan at its limit", "Waking a computer" and "What a plan
+  costs", with Grok Build among the providers. The reference's "Models and providers" says how plans
+  come first.
+- The plugins' reference pages show rc.66's Actions, queries, Views and fields: accounts, chat
+  (`live`'s `waking`), computers (`computer.prepare`, `computer.cost`), models (`llm.test`) and
+  tiers.
+- The "Computers and plans" group of `AGENTS.md`'s "Find it" index has lines for plans first, Grok
+  Build, the connect flow, Your AI, readying a computer, a plan's test, the welcome's step, pool
+  updates, waking and costs.
+
+**Upgrading:**
+
+- **An app that keeps cloud computers** (a pool of VMs) adds three things for the connect flow:
+  - `add.quick` on its computer kind (`computerKinds.<kind>.add.quick: { action, input }`), so "In
+    the cloud" makes one in a click;
+  - `computerWake.sleep`, an Action that puts one to sleep now (`{ computer }`), so
+    `computer.prepare` can restart one awake on an older program on a new VM;
+  - `await offerUpdate(ctx, POOL_KIND, vm)` in its pool's `ready` (from `copilotz/plugins/compute`),
+    with the `downloads` resource in that runtime, so free VMs take the app's release.
+
+  `computerWake.estimate` (the waking notice's time) and `computerWake.prices` (the costs) are
+  optional: without them, the notice says "Waking the computer…" with no time, and nothing is
+  priced.
+- **Write plan chains as models.** Name models (`anthropic/claude-opus-5-5`), and each person's
+  plans come first by themselves. Chains that name plans (`claude-plan/…`) keep working, on plans
+  only.
+- **Code that reads `tiers.model`'s answer** in an app with plans reads `.model`. A page that showed
+  `accounts.uses` shows the tiers' composer line.
+- **Words:** an app's own words for the sign-in dialog's keys do nothing now: give its words for the
+  connect flow's and Your AI's keys instead (`hosts/web/WORDS.md`).
+- **The computer program:** one older than rc.66 has no Grok Build: Sign in says it doesn't know it
+  until it updates.
+
 ## 1.0.0-rc.65 — 2026-11-25
 
 This release finishes what rc.64 postponed. A retried Action finds the nested calls it completed,

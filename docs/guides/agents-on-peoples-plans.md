@@ -318,9 +318,9 @@ hour, the disk's GB and its price a GB-month, `warmMinutes`). Nothing is priced 
 | `cost`  | "About 16¢ per hour of work, and it sleeps 10 minutes after."                                                                 |
 | `month` | "This month: 2h 40m awake · $0.43 · disk $2.00"                                                                               |
 
-It draws nothing for a person's own machine, or where the app prices none. Connected accounts says
-"Your plan pays for the AI.", and, where the app keeps computers, "A cloud computer you use for it
-is charged while it's awake."
+It draws nothing for a person's own machine, or where the app prices none. Your plans, on Your AI,
+says "Your plan pays for the AI.", and, where the app keeps computers, "A cloud computer you use for
+it is charged while it's awake."
 
 ## Known limits
 

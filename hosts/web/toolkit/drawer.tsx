@@ -6,7 +6,6 @@
  * fills it. On a phone it keeps clear of what covers the screen's edges (the
  * status bar, a notch, the home indicator: the safe-area insets) on the sides
  * it runs along; a sheet's foot keeps clear of the home indicator on its own.
- * `isolated`: its close and Escape are its own, as a `Dialog`'s are with it.
  *
  * ```tsx
  * <Drawer open={open} onClose={() => setOpen(false)} label="Sidebar">{sidebar}</Drawer>
@@ -50,22 +49,17 @@ const SHEET = sheet(
 );
 
 export function Drawer(
-  { open, onClose, side = "left", title, label, isolated = false, className, children }: {
+  { open, onClose, side = "left", title, label, className, children }: {
     open: boolean;
     onClose(): void;
     side?: "left" | "right" | "bottom";
-    /**
-     * Its close and Escape are its own: a dialog shown inside it closing doesn't close it, and its
-     * own closing doesn't reach a dialog it's shown inside (React passes those events up).
-     */
-    isolated?: boolean;
     title?: ReactNode;
     label?: string;
     className?: string;
     children?: ReactNode;
   },
 ): ReactNode {
-  const { ref, events } = useModal(open, onClose, { isolated });
+  const { ref, events } = useModal(open, onClose);
   return (
     <dialog
       ref={ref}

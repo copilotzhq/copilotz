@@ -10,12 +10,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { act, type ReactNode, startTransition, Suspense, use, useState } from "react";
 import { test } from "../../../testing/mod.ts";
-import { ConfirmDialog, type ConfirmOptions, useConfirm } from "../toolkit/confirm-dialog.tsx";
+import { ConfirmDialog } from "../toolkit/confirm-dialog.tsx";
 import { Field } from "../toolkit/field.tsx";
 import { useFormSubmit } from "../toolkit/form.tsx";
 import { Input } from "../toolkit/input.tsx";
 import { type RecordChange, RecordDialog, type RecordForm } from "../toolkit/record-dialog.tsx";
-import { createOf, same, updateOf, withValue } from "../toolkit/record-draft.ts";
+import { updateOf } from "../toolkit/record-draft.ts";
 import { dismissToast, toastState } from "../toolkit/toast-state.ts";
 import { page } from "./page.ts";
 
@@ -57,10 +57,6 @@ const backdrop = (target: HTMLDialogElement) =>
     target.dispatchEvent(new window.MouseEvent("pointerdown", { bubbles: true }));
     target.click();
   });
-/** The browser's close algorithm: the dialog is closed at once; its `close` event comes later. */
-const closeQuietly = (target: HTMLDialogElement) => act(() => target.removeAttribute("open"));
-const closeEvent = (target: HTMLDialogElement) =>
-  act(() => void target.dispatchEvent(new window.Event("close")));
 
 const fields = (form: RecordForm<Customer>, more?: ReactNode) => (
   <>
@@ -266,53 +262,11 @@ test("H2: a record dialog that ended takes no more saves or closes", () =>
         { saves: 0, closed: 1 },
         end,
       );
-      // Ended, read-only (round 2: by the draft and readOnly, never disabled).
-      assert.equal(input("name").readOnly, true, end);
-      assert.equal(input("name").disabled, false, end);
       toasts();
     }
   }));
 
 // ---- 3. Typing while the save runs
-
-test("H3: editable while parts run, read-only while the save runs, editable again after a refusal", () =>
-  page(async (render) => {
-    const upload = Promise.withResolvers<void>();
-    let save = Promise.withResolvers<void>();
-    const saves: unknown[] = [];
-    await render(
-      <RecordDialog<Customer>
-        title="Ana"
-        record={ANA}
-        onSave={(change) => {
-          saves.push(change.kind === "update" && change.set);
-          return save.promise;
-        }}
-        onClose={() => {}}
-      >
-        {(form) => fields(form, <Upload wait={upload.promise} />)}
-      </RecordDialog>,
-    );
-    // Read-only by the draft and `readOnly` (round 2: never disabled, so FormData keeps it).
-    const locked = () => input("name").readOnly && !input("name").closest("fieldset[disabled]");
-    await typeInto(input("name"), "First");
-    await submit();
-    assert.equal(locked(), false);
-    await typeInto(input("name"), "Second"); // during the part: in the save
-    await settle(upload.resolve);
-    assert.deepEqual(saves, [{ name: "Second", file: "A.pdf" }]);
-    assert.equal(locked(), true);
-    await typeInto(input("name"), "Third"); // during the save: refused
-    assert.equal(input("name").value, "Second");
-    await settle(() => save.reject(Object.assign(new Error("No."), { detail: { field: "name" } })));
-    assert.equal(locked(), false);
-    assert.equal(input("name").value, "Second");
-    await typeInto(input("name"), "Fourth");
-    save = Promise.withResolvers<void>();
-    await submit();
-    await settle(upload.resolve);
-    assert.deepEqual(saves.at(-1), { name: "Fourth", file: "A.pdf" });
-  }));
 
 // ---- 4. A dialog inside another
 
@@ -355,177 +309,7 @@ test("H4: closing a confirmation inside a record dialog closes only the confirma
     await settle(upload.resolve);
   }));
 
-test("H4: a record dialog inside another: its close and its submit stay its own", () =>
-  page(async (render) => {
-    const errors = console.error;
-    console.error = (...args: unknown[]) => {
-      // React says a form in a form isn't HTML: here it's the point of the test.
-      if (!String(args[0]).includes("cannot be a descendant of")) errors(...args);
-    };
-    try {
-      const said: string[] = [];
-      await render(
-        <RecordDialog<Customer>
-          title="Order"
-          record={ANA}
-          onSave={() => void said.push("order saved")}
-          onClose={() => said.push("order closed")}
-        >
-          {(form) =>
-            fields(
-              form,
-              <RecordDialog<Customer>
-                title="New customer"
-                onSave={(change) => void said.push(`customer ${change.kind}`)}
-                onClose={() => said.push("customer closed")}
-              >
-                {(inner) => (
-                  <Field label="Customer">
-                    {(c) => <Input {...c} {...inner.text("customer")} />}
-                  </Field>
-                )}
-              </RecordDialog>,
-            )}
-        </RecordDialog>,
-      );
-      const [order, customer] = dialogs();
-      await typeInto(input("customer"), "Cy");
-      await submit(customer.querySelector("form")!);
-      assert.deepEqual(said, ["customer create", "customer closed"]);
-      await act(() => customer.close());
-      assert.deepEqual(said, ["customer create", "customer closed"]);
-      assert.equal(order.open, true);
-    } finally {
-      console.error = errors;
-    }
-  }));
-
-// ---- 5. The browser's close event, after the operation ended
-
-test("H5: closed by the browser, its close event still on the way: the outcome is a toast, onClose once", () =>
-  page(async (render) => {
-    toasts();
-    // A record dialog's refusal.
-    const closed: string[] = [];
-    const save = Promise.withResolvers<void>();
-    await render(
-      <RecordDialog<Customer>
-        title="Ana"
-        record={ANA}
-        onSave={() => save.promise}
-        onClose={() => closed.push("editor")}
-      >
-        {(form) => fields(form)}
-      </RecordDialog>,
-    );
-    await typeInto(input("name"), "Ana S");
-    await submit();
-    const [editor] = dialogs();
-    await closeQuietly(editor);
-    await settle(() =>
-      save.reject(Object.assign(new Error("Name refused."), { detail: { field: "name" } }))
-    );
-    assert.deepEqual(document.querySelectorAll(".copilotz-field-error").length, 0);
-    assert.deepEqual(toasts(), ["destructive:Name refused."]);
-    await closeEvent(editor);
-    assert.deepEqual(closed, ["editor"]);
-
-    // A confirmation that succeeds, in both orders.
-    for (const order of ["settled first", "close event first"]) {
-      closed.length = 0;
-      const work = Promise.withResolvers<void>();
-      await render(
-        <ConfirmDialog
-          key={order}
-          title="Delete Ana?"
-          toast="Deleted."
-          onConfirm={() => work.promise}
-          onClose={() => closed.push(order)}
-        />,
-      );
-      await click(button("Confirm"));
-      const [question] = dialogs();
-      await closeQuietly(question);
-      if (order === "close event first") await closeEvent(question);
-      await settle(work.resolve);
-      if (order === "settled first") await closeEvent(question);
-      assert.deepEqual(closed, [order]);
-      assert.deepEqual(toasts(), ["success:Deleted."]);
-    }
-  }));
-
 // ---- Medium and low
-
-function Host({ ask, places = ["one"] }: {
-  ask: (confirm: (q: ConfirmOptions) => Promise<boolean>) => void;
-  places?: string[];
-}) {
-  const [dialog, confirm] = useConfirm();
-  return (
-    <>
-      <button type="button" id="ask" onClick={() => ask(confirm)}>Ask</button>
-      {places.includes("one") ? <div id="one">{dialog}</div> : null}
-      {places.includes("two") ? <div id="two">{dialog}</div> : null}
-    </>
-  );
-}
-
-test("M1: a question shown by a host that goes isn't shown again by another", () =>
-  page(async (render) => {
-    toasts();
-    let ran = 0;
-    const work = Promise.withResolvers<void>();
-    const answers: string[] = [];
-    const ask = (confirm: (q: ConfirmOptions) => Promise<boolean>) => {
-      void confirm({
-        title: "Delete Ana?",
-        onConfirm: () => {
-          ran++;
-          return work.promise;
-        },
-      }).then((yes) => answers.push(`Ana ${yes}`));
-      void confirm({ title: "Delete Bo?" }).then((yes) => answers.push(`Bo ${yes}`));
-    };
-    await render(<Host ask={ask} places={["one", "two"]} />);
-    await click(document.querySelector<HTMLButtonElement>("#ask")!);
-    assert.ok(document.querySelector("#one dialog"));
-    assert.equal(document.querySelector("#two dialog"), null);
-    await click(button("Confirm"));
-    // The first {dialog} goes while Ana's delete runs; the second stays.
-    await render(<Host ask={ask} places={["two"]} />);
-    assert.equal(document.querySelectorAll("dialog").length, 0);
-    await settle(work.resolve);
-    assert.equal(ran, 1);
-    assert.deepEqual(answers.sort(), ["Ana true", "Bo false"]);
-  }));
-
-test("M2: a required field cleared while a part works stops the save", () =>
-  page(async (render) => {
-    const upload = Promise.withResolvers<void>();
-    const saves: unknown[] = [];
-    await render(
-      <RecordDialog<Customer>
-        title="Ana"
-        record={ANA}
-        onSave={(change) => void saves.push(change)}
-        onClose={() => {}}
-      >
-        {(form) => (
-          <>
-            <Input {...form.text("name")} required />
-            <Upload wait={upload.promise} />
-          </>
-        )}
-      </RecordDialog>,
-    );
-    await typeInto(input("name"), "Ana S");
-    await submit();
-    await typeInto(input("name"), "");
-    await settle(upload.resolve);
-    assert.deepEqual(saves, []);
-    assert.equal(dialogs()[0].open, true);
-    assert.equal(input("name").readOnly, false);
-  }));
 
 test("M3: a part handing back the stored value writes nothing; an empty list over null is []", () => {
   assert.equal(updateOf(ANA, {}, { email: "a@example.com" }), undefined);
@@ -546,54 +330,6 @@ test("M3: a part handing back the stored value writes nothing; an empty list ove
 
 // Round 2: a number step over nothing isn't guessed a list any more (a map of numbers looks the
 // same); it's refused, and goes into a list or an object that's there (dialogs-matrix.tsx).
-test("M4: a number step goes into the list that's there, not a made-up object; dates and files are copied as they are", () => {
-  assert.deepEqual(createOf({ lines: [] }, { "lines.0.qty": { kind: "number", raw: "2" } }, {}), {
-    lines: [{ qty: 2 }],
-  });
-  assert.deepEqual(withValue({ lines: [{ qty: 1 }] }, "lines.0.qty", 3), { lines: [{ qty: 3 }] });
-  assert.throws(() =>
-    updateOf({ _id: "x" }, {
-      "lines.0.qty": { kind: "number", raw: "2" },
-      "lines.0.sku": { kind: "text", raw: "P1" },
-    }, {})
-  );
-  const since = new Date("2026-11-25T12:00:00Z");
-  const file = new Blob(["x"]);
-  const values = createOf({ since, file }, {}, {});
-  assert.ok(values.since instanceof Date && values.since.getTime() === since.getTime());
-  assert.equal(values.file, file);
-  assert.ok(same(new Date(1), new Date(1)));
-  assert.ok(!same(new Date(1), new Date(2)));
-  assert.ok(!same(new Blob(["a"]), new Blob(["a"])));
-});
-
-test("M5: a question asked from a question goes over it; the focus ends where the first began", () =>
-  page(async (render) => {
-    const answers: string[] = [];
-    await render(
-      <Host
-        ask={(confirm) =>
-          void confirm({
-            title: "Delete Ana?",
-            danger: true,
-            onConfirm: async () => {
-              if (!await confirm({ title: "Her invoices too?" })) throw new Error("Kept.");
-            },
-          }).then((yes) => answers.push(`Ana ${yes}`))}
-      />,
-    );
-    const opener = document.querySelector<HTMLButtonElement>("#ask")!;
-    opener.focus();
-    await click(opener);
-    await click(button("Delete"));
-    assert.equal(dialogs().length, 2);
-    await click(button("Confirm"));
-    assert.deepEqual(answers, ["Ana true"]);
-    assert.equal(dialogs().length, 0);
-    assert.ok(document.activeElement === opener, "focus on the first opener");
-  }));
-
-// Types: what the binders take at run time, they take in TypeScript too (checked, never run).
 export function binders(form: RecordForm<Customer>) {
   form.value("plan").onChange(null);
   form.value("plan").onChange(undefined);

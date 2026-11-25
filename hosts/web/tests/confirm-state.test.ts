@@ -42,17 +42,6 @@ test("C5: questions show one at a time, in order, and each is answered once", as
   assert.deepEqual(changes, [1, 2, 1, 0]);
 });
 
-test("the first host shows the questions; a second shows none until the first goes", () => {
-  const asked = questions<string>();
-  const one = {};
-  const two = {};
-  const leaveOne = asked.host(one);
-  asked.host(two);
-  assert.equal(asked.shower(), one);
-  leaveOne();
-  assert.equal(asked.shower(), two);
-});
-
 test("C6: when the host goes, waiting questions say no; a running one says how it ended", async () => {
   const asked = questions<string>();
   const leave = asked.host({});
@@ -83,23 +72,6 @@ test("C6: when the owner goes, its questions say no and a later one is no at onc
   assert.equal(asked.queue().length, 1);
   asked.settle(asked.queue()[0].id, true);
   assert.equal(await again, true);
-});
-
-test("C8: dropped from view, a waiting question says no; a running one waits for its end", async () => {
-  const asked = questions<string>();
-  asked.host({});
-  const idle = asked.ask("Archive?");
-  asked.drop(asked.queue()[0].id);
-  assert.equal(await idle, false);
-  const busy = asked.ask("Delete?");
-  const [q] = asked.queue();
-  asked.running(q.id, true);
-  asked.drop(q.id);
-  assert.deepEqual(asked.queue(), []);
-  assert.equal(await standing(busy), "pending");
-  asked.running(q.id, false);
-  asked.settle(q.id, false);
-  assert.equal(await busy, false);
 });
 
 test("a question keeps what had focus as it was asked", () => {

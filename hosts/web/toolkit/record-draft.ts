@@ -1,18 +1,10 @@
 /**
- * A record dialog's draft, as data (see record-dialog.tsx). The draft holds only what was
- * edited, by field name or dot path (`address.city`), each in its control's own form (a number
- * field's text). What the form shows is those edits over the record as it is now. A save sends
- * only the edits that change something: an untouched field never goes, an edit back to the
- * record's value doesn't either, and a field emptied is a clear (`unset`). A list emptied is
- * the empty list, a value of its own. What the form's parts hand up is compared the same way,
- * and wins over an edit of the same field, unless that edit was made after the submit started
- * (a correction typed while a part works).
- *
- * Only plain data is walked: plain objects and arrays are copied and compared by what's in
- * them; anything else (a `Date`, a `File`) is kept as it is, and a date compared by its time.
- * A path goes into what's there: a list by its index, an object by its key. Where nothing is
- * there, a word makes an object; a number is refused, as it could be a list's index or an
- * object's key (`hours.1`): give that field a value first, in the defaults or the record.
+ * A record dialog's draft, as data (see record-dialog.tsx): only what was edited, by field name
+ * or dot path (`address.city`), each in its control's own form (a number field's text). A save
+ * sends only the edits that change the record as it is now: an untouched field never goes, a
+ * field emptied is a clear (`unset`), and a list emptied is `[]`. What the form's parts hand up
+ * goes over the edits, compared the same way. A path through nothing makes objects, as MongoDB
+ * does.
  */
 import type { ReactNode } from "react";
 import { wordsOf } from "./form-submit.ts";
@@ -38,20 +30,15 @@ export type RecordUpdate =
 /** What changed in a stored record, if anything. */
 export type Changed = { set: Record<string, unknown>; unset: string[]; update: RecordUpdate };
 
-/** A plain object: `{…}` or one with no prototype, not a `Date`, a `File` or an array. */
-const isPlain = (value: unknown): value is Record<string, unknown> => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-};
+/** A plain object (`{…}`): not a `Date`, a `File` or an array, which are kept as they are. */
+const isPlain = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null &&
+  [Object.prototype, null].includes(Object.getPrototypeOf(value));
 
-/** A step of a path that indexes a list. */
-const isIndex = (key: string) => /^(0|[1-9]\d*)$/.test(key);
-
-/** A path's own keys; one through `__proto__` or `constructor` reaches nothing. */
+/** A path's keys; one through `__proto__` or `constructor` reaches nothing. */
 const keysOf = (path: string): string[] | undefined => {
   const keys = path.split(".");
-  return keys.some((key) => key === "__proto__" || key === "constructor" || key === "prototype")
+  return keys.some((key) => ["__proto__", "constructor", "prototype"].includes(key))
     ? undefined
     : keys;
 };
@@ -59,71 +46,41 @@ const keysOf = (path: string): string[] | undefined => {
 /** What a record holds at a path: `address.city`, `lines.0.qty`. */
 export function valueAt(record: unknown, path: string): unknown {
   let at = record;
-  for (const key of keysOf(path) ?? []) {
+  for (const key of keysOf(path) ?? [""]) {
     if (at === null || typeof at !== "object" || !Object.hasOwn(at, key)) return undefined;
     at = (at as Record<string, unknown>)[key];
   }
-  return keysOf(path) ? at : undefined;
+  return at;
 }
 
 /** A copy of the record with a path set (objects made on the way); `undefined` deletes it. */
 export function withValue<T>(record: T, path: string, value: unknown): T {
   const keys = keysOf(path);
-  // A number over nothing could be a list's or an object's: no guess, nothing set.
-  if (!keys || unshaped(record, path) !== undefined) return record;
+  if (!keys || (value === undefined && valueAt(record, path) === undefined)) return record;
   const put = (at: unknown, [key, ...rest]: string[]): unknown => {
-    // Nothing there (a word step): an object.
-    const copy: Record<string, unknown> = Array.isArray(at)
-      ? [...at] as unknown as Record<string, unknown>
-      : isPlain(at)
-      ? { ...at }
-      : {};
-    if (rest.length) copy[key] = put(Object.hasOwn(copy, key) ? copy[key] : undefined, rest);
+    const copy = (Array.isArray(at) ? [...at] : isPlain(at) ? { ...at } : {}) as Record<
+      string,
+      unknown
+    >;
+    if (rest.length) copy[key] = put(copy[key], rest);
     else if (value === undefined) delete copy[key];
     else copy[key] = value;
     return copy;
   };
-  // Clearing what isn't there leaves the record as it is.
-  if (value === undefined && valueAt(record, path) === undefined) return record;
   return put(record, keys) as T;
 }
 
-/**
- * Of a path, the field where nothing is and a number follows (`hours` in `hours.1`): it could be
- * a list's index or an object's key, so the path's shape there is unknown.
- */
-export function unshaped(record: unknown, path: string): string | undefined {
-  const keys = path.split(".");
-  for (let i = 1; i < keys.length; i++) {
-    const parent = keys.slice(0, i).join(".");
-    if (isIndex(keys[i]) && (valueAt(record, parent) ?? undefined) === undefined) return parent;
-  }
-  return undefined;
-}
-
-/** A path the record can't hold as it is: the developer gives that field a value first. */
-const unshapedError = (path: string, parent: string) =>
-  new Error(
-    `${path}: nothing is at ${parent}, and the number after it could be a list's index or an ` +
-      `object's key. Give ${parent} a value first ([] or {}), in the defaults or the record.`,
-  );
-
-/**
- * Whether two values hold the same: arrays and plain objects by what's in them, dates by their
- * time, anything else only if it's the very same.
- */
+/** Whether two values hold the same: arrays and plain objects by what's in them. */
 export function same(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
-  if (a instanceof Date && b instanceof Date) return Object.is(a.getTime(), b.getTime());
+  if (a instanceof Date && b instanceof Date) return a.getTime() === b.getTime();
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length === b.length && a.every((item, i) => same(item, b[i]));
   }
-  if (isPlain(a) && isPlain(b)) {
-    const keys = Object.keys(a);
-    return keys.length === Object.keys(b).length &&
-      keys.every((key) => Object.hasOwn(b, key) && same(a[key], b[key]));
-  }
-  return false;
+  if (!isPlain(a) || !isPlain(b)) return false;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length &&
+    keys.every((key) => Object.hasOwn(b, key) && same(a[key], b[key]));
 }
 
 /** Nothing at all: none, `null`, or empty text. */
@@ -131,49 +88,31 @@ const empty = (value: unknown) => value === undefined || value === null || value
 
 /** What a control of a kind shows for a stored value. */
 export function shownAs(kind: DraftKind, value: unknown): unknown {
-  switch (kind) {
-    case "text":
-    case "number":
-      return value === undefined || value === null ? "" : String(value);
-    case "checked":
-      return value === true;
-    case "value":
-      return value ?? undefined;
-    case "list":
-      return Array.isArray(value) ? value : [];
-    default:
-      return value;
-  }
+  if (kind === "text" || kind === "number") return empty(value) ? "" : String(value);
+  if (kind === "checked") return value === true;
+  if (kind === "value") return value ?? undefined;
+  if (kind === "list") return Array.isArray(value) ? value : [];
+  return value;
 }
 
 /** What an edit saves, as the record keeps it: `undefined` when it clears the field. */
 export function savedOf({ kind, raw }: Edit): unknown {
-  switch (kind) {
-    case "text":
-      return raw === "" || raw === undefined || raw === null ? undefined : String(raw);
-    case "number": {
-      const text = raw === undefined || raw === null ? "" : String(raw);
-      if (text.trim() === "") return undefined;
-      const number = Number(text);
-      // Text that isn't a number stays text: the schema refuses it, by its field.
-      return Number.isFinite(number) ? number : text;
-    }
-    case "checked":
-      return raw === true;
-    case "value":
-      return empty(raw) ? undefined : raw;
-    case "list":
-      return Array.isArray(raw) ? raw : [];
-    default:
-      return raw;
+  if (kind === "text") return empty(raw) ? undefined : String(raw);
+  if (kind === "number") {
+    const text = empty(raw) ? "" : String(raw);
+    if (text.trim() === "") return undefined;
+    // Text that isn't a number stays text: the schema refuses it, by its field.
+    return Number.isFinite(Number(text)) ? Number(text) : text;
   }
+  if (kind === "checked") return raw === true;
+  if (kind === "value") return empty(raw) ? undefined : raw;
+  if (kind === "list") return Array.isArray(raw) ? raw : [];
+  return raw;
 }
 
 /**
- * Whether what an edit (or a part) saves changes the stored value. A clear changes a field that
- * holds something (`undefined`, `null` and `""` hold nothing). A checkbox changes whether it's
- * checked (a field with no value isn't). Any other value changes the field unless it's the same
- * as what's stored, exactly: `[]` over `null` is a change.
+ * Whether what's saved changes the stored value. A clear changes a field that holds something; a
+ * checkbox, whether it's checked; anything else, unless it's the same (`[]` over `null` is sent).
  */
 export function changes(kind: DraftKind, saved: unknown, stored: unknown): boolean {
   if (kind === "checked") return (saved === true) !== (stored === true);
@@ -181,62 +120,37 @@ export function changes(kind: DraftKind, saved: unknown, stored: unknown): boole
   return !same(saved, stored);
 }
 
-/** Whether a path is `_id`, which a save names in its filter and never sets. */
-const isId = (path: string) => path === "_id" || path.startsWith("_id.");
-
-/** The edits and the parts' values, as what each path saves: a part's value over an edit. */
-function finalOf(
-  edits: Edits,
-  handed: Record<string, unknown>,
-  later: ReadonlySet<string> = new Set(),
-): Map<string, Edit & { saved: unknown }> {
+/** The edits, then the parts' values over them, as what each path saves (never `_id`). */
+function finalOf(edits: Edits, handed: Record<string, unknown>) {
   const final = new Map<string, Edit & { saved: unknown }>();
   for (const [path, edit] of Object.entries(edits)) {
-    if (!isId(path)) final.set(path, { ...edit, saved: savedOf(edit) });
+    final.set(path, { ...edit, saved: savedOf(edit) });
   }
   for (const [path, value] of Object.entries(handed)) {
-    if (isId(path) || value === undefined) continue;
-    // An edit made after the submit started is the person's last word on its field.
-    if ([...later].some((edited) => holds(edited, path))) continue;
-    // One made inside the part's field goes into the part's value, in its place.
-    let merged = value;
-    for (const edited of later) {
-      if (edited === path || !holds(path, edited)) continue;
-      merged = withValue(merged, edited.slice(path.length + 1), final.get(edited)?.saved);
-      final.delete(edited);
-    }
-    final.set(path, { kind: "set", raw: merged, saved: merged });
+    if (value !== undefined) final.set(path, { kind: "set", raw: value, saved: value });
+  }
+  for (const path of final.keys()) {
+    if (path === "_id" || path.startsWith("_id.")) final.delete(path);
   }
   return final;
 }
 
-/**
- * What changed in a stored record: the edits and the parts' values that change it (`set`, or
- * `unset` for a clear). A part's value wins over an edit of its field, unless that edit is in
- * `later` (made after the submit started). `undefined` when nothing changed. A path with a
- * number over nothing (`hours.1` with no `hours`) throws: give that field a value first.
- */
+/** What changed in a stored record (`set`, or `unset` for a clear); `undefined` when nothing did. */
 export function updateOf(
   record: unknown,
   edits: Edits,
   handed: Record<string, unknown>,
-  later?: ReadonlySet<string>,
 ): Changed | undefined {
   const set: Record<string, unknown> = {};
   const unset: string[] = [];
-  for (const [path, change] of finalOf(edits, handed, later)) {
+  for (const [path, change] of finalOf(edits, handed)) {
     if (!changes(change.kind, change.saved, valueAt(record, path))) continue;
-    if (change.saved === undefined) {
-      unset.push(path);
-      continue;
-    }
-    const parent = unshaped(record, path);
-    if (parent !== undefined) throw unshapedError(path, parent);
-    set[path] = change.saved;
+    if (change.saved === undefined) unset.push(path);
+    else set[path] = change.saved;
   }
+  const $unset = Object.fromEntries(unset.map((path) => [path, ""])) as Record<string, "">;
   const setting = Object.keys(set).length > 0;
   if (!setting && !unset.length) return undefined;
-  const $unset = Object.fromEntries(unset.map((path) => [path, ""])) as Record<string, "">;
   const update: RecordUpdate = !unset.length
     ? { $set: set }
     : !setting
@@ -253,23 +167,17 @@ const copy = (value: unknown): unknown =>
     ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, copy(item)]))
     : value;
 
-/**
- * A new record: its defaults, with the edits that change them (a clear deletes the field) and
- * what the form's parts handed up (over an edit of the same field, unless that edit is in
- * `later`). A path with a number over nothing throws: give that field a value first.
- */
+/** A new record: its defaults, with the edits that change them and the parts' values. */
 export function createOf(
   defaults: Record<string, unknown>,
   edits: Edits,
   handed: Record<string, unknown>,
-  later?: ReadonlySet<string>,
 ): Record<string, unknown> {
   let values = copy(defaults) as Record<string, unknown>;
-  for (const [path, change] of finalOf(edits, handed, later)) {
-    if (!changes(change.kind, change.saved, valueAt(defaults, path))) continue;
-    const parent = change.saved === undefined ? undefined : unshaped(values, path);
-    if (parent !== undefined) throw unshapedError(path, parent);
-    values = withValue(values, path, change.saved);
+  for (const [path, change] of finalOf(edits, handed)) {
+    if (changes(change.kind, change.saved, valueAt(defaults, path))) {
+      values = withValue(values, path, change.saved);
+    }
   }
   return values;
 }
@@ -290,12 +198,10 @@ export function refusalWords(
   error: unknown,
   errors?: Record<string, ReactNode>,
 ): ReactNode | undefined {
-  if (field && errors) {
-    const keys = field.split(".");
-    for (let n = keys.length; n > 0; n--) {
-      const path = keys.slice(0, n).join(".");
-      if (Object.hasOwn(errors, path)) return errors[path];
-    }
+  const keys = field?.split(".") ?? [];
+  for (let n = keys.length; n > 0 && errors; n--) {
+    const path = keys.slice(0, n).join(".");
+    if (Object.hasOwn(errors, path)) return errors[path];
   }
   return wordsOf(error);
 }

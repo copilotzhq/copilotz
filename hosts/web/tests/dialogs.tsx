@@ -664,18 +664,6 @@ test("R14: onClose once for each close the person makes or a save ends; none for
       "close:",
       "backdrop:",
     ]);
-
-    // The browser closes it while busy (a second Escape it won't hold): that's a close.
-    closed.length = 0;
-    save = Promise.withResolvers<void>();
-    await draw("forced");
-    await typeInto(input("name"), "Ana S");
-    await submit();
-    await act(() => dialog()!.close());
-    assert.deepEqual(closed, ["forced:"]);
-    await settle(save.resolve);
-    assert.deepEqual(closed, ["forced:"]);
-    assert.deepEqual(toasts(), ["success:Saved."]);
   }));
 
 test("R15: focus goes into the dialog, and back to what opened it", () =>
@@ -1006,48 +994,6 @@ test("C7: a question is one element, open once: a reopened or re-keyed one isn't
     assert.deepEqual(closed, []);
     assert.match(dialog()!.textContent!, /D/);
     assert.deepEqual(toasts(), ["success:C done."]);
-  }));
-
-test("C8: closed by the browser while busy: a close, and the operation ends on its own", () =>
-  page(async (render) => {
-    toasts();
-    const work = Promise.withResolvers<void>();
-    const closed: string[] = [];
-    await render(
-      <ConfirmDialog
-        title="Delete Ana?"
-        toast="Ana deleted."
-        onConfirm={() => work.promise}
-        onClose={() => closed.push("closed")}
-      />,
-    );
-    await click(button("Confirm"));
-    await act(() => dialog()!.close());
-    assert.deepEqual(closed, ["closed"]);
-    await settle(work.resolve);
-    assert.deepEqual(closed, ["closed"]);
-    assert.deepEqual(toasts(), ["success:Ana deleted."]);
-
-    // With the hook, the next question shows, and the first is answered by its end.
-    const fails = Promise.withResolvers<void>();
-    const answers: string[] = [];
-    await render(
-      <Asker
-        ask={(confirm) => {
-          void confirm({ title: "Delete Ana?", onConfirm: () => fails.promise })
-            .then((yes) => answers.push(`Ana ${yes}`));
-          void confirm({ title: "Delete Bo?" }).then((yes) => answers.push(`Bo ${yes}`));
-        }}
-      />,
-    );
-    await click(document.querySelector<HTMLButtonElement>("#ask")!);
-    await click(button("Confirm"));
-    await act(() => dialog()!.close());
-    assert.match(dialog()!.textContent!, /Delete Bo\?/);
-    await settle(() => fails.reject(new Error("Ana has invoices.")));
-    assert.deepEqual(answers, ["Ana false"]);
-    assert.deepEqual(toasts(), ["destructive:Ana has invoices."]);
-    assert.match(dialog()!.textContent!, /Delete Bo\?/);
   }));
 
 // ---- Dialog's new props

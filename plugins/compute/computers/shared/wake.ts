@@ -96,6 +96,43 @@ export function touch(ctx: Context, computer: string, view?: boolean): Promise<v
   );
 }
 
+/** How often work under way says its computer is used: a minute, well inside how long one stays warm. */
+export const TOUCH_MS = 60_000;
+
+/**
+ * Says `computer` is used now, again every `every` ms while work goes on
+ * there (a plan's step: it's use until it ends), and once more when it's
+ * stopped (`stop`, which waits for what's on its way): the time it stays
+ * warm counts from the end of the work, not its start.
+ */
+export function keepTouching(
+  ctx: Context,
+  computer: string,
+  every = TOUCH_MS,
+): { stop(): Promise<void> } {
+  let last = touch(ctx, computer);
+  const timer = setInterval(() => last = touch(ctx, computer), every);
+  return {
+    async stop() {
+      clearInterval(timer);
+      await last;
+      await touch(ctx, computer);
+    },
+  };
+}
+
+/** How long waking `computer` should take now, as the app estimates (`estimate`); none when it can't say. */
+export async function wakeEstimate(
+  ctx: Context,
+  computer: string,
+): Promise<WakeEstimate | undefined> {
+  const hook = hookOf(ctx);
+  if (!hook?.estimate) return undefined;
+  const said = await ctx.call<WakeEstimate | null>(hook.estimate, { computer }).catch(() => null);
+  if (typeof said?.seconds !== "number") return undefined;
+  return { seconds: said.seconds, ...(said.slower ? { slower: true as const } : {}) };
+}
+
 /**
  * Where an agent works (see `whereFor`): the computer it names (`computer`),
  * else its space's own (its default, else the one seen last), woken first

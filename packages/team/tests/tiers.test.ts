@@ -587,11 +587,30 @@ test("a person's order of their plans: kept beside their tier, and the app's pla
   const rt = await start({ plans: true });
   try {
     const shown = () => rt.query<HarnessShown[]>("modelChoice.harnesses", {}, { actor: ana });
-    // The plans a tier's model runs on, in the default order; Grok's serves none here.
+    // The plans a tier's model runs on, in the default order; Grok's serves none here. Each with
+    // the first model, in tier order, it runs: what a test of it tries.
     assertEquals(await shown(), [
-      { name: "h-claude", title: "Claude plan", plan: "Claude", connected: false },
-      { name: "h-chatgpt", title: "ChatGPT plan", plan: "ChatGPT", connected: false },
-      { name: "h-codex", title: "ChatGPT plan, through Codex", plan: "ChatGPT", connected: false },
+      {
+        name: "h-claude",
+        title: "Claude plan",
+        plan: "Claude",
+        connected: false,
+        model: "h-claude/plan-haiku",
+      },
+      {
+        name: "h-chatgpt",
+        title: "ChatGPT plan",
+        plan: "ChatGPT",
+        connected: false,
+        model: "h-chatgpt/plan-sol",
+      },
+      {
+        name: "h-codex",
+        title: "ChatGPT plan, through Codex",
+        plan: "ChatGPT",
+        connected: false,
+        model: "h-codex/plan-sol",
+      },
     ]);
     connected.ana = ["h-chatgpt"];
     await rt.call("tiers.choose", { tier: "expert", mine: true }, { actor: ana });

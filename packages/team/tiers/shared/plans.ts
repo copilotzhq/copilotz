@@ -22,6 +22,8 @@ export type HarnessShown = {
   plan: string;
   /** The person has it now: their account, or signed in on a computer of theirs. */
   connected: boolean;
+  /** The first model, in tier order, it runs (`claude-plan/claude-haiku-5-5`): what a test tries. */
+  model: string;
 };
 
 /** The app's plans, by provider name. */
@@ -69,7 +71,8 @@ export async function plansFor(
 /**
  * The app's plans, as a person orders them: those that run a model some
  * tier of the org names (each chain, as it would be tried on every plan), in
- * their order, each with whether they've connected it now.
+ * their order, each with whether they've connected it now, and the first
+ * model, in tier order, it runs.
  */
 export async function harnessesShown(ctx: ReadContext): Promise<HarnessShown[]> {
   const plans = harnessesOf(ctx);
@@ -81,18 +84,25 @@ export async function harnessesShown(ctx: ReadContext): Promise<HarnessShown[]> 
     ctx.db.collection<Choice>("modelChoice").findOne({ _id: personChoice(person) }),
     connectedOf(ctx),
   ]);
-  const chains = Object.values(tiers).flatMap((tier) => Object.values(tier.agents));
+  const chains = Object.values(tiers).sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .flatMap((tier) => Object.values(tier.agents));
   const tried = await Promise.all(
     chains.map((chain) =>
       ctx.call<string[]>("models.check", { model: { model: chain, harnesses: all }, port: "llm" })
         .catch(() => [] as string[])
     ),
   );
-  const used = new Set(tried.flat().map((id) => id.slice(0, id.indexOf("/"))));
-  return orderOf(ctx, mine?.harnesses).filter((name) => used.has(name)).map((name) => ({
+  // Each plan a chain runs, with the first model it runs there.
+  const first = new Map<string, string>();
+  for (const id of tried.flat()) {
+    const provider = id.slice(0, id.indexOf("/"));
+    if (!first.has(provider)) first.set(provider, id);
+  }
+  return orderOf(ctx, mine?.harnesses).filter((name) => first.has(name)).map((name) => ({
     name,
     title: plans[name].title ?? name,
     plan: plans[name].harness!.plan,
     connected: connected.has(name),
+    model: first.get(name)!,
   }));
 }

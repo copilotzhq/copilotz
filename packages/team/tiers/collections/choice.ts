@@ -17,7 +17,8 @@
  * - `agent` `{ agent, space?, thread? }`: one agent there: its kind, the tier
  *   in force and its chain in it.
  * - `harnesses` `{}`: the app's plans the person looking orders (those a
- *   tier's model runs on), in their order, each with whether they have it.
+ *   tier's model runs on), in their order, each with whether they have it
+ *   and the first model, in tier order, it runs (what a test of it tries).
  */
 import { defineCollection, forbidden, people, type ReadContext } from "copilotz";
 import { harnessesShown } from "../shared/plans.ts";

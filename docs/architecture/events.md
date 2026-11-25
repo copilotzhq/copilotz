@@ -48,8 +48,10 @@ fields.
 
 ### Ids that survive a retry
 
-A nested call's id comes from its cause, its place among the calls made under it, and a hash of its
-input. A retried job makes the same calls in the same order, so it finds the same ids. A call whose
+A nested call's id names its caller, what it calls and with what input, and how many identical calls
+that caller made before it: `<caller>.<action>#<n>.<inputHash>`. The caller is the call's id, or, in
+a Processor's delivery, the event and the Processor. A retried job finds each completed call again
+wherever it's made, whatever other calls it refuses, adds, or starts in another order. A call whose
 id is already in the log answers from it instead of running again. So a retry rewrites what it wrote
 instead of writing it twice.
 

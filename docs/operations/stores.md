@@ -132,6 +132,41 @@ Plugin code reads no log: nothing on `ctx` does. A screen that shows a document'
 collection the app keeps, written by the Action that makes each change or by a Processor that hears
 its events.
 
+### Work in flight
+
+Work in flight is what a runtime will run again, as a retry (`ctx.retry`):
+
+- **a Processor delivery not yet done:** running, cut short by a stop, waiting for its next attempt
+  after a failure, or done but with its Processor's position not yet saved (a process that stopped
+  without `close()`);
+- **a call that started and didn't complete,** and will be called again with the same id: by the
+  client that made it, by an outside system that sends it again (a webhook), or by a timer's retry.
+
+A release whose notes say to finish work in flight first needs none of it left when the new version
+starts. While the old one runs, `runtime.idle()` resolves when no delivery or timer occurrence is
+pending, `runtime.stats().pending` counts them, and the `copilotz.processor.lag` gauge says how many
+events each Processor has yet to finish. `runtime.close({ drain })` starts nothing new, gives what's
+running `drain` ms to finish, and saves every Processor's position. Afterwards, in SQL (on a
+PostgreSQL schema shared by tenants, add `tenant = '…'` to each `WHERE`):
+
+```sql
+-- Processor deliveries not done: a Processor whose position is behind the log's last event.
+SELECT substr(key, 10) AS processor, value AS position, (SELECT max(seq) FROM events) AS last
+  FROM meta WHERE key LIKE 'position:%';
+
+-- Calls that started and never completed (timer occurrences too), newest first.
+SELECT id, data ->> 'action' AS action, at FROM events s
+  WHERE type = 'action.started' AND cause IS NULL
+    AND NOT EXISTS (SELECT 1 FROM events c WHERE c.cause = s.id AND c.type = 'action.completed')
+  ORDER BY seq DESC;
+
+-- Timer occurrences waiting to be tried again (`<timer>@<due time>`).
+SELECT id FROM nodes WHERE collection = 'sys.timers' AND id LIKE '%@%';
+```
+
+The second also lists calls that failed for good and that nobody will call again: only the app's
+operators know which callers still retry, a webhook sender for its retry window, say.
+
 ## Blobs
 
 A blob is a large value, kept once.

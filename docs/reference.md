@@ -432,6 +432,46 @@ retryable by id, and everything it causes is its caller's, where its caller is. 
 startup checks may call unrecorded Actions, read-only. One that acts as someone else (`ctx.as`)
 reads as them there too, as when an Action calls it; a startup check, which reads nothing, refuses.
 
+#### Nested calls and retries
+
+Code calls another Action with `ctx.call(action, input)`, or `tx.call` in a transaction. A recorded
+nested call is kept under an id that names its caller, the Action, how many calls of it with the
+same input the caller made before, and its input's hash: `<caller>.<action>#<n>.<inputHash>`. The
+caller is the call's own id, `<event>:<processor>` in a Processor's delivery, and `<caller>/<key>`
+in `ctx.branch(key)`. An unrecorded Action's calls are its caller's.
+
+A call retried with its id (`runtime.call(…, { id })`, a timer's occurrence, a Processor's delivery
+after a failure or a restart) has `ctx.retry` true. Each nested call that completed answers its
+recorded result without running again, and one that didn't complete runs.
+
+```ts
+import { defineAction, people } from "copilotz";
+
+export default defineAction({
+  allow: people,
+  run: async (ctx, input: { order: string }) => {
+    // Refused for some callers. On a retry, the calls after it are found either way.
+    await ctx.call("discount.apply", { order: input.order }).catch(() => null);
+    await ctx.call("inventory.reserve", { order: input.order });
+    return ctx.call("invoice.create", { order: input.order });
+  },
+});
+```
+
+- **Found wherever it's made.** A call refused or allowed on the retry, a call added, or calls that
+  start in another order (each after a read) move no other call.
+- **The same call twice is two calls,** `#1` and `#2`. A retry answers both from their records, and
+  runs a third if the code makes one.
+- **A refused call** keeps its number and records nothing.
+- **A changed input is a new call:** the hash covers the whole input, private fields too. Keep a
+  nested call's input the same across attempts: a time or a random id in it comes from the caller's
+  input, not from the clock.
+- **Processors are apart.** Two Processors handling one event never share a call's record or a
+  timer.
+- **`ctx.branch(key)`** keeps identical calls of concurrent work apart (each of a step's tool
+  calls), when they may start in another order.
+- **The id is the log's, not an API.** Read a call's `cause` and `data.action`, not the id's parts.
+
 #### Actions with no parameters
 
 Omit `input` to accept either `runtime.call("order.expire")` or `runtime.call("order.expire", {})`.
@@ -670,7 +710,7 @@ What plugin code gets. `Context` is an Action's, a Processor's and a tool's.
 | `stream(channel)`                       | live frames for subscribers, never stored (tokens being written)                                            |
 | `render(name, item)`                    | renders a View                                                                                              |
 | `graph`                                 | `link`, `unlink` and `edges` between documents                                                              |
-| `branch(key)`                           | this context with its calls numbered apart, for work run at once (a step's tool calls)                      |
+| `branch(key)`                           | this context with its calls and timers named apart, for identical calls of work run at once                 |
 | `cancel(target)`, `disconnect(actor)`   | stops a running call or delivery; ends an actor's browsers                                                  |
 | `workers`, `fetch`, `metrics`           | workers by kind and id; the outside `fetch` (a test's fake, if given); counters, histograms and gauges      |
 | `resources`, `adapters`                 | the merged configuration                                                                                    |
@@ -778,9 +818,9 @@ The log records what happened, with no bookkeeping tables beside it. Every event
 - **Retries:** `runtime.call(action, input, { id })` is retryable. An id that completed answers its
   recorded result without running. One still running is joined. Otherwise the call runs again. An id
   reused for another action or input is refused (`id_conflict`). A call whose executor died fails
-  with `executor_lost`. A nested call's id comes from its cause, its place, and its input. A
-  synchronous permission refusal takes no place. An asynchronous check reserves the recorded call's
-  place before it waits.
+  with `executor_lost`. A nested call's id names its caller, the Action, its number among identical
+  calls and its input, so a retry finds it wherever it's made
+  ([nested calls and retries](#nested-calls-and-retries)).
 - **Timers:** an occurrence is the call `<timer>@<due time>`, and a failed one runs again as that
   same call.
 - **Causes:** every event names its cause, so the log is a tree you walk from any event back to the
@@ -820,7 +860,9 @@ schedules: {
 - **From code:** `ctx.schedule(action, input, { at | cron | every, id?, retries? })` sets a timer
   with the call's writes, and `ctx.unschedule(id)` removes it. In a transaction, `tx.schedule`
   commits with the rest. Scheduling an id again replaces its timer. Without an `id`, a retried call
-  sets the same timers again rather than more. A declared timer can't be changed from code.
+  sets the same timers again rather than more: `<call>:timer.<n>`, or
+  `<event>:<processor>:timer.<n>` for a Processor's, apart from another Processor's. A declared
+  timer can't be changed from code.
 - **As whom:** a timer set by an actor runs as them, where they were, and its call asks `allow`.
 - **Once:** the owner claims what's due in one commit and calls each occurrence as
   `<timer>@<due time>`, so an occurrence called twice runs once. A recurring timer that missed

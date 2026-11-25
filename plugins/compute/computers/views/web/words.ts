@@ -26,48 +26,36 @@ export const say = defineWords("computers", {
   plansTitle: "Your plans",
   plansAbout: "Your agents run on AI plans you already pay for, instead of the app's models. " +
     "Connect each one once, and it works in every conversation and space here.",
-  connectPlans: "Connect your plans",
   plansPaid: "Your plan pays for the AI.",
   plansCloud: "A cloud computer you use for it is charged while it's awake.",
   plansPrivate: "Sign-ins stay on your computers, or sealed on the server: nobody else sees them.",
   checkFailed: "Couldn't check your computers: {why}",
   connect: "Connect",
   fix: "Fix",
-  signOut: "Sign out",
   signOutOn: "Sign out on {computer}",
   signOutServer: "Disconnect {plan}",
   signOutFailed: "Couldn't sign out of {computer}: {why}",
-  alsoThrough: "Also through {cli}, on a computer",
   moreFor: "More for {plan}",
   cardReadyServer: "Connected as {account}, on the server: always ready.",
   cardReady: "Running on {computer} ({state}).",
   cardReadyBackup: "Running on {computer} ({state}), with {backup} ready as backup.",
   cardOnline: "online",
   cardAsleep: "asleep: it wakes when your agents need it",
-  cardAlso: "Also through {cli} on {computer}, as backup.",
   cardAway: {
     one: "Signed in on {computers}, which is off. Your agents use the app's models until it's on.",
     other:
       "Signed in on {computers}, which are off. Your agents use the app's models until one is on.",
   },
   cardReconnect: "{plan} needs you to sign in again.",
-  cardShared:
-    "Signed in only on {computers}, shared with others' agents, so your plan can't run there.",
   cardOff: "Not connected: your agents use the app's models.",
   cardLimited:
     "At its limit since {time}: your agents use your next plan, or the app's models, until it resets.",
-  sharedNotice:
-    "{computer} is shared with others' agents in {spaces}, so your plans can't run on it.",
-  sharedNoticeSomewhere: "{computer} is shared with others' agents, so your plans can't run on it.",
-  howToFix: "How to fix",
-  personal: "your Personal space",
 
   // The person's order of their plans
   orderTitle: "Use my plans in this order",
   orderAbout:
     "When a model runs on more than one of your plans, your agents try them in this order.",
   moveUp: "Move up",
-  moveDown: "Move down",
   notConnected: "not connected",
   orderFailed: "Couldn't save the order: {why}",
 
@@ -79,26 +67,11 @@ export const say = defineWords("computers", {
   yoursNone:
     "No computer yet. A plan that runs through its app needs one: connecting it sets one up for you.",
   terminal: "Terminal",
-  signInHere: "Sign in to your plans here",
-  addComputer: "Add a computer",
   online: "Online",
   offline: "Offline",
   seenAt: "last seen {time}",
 
-  // A computer shared with others' agents
-  sharedTitle: "{computer} is shared with others' agents",
-  sharedWhy:
-    "In {spaces}, each person's agents work on {computer} as you. Signed in there, your plan " +
-    "would be theirs to use too, so it can't run on it.",
-  sharedWhySomewhere:
-    "Others' agents work on {computer} as you, where it's shared. Signed in there, your plan " +
-    "would be theirs to use too, so it can't run on it.",
-  sharedFix:
-    "To use it for your plan, have their agents ask you first there: then nothing runs on it " +
-    "without your yes. Or take it out of {spaces}, from its menu there.",
-  askMeFirst: "Ask me first in {spaces}",
-  openSpace: "Open {space}",
-  keepAsIs: "Keep it as it is",
+  // Lists, and a computer shared with others' agents
   listPair: "{first} and {second}",
   listMore: "{rest} and {last}",
   shareSignedIn: "{computer} is signed in to your {plan}. Sign out of it first: " +
@@ -107,11 +80,9 @@ export const say = defineWords("computers", {
     "can on it, including your own sign-ins (Claude Code, Codex, SSH keys). Share it only with " +
     "people you trust.",
 
-  // The connect flow: which plans
+  // The connect flow
   flowTitle: "Connect your plans",
-  flowPick: "Pick each plan you pay for: your agents run on them instead of the app's models.",
   flowConnected: "Connected",
-  flowNext: "Next",
   // Where they run
   flowWhere: "Where should they run?",
   flowWhereAbout: "{plans} run through an app on a computer. We set it up, and keep it up to date.",
@@ -124,61 +95,38 @@ export const say = defineWords("computers", {
   whereNone: "Open this page on your computer to connect it.",
   making: "Making your cloud computer…",
   makeFailed: "Couldn't make your cloud computer: {why}",
-  back: "Back",
   // The checklist
   lineComputer: "{computer} is ready",
   lineWaking: "Waking {computer}… (about 30 seconds)",
   lineGetting: "Getting {computer} ready…",
-  lineOld: "{computer} runs an older program than this app: going on as it is.",
-  lineInstall: "{cli} is installed",
   lineInstalling: "Installing {cli} on {computer}…",
-  lineSignIn: "Sign in to {plan}",
-  lineSignedInAs: "Signed in as {account}",
-  lineAlready: "Signed in already",
-  lineTest: "{plan} answers on your plan",
   lineTesting: "Asking it a short question…",
   lineAnswered: "It answered: “{text}”",
   lineLimit:
     "Connected. Your {plan} is at its limit right now: your agents use it again when it resets.",
-  lineModel: "Connected. {model} isn't in your plan, so your agents use the next one for it.",
-  failOff: "{computer} is off. Turn it on, or use a cloud computer instead.",
   failShared: "{computer} is shared with others' agents, so plans can't run on it.",
-  failReach: "Couldn't reach {computer}: {why}",
   failInstall: "{cli} didn't install on {computer}. What its installer said is below.",
   failWindows: "Install {cli} on {computer} from its terminal, once:",
   orInstall: "Or install it from {computer}'s terminal, then check again:",
   installCommand: "The command that installs {cli}",
   openTerminal: "Open {computer}'s terminal",
   failSignIn: "Signing in to {plan} didn't finish.",
-  failGone: "{computer} went offline.",
-  failSignedOut: "{plan} says you're not signed in.",
   failTest: "{plan} didn't answer: {why}",
-  failOldLaptop:
-    "{computer} runs an older Copilotz program and didn't update itself. Quit Copilotz there and open it again.",
-  failOldCloud:
-    "{computer} runs an older program than this app. Cloud computers are updating: try again in a few minutes.",
   useCloud: "Use a cloud computer",
-  signInAgain: "Sign in again",
   tryAgain: "Try again",
   checkAgain: "Check again",
   flowDone: "Your agents now run on {plans}.",
-  flowLeft: "What's left is below, with what to do.",
-  flowNone: "Nothing's connected yet. What's left is below, with what to do.",
   // A CLI's sign-in, on a line
   stepSignInHere: "Open the sign-in page, and sign in with the account that has your plan.",
-  stepSignInThere:
-    "A sign-in page opens in the browser on {computer}. Sign in there, with the account that has your plan.",
   stepSignInWait: "The sign-in page shows here as soon as {cli} gives it.",
   stepEnterCode:
     "Open the sign-in page, sign in with the account that has your plan, and enter this code there:",
   openSignIn: "Open the sign-in page",
-  notOpened: "Not on that screen? Open it here",
   codeLabel: "The code from the sign-in page",
   copyCode: "Copy the code",
   codeHint: "If the page shows a code once you've signed in, paste it here.",
   codePlaceholder: "Paste the code",
   send: "Send",
-  gotCode: "The page gave you a code?",
   codeSent: "Code sent: finishing…",
   output: "What {cli} says",
   cancel: "Cancel",
@@ -194,7 +142,6 @@ export const say = defineWords("computers", {
   // The command palette
   paletteGroup: "General",
   paletteConnect: "Connect your {plan}",
-  paletteConnected: "Connected",
   paletteKeywords:
     "plan, subscription, sign in, computer, Claude, ChatGPT, Codex, Gemini, Google, Grok",
 

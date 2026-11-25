@@ -31,7 +31,6 @@ import { SignedInNotice } from "../computers/views/web/plan-shared.tsx";
 import { ShareWarning } from "../computers/views/web/desks.tsx";
 import { computers as computersPtBR } from "../../../hosts/web/pt-br/computers.ts";
 import {
-  asksForCode,
   cardOf,
   type LoginEvent,
   type LoginStep,
@@ -218,7 +217,6 @@ test("without tiers: every plan the app has, each on its own card, not connected
     assertStringIncludes(shown, `${plan} Not connected: your agents use the app's models. Connect`);
   }
   assertStringIncludes(shown, "Your plan pays for the AI.");
-  assertStringIncludes(shown, "Connect your plans");
   // Loading, nothing yet.
   assertStringIncludes(draw(plansView({}, ctxOf({}))), 'aria-busy="true"');
 });
@@ -301,6 +299,7 @@ test("a plan's card, in each state, in English and Portuguese", () => {
     away: cards([laptopOff]).claude,
     server: cards([], [plus]).chatgpt,
     reconnect: cards([], [{ ...plus, status: "needs_reconnect" }]).chatgpt,
+    // Signed in only where others' agents work: not connected, for its person.
     shared: sentence(cardOf(google, [machine(studio, [{ _id: "acme", name: "Acme" }])], [])),
     off: cards([]).claude,
   });
@@ -310,8 +309,7 @@ test("a plan's card, in each state, in English and Portuguese", () => {
     away: "Signed in on MacBook, which is off. Your agents use the app's models until it's on.",
     server: "Connected as ana@example.com (Plus), on the server: always ready.",
     reconnect: "ChatGPT needs you to sign in again.",
-    shared:
-      "Signed in only on Studio PC, shared with others' agents, so your plan can't run there.",
+    shared: "Not connected: your agents use the app's models.",
     off: "Not connected: your agents use the app's models.",
   });
   // At its limit there: since when.
@@ -328,8 +326,7 @@ test("a plan's card, in each state, in English and Portuguese", () => {
         "Conectado no MacBook, que está desligado. Seus agentes usam os modelos do app até ele ligar.",
       server: "Conectado como ana@example.com (Plus), no servidor: sempre pronto.",
       reconnect: "O ChatGPT precisa que você entre de novo.",
-      shared:
-        "Conectado só em Studio PC, compartilhado com agentes de outras pessoas, então seu plano não roda lá.",
+      shared: "Não conectado: seus agentes usam os modelos do app.",
       off: "Não conectado: seus agentes usam os modelos do app.",
     });
   } finally {
@@ -434,7 +431,8 @@ test("the founder's test, in a page: an asleep cloud computer, an old program, i
     }
     const shown = document.body.textContent!;
     assertStringIncludes(shown, "Cloud computer is ready");
-    assertStringIncludes(shown, "Claude Code is installed");
+    // One line for the plan: installed as it signed in, signed in, answering.
+    assertStringIncludes(shown, "Claude plan");
     assertStringIncludes(shown, "It answered: “Ready.”");
     assertStringIncludes(shown, "Your agents now run on Claude plan.");
     assertEquals(asked.filter(([action]) => action !== "computer.engine.login"), [
@@ -451,6 +449,81 @@ test("the founder's test, in a page: an asleep cloud computer, an old program, i
       assert(!said.includes(INSTALL.claude), "no install command shown");
       assert(!said.toLowerCase().includes("terminal"), "no terminal asked for");
     }
+  }));
+
+test("a second plan, from its card, finds the computer ready: one check, then its own sign-in, nothing else", () =>
+  page(async (render) => {
+    const asked: [string, unknown][] = [];
+    const call = <R,>(action: string, input?: unknown): Promise<R> => {
+      asked.push([action, input]);
+      return Promise.resolve(
+        (action === "computer.prepare"
+          ? {
+            computer: "mac",
+            online: true,
+            shared: false,
+            engines: {
+              claude: signed("ana@example.com"),
+              codex: { installed: true, signedIn: false, at: AT },
+            },
+            program: { version: "1.0.0-rc.66", current: true },
+          }
+          : { state: "done", output: "", signedIn: true, installed: true }) as R,
+      );
+    };
+    await render(
+      <ConnectFlow
+        plans={plansOf(undefined, [])}
+        picked={["codex-plan"]}
+        machines={[machine(mac)]}
+        computers={[mac]}
+        accounts={[]}
+        kinds={[]}
+        onClose={() => {}}
+        call={call as never}
+      />,
+    );
+    for (let i = 0; i < 40 && !document.body.textContent!.includes("Your agents now run"); i++) {
+      await settle(25);
+    }
+    assertStringIncludes(
+      document.body.textContent!,
+      "Your agents now run on ChatGPT plan, through Codex.",
+    );
+    // Awake and current: computer.prepare only asks it what its CLIs are; Codex is there.
+    assertEquals(asked, [
+      ["computer.prepare", { computer: "mac" }],
+      ["computer.engine.login", { computer: "mac", engine: "codex" }],
+    ]);
+  }));
+
+test("the welcome's step connects several plans in one flow, one after another", () =>
+  page(async (render) => {
+    const asked: string[] = [];
+    const call = <R,>(action: string): Promise<R> => {
+      asked.push(action);
+      return new Promise<R>(() => {});
+    };
+    await render(<>{plansWelcomeView({}, { ...ctxOf(READS), call } as never)}</>);
+    const box = (name: string) =>
+      [...document.querySelectorAll("label")].find((l) => l.textContent?.startsWith(name))!
+        .querySelector("input")!;
+    await act(() => box("Claude plan").click());
+    await act(() => box("Google AI plan, through Antigravity").click());
+    const go = [...document.querySelectorAll("button")].find((b) =>
+      b.textContent === "Connect them"
+    )!;
+    await act(() => go.click());
+    await settle();
+    const lines = [...document.querySelectorAll(".flow-line")].map((l) =>
+      `${l.querySelector(".flow-line-title")!.textContent} ${l.getAttribute("data-state")}`
+    );
+    assertEquals(lines, [
+      "Getting MacBook ready… active",
+      "Claude plan waiting",
+      "Google AI plan, through Antigravity waiting",
+    ]);
+    assertEquals(asked, ["computer.prepare"]);
   }));
 
 test("an installer that fails: then, and only then, its command, with what it said, and the computer's terminal", () =>
@@ -672,10 +745,7 @@ test("what a CLI says, as it's shown: no escapes, safe links, a code it shows or
   assertEquals(safeLink(undefined), undefined);
   const device = "2. Enter this one-time code (expires in 15 minutes)\n   ABCD-7Q2K\n";
   assertEquals(shownCode(device), "ABCD-7Q2K");
-  assertEquals(asksForCode(device), false);
-  assertEquals(asksForCode("Paste code here if prompted > "), true);
   assertEquals(shownCode("Paste code here if prompted > "), undefined);
-  assertEquals(asksForCode("Opening your browser to sign in…"), false);
 });
 
 test("the palette: each plan to connect, or how it stands", () => {
@@ -729,6 +799,7 @@ test("its words are the app's: nothing English left once they're all given", () 
       draw(
         <ConnectFlow
           plans={plansOf(LISTED, [CHATGPT])}
+          picked={["claude-plan", "chatgpt"]}
           machines={[machine(mac)]}
           computers={[mac]}
           accounts={[]}

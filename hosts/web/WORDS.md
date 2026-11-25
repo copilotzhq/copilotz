@@ -328,16 +328,11 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 
 | Key | English |
 |---|---|
-| `computers.addComputer` | Add a computer |
-| `computers.alsoThrough` | Also through {cli}, on a computer |
 | `computers.antigravityCli` | Antigravity |
 | `computers.antigravityTitle` | Google AI plan, through Antigravity |
-| `computers.askMeFirst` | Ask me first in {spaces} |
 | `computers.awakeHours` | {hours}h {minutes}m |
 | `computers.awakeMinutes` | {minutes}m |
-| `computers.back` | Back |
 | `computers.cancel` | Cancel |
-| `computers.cardAlso` | Also through {cli} on {computer}, as backup. |
 | `computers.cardAsleep` | asleep: it wakes when your agents need it |
 | `computers.cardAway` | one: Signed in on {computers}, which is off. Your agents use the app's models until it's on. / other: Signed in on {computers}, which are off. Your agents use the app's models until one is on. |
 | `computers.cardLimited` | At its limit since {time}: your agents use your next plan, or the app's models, until it resets. |
@@ -347,7 +342,6 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.cardReadyBackup` | Running on {computer} ({state}), with {backup} ready as backup. |
 | `computers.cardReadyServer` | Connected as {account}, on the server: always ready. |
 | `computers.cardReconnect` | {plan} needs you to sign in again. |
-| `computers.cardShared` | Signed in only on {computers}, shared with others' agents, so your plan can't run there. |
 | `computers.checkAgain` | Check again |
 | `computers.checkFailed` | Couldn't check your computers: {why} |
 | `computers.claudeCli` | Claude Code |
@@ -360,7 +354,6 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.codexCli` | Codex |
 | `computers.codexTitle` | ChatGPT plan, through Codex |
 | `computers.connect` | Connect |
-| `computers.connectPlans` | Connect your plans |
 | `computers.copyCode` | Copy the code |
 | `computers.costCoversMonth` | one: Your {amount} a month covers about {count} hour of work, after the disk. / other: Your {amount} a month covers about {count} hours of work, after the disk. |
 | `computers.costCoversOnce` | one: Your {amount} covers about {count} hour of work, after this month's disk. / other: Your {amount} covers about {count} hours of work, after this month's disk. |
@@ -370,14 +363,8 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.done` | Done |
 | `computers.dropTitle` | Drop to upload |
 | `computers.dropTo` | To {folder} on {computer} |
-| `computers.failGone` | {computer} went offline. |
 | `computers.failInstall` | {cli} didn't install on {computer}. What its installer said is below. |
-| `computers.failOff` | {computer} is off. Turn it on, or use a cloud computer instead. |
-| `computers.failOldCloud` | {computer} runs an older program than this app. Cloud computers are updating: try again in a few minutes. |
-| `computers.failOldLaptop` | {computer} runs an older Copilotz program and didn't update itself. Quit Copilotz there and open it again. |
-| `computers.failReach` | Couldn't reach {computer}: {why} |
 | `computers.failShared` | {computer} is shared with others' agents, so plans can't run on it. |
-| `computers.failSignedOut` | {plan} says you're not signed in. |
 | `computers.failSignIn` | Signing in to {plan} didn't finish. |
 | `computers.failTest` | {plan} didn't answer: {why} |
 | `computers.failWindows` | Install {cli} on {computer} from its terminal, once: |
@@ -399,34 +386,20 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.fix` | Fix |
 | `computers.flowConnected` | Connected |
 | `computers.flowDone` | Your agents now run on {plans}. |
-| `computers.flowLeft` | What's left is below, with what to do. |
-| `computers.flowNext` | Next |
-| `computers.flowNone` | Nothing's connected yet. What's left is below, with what to do. |
-| `computers.flowPick` | Pick each plan you pay for: your agents run on them instead of the app's models. |
 | `computers.flowTitle` | Connect your plans |
 | `computers.flowWhere` | Where should they run? |
 | `computers.flowWhereAbout` | {plans} run through an app on a computer. We set it up, and keep it up to date. |
 | `computers.folderDropped` | “{name}” is a folder, and folders can't be uploaded. Drop the files in it, or a zip of it. |
 | `computers.foldersDropped` | one: {count} folder wasn't uploaded: folders can't be. Drop the files in it, or a zip of it. / other: {count} folders weren't uploaded: folders can't be. Drop the files in them, or a zip of each. |
-| `computers.gotCode` | The page gave you a code? |
 | `computers.grokCli` | Grok Build |
 | `computers.grokTitle` | Grok plan |
-| `computers.howToFix` | How to fix |
 | `computers.installCommand` | The command that installs {cli} |
-| `computers.keepAsIs` | Keep it as it is |
 | `computers.keepBoth` | Keep both |
-| `computers.lineAlready` | Signed in already |
 | `computers.lineAnswered` | It answered: “{text}” |
 | `computers.lineComputer` | {computer} is ready |
 | `computers.lineGetting` | Getting {computer} ready… |
-| `computers.lineInstall` | {cli} is installed |
 | `computers.lineInstalling` | Installing {cli} on {computer}… |
 | `computers.lineLimit` | Connected. Your {plan} is at its limit right now: your agents use it again when it resets. |
-| `computers.lineModel` | Connected. {model} isn't in your plan, so your agents use the next one for it. |
-| `computers.lineOld` | {computer} runs an older program than this app: going on as it is. |
-| `computers.lineSignedInAs` | Signed in as {account} |
-| `computers.lineSignIn` | Sign in to {plan} |
-| `computers.lineTest` | {plan} answers on your plan |
 | `computers.lineTesting` | Asking it a short question… |
 | `computers.lineWaking` | Waking {computer}… (about 30 seconds) |
 | `computers.listMore` | {rest} and {last} |
@@ -434,18 +407,15 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.makeFailed` | Couldn't make your cloud computer: {why} |
 | `computers.making` | Making your cloud computer… |
 | `computers.moreFor` | More for {plan} |
-| `computers.moveDown` | Move down |
 | `computers.moveUp` | Move up |
 | `computers.newFile` | New file |
 | `computers.newFileMake` | Make the file |
 | `computers.newFileName` | The new file's name |
 | `computers.newFilePlaceholder` | notes.md, or src/new.ts |
 | `computers.notConnected` | not connected |
-| `computers.notOpened` | Not on that screen? Open it here |
 | `computers.offline` | Offline |
 | `computers.online` | Online |
 | `computers.openSignIn` | Open the sign-in page |
-| `computers.openSpace` | Open {space} |
 | `computers.openTerminal` | Open {computer}'s terminal |
 | `computers.orderAbout` | When a model runs on more than one of your plans, your agents try them in this order. |
 | `computers.orderFailed` | Couldn't save the order: {why} |
@@ -453,10 +423,8 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.orInstall` | Or install it from {computer}'s terminal, then check again: |
 | `computers.output` | What {cli} says |
 | `computers.paletteConnect` | Connect your {plan} |
-| `computers.paletteConnected` | Connected |
 | `computers.paletteGroup` | General |
 | `computers.paletteKeywords` | plan, subscription, sign in, computer, Claude, ChatGPT, Codex, Gemini, Google, Grok |
-| `computers.personal` | your Personal space |
 | `computers.plansAbout` | Your agents run on AI plans you already pay for, instead of the app's models. Connect each one once, and it works in every conversation and space here. |
 | `computers.plansCloud` | A cloud computer you use for it is charged while it's awake. |
 | `computers.plansPaid` | Your plan pays for the AI. |
@@ -474,17 +442,8 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.replaceYours` | Yours: {size}, changed {time} |
 | `computers.seenAt` | last seen {time} |
 | `computers.send` | Send |
-| `computers.sharedFix` | To use it for your plan, have their agents ask you first there: then nothing runs on it without your yes. Or take it out of {spaces}, from its menu there. |
-| `computers.sharedNotice` | {computer} is shared with others' agents in {spaces}, so your plans can't run on it. |
-| `computers.sharedNoticeSomewhere` | {computer} is shared with others' agents, so your plans can't run on it. |
-| `computers.sharedTitle` | {computer} is shared with others' agents |
-| `computers.sharedWhy` | In {spaces}, each person's agents work on {computer} as you. Signed in there, your plan would be theirs to use too, so it can't run on it. |
-| `computers.sharedWhySomewhere` | Others' agents work on {computer} as you, where it's shared. Signed in there, your plan would be theirs to use too, so it can't run on it. |
 | `computers.shareOwnWarning` | Agents in {space} run on {computer} as you: they can read everything you can on it, including your own sign-ins (Claude Code, Codex, SSH keys). Share it only with people you trust. |
 | `computers.shareSignedIn` | {computer} is signed in to your {plan}. Sign out of it first: a computer shared with others can't keep plan sign-ins. |
-| `computers.signInAgain` | Sign in again |
-| `computers.signInHere` | Sign in to your plans here |
-| `computers.signOut` | Sign out |
 | `computers.signOutFailed` | Couldn't sign out of {computer}: {why} |
 | `computers.signOutOn` | Sign out on {computer} |
 | `computers.signOutServer` | Disconnect {plan} |
@@ -497,7 +456,6 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.stepSends` | Sends {path} to this chat |
 | `computers.stepSent` | Sent {file} |
 | `computers.stepSignInHere` | Open the sign-in page, and sign in with the account that has your plan. |
-| `computers.stepSignInThere` | A sign-in page opens in the browser on {computer}. Sign in there, with the account that has your plan. |
 | `computers.stepSignInWait` | The sign-in page shows here as soon as {cli} gives it. |
 | `computers.terminal` | Terminal |
 | `computers.tryAgain` | Try again |

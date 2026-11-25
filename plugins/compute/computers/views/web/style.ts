@@ -548,7 +548,6 @@ a.preview-url:hover { text-decoration: underline; text-underline-offset: 3px; }
 .plans-titles h2 { margin: 0; font-family: var(--font-display); font-size: 17px; font-weight: 650; letter-spacing: -.01em;
   line-height: 1.3; }
 .plans-titles p { max-width: 74ch; margin: 4px 0 0; color: var(--muted-foreground); font-size: 14px; line-height: 1.5; }
-.plans-tools { display: flex; flex-wrap: wrap; gap: 2px; margin-right: -6px; color: var(--muted-foreground); }
 .plans-list { list-style: none; display: grid; gap: 12px; margin: 0; padding: 0; }
 .plans-foot { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px 8px; margin: 2px 2px 0;
   color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
@@ -576,17 +575,6 @@ a.preview-url:hover { text-decoration: underline; text-underline-offset: 3px; }
   .plan-actions { grid-column: 1 / -1; justify-content: flex-start; margin-top: 10px; }
 }
 
-/* A computer shared with others' agents: why, and how to change it */
-.plan-shared { display: grid; gap: 10px; }
-.plan-shared > p { margin: 0; line-height: 1.55; }
-.plan-shared-spaces { list-style: none; display: grid; gap: 6px; margin: 2px 0 0; padding: 0; }
-.plan-shared-spaces a { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border: 1px solid var(--border);
-  border-radius: var(--radius-lg); color: var(--foreground); font-size: 13.5px; font-weight: 560; text-decoration: none;
-  transition: background-color .15s, border-color .15s; }
-.plan-shared-spaces a:hover { background: var(--accent); border-color: color-mix(in oklab, var(--border) 60%, var(--ring)); }
-.plan-shared-spaces a > span { flex: 1; min-width: 0; }
-.plan-shared-spaces a > .copilotz-icon { flex: none; color: var(--muted-foreground); }
-
 /* Signing a plan in */
 
 .plan-quiet { margin: 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
@@ -609,7 +597,7 @@ a.preview-url:hover { text-decoration: underline; text-underline-offset: 3px; }
 .plans-order { display: grid; gap: 8px; margin-top: 6px; }
 .plans-order h3 { margin: 0; font-size: 15px; font-weight: 650; }
 .plans-order-list { list-style: none; display: grid; gap: 6px; margin: 0; padding: 0; }
-.plans-order-list li { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto auto; align-items: center; gap: 8px;
+.plans-order-list li { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 8px;
   padding: 6px 8px 6px 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); }
 .plans-order-n { color: var(--muted-foreground); font-size: 13px; font-variant-numeric: tabular-nums; }
 .plans-order-name { min-width: 0; overflow-wrap: anywhere; font-size: 14px; font-weight: 560; }
@@ -624,10 +612,9 @@ a.preview-url:hover { text-decoration: underline; text-underline-offset: 3px; }
 .yours-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
 .yours-state { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; color: var(--muted-foreground);
   font-size: 13px; }
-.yours-actions { display: flex; align-items: center; gap: 4px; }
 @media (max-width: 560px) {
   .yours-computer { grid-template-columns: auto minmax(0, 1fr); }
-  .yours-actions { grid-column: 2; }
+  .yours-computer > .copilotz-button { grid-column: 2; justify-self: start; }
 }
 .flow { display: grid; gap: 14px; }
 .flow-over { margin: 0; padding: 10px 14px; border-radius: var(--radius-lg); background: var(--success-soft);

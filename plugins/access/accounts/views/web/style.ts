@@ -7,8 +7,6 @@ export const STYLE = `
 .accounts { display: grid; gap: 14px; }
 .accounts-heading { margin: 18px 0 0; font-family: var(--font-display); font-size: 17px; font-weight: 650;
   letter-spacing: -.01em; }
-.accounts-in-place { display: grid; gap: 12px; min-width: 0; }
-.accounts-in-place .accounts-sign-in { justify-self: start; }
 .accounts-list { list-style: none; display: grid; gap: 12px; margin: 0; padding: 0; }
 .accounts-foot { display: flex; align-items: flex-start; gap: 8px; margin: 6px 2px 0; color: var(--muted-foreground);
   font-size: 13px; line-height: 1.5; }

@@ -5,7 +5,7 @@
  * them (the `planList` resource: their list, in the person's order) or
  * else every plan the app has; how a plan stands for the person (a card's
  * state: ready on a computer or the server, with its backup; off on the
- * computers it's signed in on; needing them; not connected); a computer as
+ * computers it's signed in on; its account to sign in again; not connected); a computer as
  * a plan needs it (shared with others' agents, reachable); and a CLI's
  * sign-in: asked again until it's done, its output and links as they're
  * safe to show.
@@ -167,15 +167,13 @@ export function signedPlan(computer: Computer): string | undefined {
 }
 
 /**
- * The computer the flow readies for a person's CLIs: the one asked for, else
- * the best of theirs not shared with others' agents: online, then one the app
- * keeps (it wakes), then the rest, the most recently seen first. None: they
- * have no computer that can run plans.
+ * The computer the flow readies for a person's CLIs: the best of theirs not
+ * shared with others' agents: online, then one the app keeps (it wakes),
+ * then the rest, the most recently seen first. None: they have no computer
+ * that can run plans.
  */
-export function bestComputer(machines: Machine[], asked?: string): Machine | undefined {
+export function bestComputer(machines: Machine[]): Machine | undefined {
   const usable = machines.filter((m) => !isShared(m));
-  const given = usable.find((m) => m.computer._id === asked);
-  if (given) return given;
   const tier = (m: Machine) => m.computer.online ? 0 : m.kind ? 1 : 2;
   return [...usable].sort((a, b) =>
     tier(a) - tier(b) || (b.computer.seen ?? "").localeCompare(a.computer.seen ?? "")
@@ -191,16 +189,13 @@ export type Card =
     account?: Account;
     on?: Machine;
     backup?: Machine;
-    /** Another way in, ready too: ChatGPT through Codex, behind ChatGPT on the server. */
-    also?: { way: Way; on: Machine };
     /** When it reached its limit there, if it's at it. */
     limited?: string;
   }
   /** Signed in only on computers of theirs that are off. */
   | { state: "away"; way: Way; on: Machine[] }
-  /** It needs them: an account to sign in again, or signed in only where others' agents work. */
-  | { state: "broken"; way: Way; why: "reconnect"; account: Account }
-  | { state: "broken"; way: Way; why: "shared"; on: Machine[] }
+  /** Its account needs them to sign in again. */
+  | { state: "reconnect"; way: Way }
   | { state: "off" };
 
 /** The computers a way's plan is signed in on, in the order calls try them (shared ones apart). */
@@ -212,45 +207,36 @@ export function servingOn(machines: Machine[], engine: EngineName): Machine[] {
 
 /**
  * How `plan` stands for the person, from what's kept (accounts, and what
- * each computer last said): the first of its ways in their order that runs
- * now (with the next computer that could, as its backup), else what needs
- * them, else whether it's signed in only on computers that are off, else
- * not connected.
+ * each computer last said): the first of its ways, in their order, that
+ * runs now (with the next computer that could, as its backup); else one
+ * whose account needs them; else one signed in only on computers that are
+ * off; else not connected.
  */
 export function cardOf(plan: PlanShown, machines: Machine[], accounts: Account[]): Card {
-  const ready: Extract<Card, { state: "ready" }>[] = [];
-  let broken: Card | undefined;
-  let away: Card | undefined;
+  let later: Card | undefined;
   for (const way of plan.ways) {
     if (way.account) {
       const account = accounts.find((a) => a.provider === way.account);
-      if (account?.status === "connected") ready.push({ state: "ready", way, account });
-      else if (account) broken ??= { state: "broken", way, why: "reconnect", account };
-      continue;
-    }
-    if (!way.engine) continue;
-    const on = servingOn(machines, way.engine);
-    const now = on.filter(reachable);
-    if (now.length) {
-      const limited = seenOf(now[0].computer, way.engine)?.limited;
-      ready.push({
+      if (account?.status === "connected") return { state: "ready", way, account };
+      if (account && later?.state !== "reconnect") later = { state: "reconnect", way };
+    } else if (way.engine) {
+      const on = servingOn(machines, way.engine);
+      const [now, backup] = on.filter(reachable);
+      if (!now) {
+        if (on.length) later ??= { state: "away", way, on };
+        continue;
+      }
+      const limited = seenOf(now.computer, way.engine)?.limited;
+      return {
         state: "ready",
         way,
-        on: now[0],
-        ...(now[1] ? { backup: now[1] } : {}),
+        on: now,
+        ...(backup ? { backup } : {}),
         ...(limited ? { limited } : {}),
-      });
-    } else if (on.length) away ??= { state: "away", way, on };
-    else {
-      const shared = machines.filter((m) =>
-        isShared(m) && seenOf(m.computer, way.engine!)?.signedIn
-      );
-      if (shared.length) broken ??= { state: "broken", way, why: "shared", on: shared };
+      };
     }
   }
-  const [first, second] = ready;
-  if (first) return second?.on ? { ...first, also: { way: second.way, on: second.on } } : first;
-  return broken ?? away ?? { state: "off" };
+  return later ?? { state: "off" };
 }
 
 /**
@@ -317,13 +303,6 @@ export function shownCode(output: string): string | undefined {
     .exec(output);
   return said?.[1];
 }
-
-/** Whether what a CLI said asks for a code to be pasted back to it (not one it shows). */
-export const asksForCode = (output: string): boolean =>
-  !shownCode(output) &&
-  /\b(paste|enter|input)\b[^\n]{0,40}\b(code|token)\b|\b(code|token)\b[^\n]{0,20}:\s*$/im.test(
-    output,
-  );
 
 /** What a sign-in answers each time it's asked (`computer.engine.login`, shared/workloads.ts). */
 export type LoginStep = {

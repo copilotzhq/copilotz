@@ -3,8 +3,8 @@
  * running on the server, or on a computer, with its backup; signed in only
  * on computers that are off; needing the person; not connected), its limit
  * when it's at it, a cloud computer's cost line (the `computer.cost` View),
- * and its one action: Connect, Fix (both open the connect flow), or, ready,
- * a menu to sign out of each place it's signed in, and its other ways in.
+ * and its one action: Connect or Fix (the connect flow, for this plan), or,
+ * ready, a menu to sign out of each place it's signed in.
  */
 import type { ReactNode } from "react";
 import {
@@ -21,7 +21,6 @@ import type { Account } from "../../../../access/accounts/contract.ts";
 import {
   type Card as Standing,
   cardOf,
-  cliOf,
   listed,
   type Machine,
   type PlanShown,
@@ -53,7 +52,6 @@ export function PlanCard(
       ? [{ way, account: way.account! }]
       : []
   );
-  const others = plan.ways.filter((w) => !places.some((p) => p.way === w));
   const nameOf = (id: string) => machines.find((m) => m.computer._id === id)?.name ?? id;
   const ready = card.state === "ready" ? card : undefined;
   return (
@@ -68,16 +66,6 @@ export function PlanCard(
             {ready ? <Badge tone="success">{say("flowConnected")}</Badge> : null}
           </h3>
           <p className="plan-about" data-tone={toneOf(card)}>{sentence(card)}</p>
-          {ready?.also
-            ? (
-              <p className="plan-about">
-                {say("cardAlso", {
-                  cli: ready.also.way.engine ? cliOf(ready.also.way.engine) : ready.also.way.title,
-                  computer: ready.also.on.name,
-                })}
-              </p>
-            )
-            : null}
           {ready?.limited
             ? (
               <p className="plan-about" data-tone="warning">
@@ -97,48 +85,25 @@ export function PlanCard(
             : null}
         </div>
         <div className="plan-actions">
-          {card.state === "off"
-            ? (
-              <Button
-                variant="primary"
-                onClick={() => connect()}
-              >
-                {say("connect")}
-              </Button>
-            )
-            : !ready
-            ? (
-              <Button
-                variant="primary"
-                onClick={() => connect(card.way.provider)}
-              >
-                {say("fix")}
-              </Button>
-            )
-            : null}
+          {ready ? null : (
+            <Button
+              variant="primary"
+              onClick={() => connect(card.state === "off" ? undefined : card.way.provider)}
+            >
+              {card.state === "off" ? say("connect") : say("fix")}
+            </Button>
+          )}
           {places.length
             ? (
               <Menu
                 label={say("moreFor", { plan: sayText(plan.plan) })}
-                items={[
-                  ...places.map((p) => ({
-                    label: p.computer
-                      ? say("signOutOn", { computer: nameOf(p.computer) })
-                      : say("signOutServer", { plan: sayText(p.way.title) }),
-                    icon: "signout" as const,
-                    onSelect: () => signOut(p),
-                  })),
-                  ...(ready
-                    ? others.map((w) => ({
-                      label: w.engine
-                        ? say("alsoThrough", { cli: cliOf(w.engine) })
-                        : sayText(w.title),
-                      icon: "plus" as const,
-                      onSelect: () =>
-                        connect(w.provider),
-                    }))
-                    : []),
-                ]}
+                items={places.map((p) => ({
+                  label: p.computer
+                    ? say("signOutOn", { computer: nameOf(p.computer) })
+                    : say("signOutServer", { plan: sayText(p.way.title) }),
+                  icon: "signout" as const,
+                  onSelect: () => signOut(p),
+                }))}
               />
             )
             : null}
@@ -169,10 +134,8 @@ export function sentence(card: Standing): string {
         computers: listed(card.on.map((m) => m.name)),
         count: card.on.length,
       });
-    case "broken":
-      return card.why === "reconnect"
-        ? say("cardReconnect", { plan: sayText(card.way.title) })
-        : say("cardShared", { computers: listed(card.on.map((m) => m.name)) });
+    case "reconnect":
+      return say("cardReconnect", { plan: sayText(card.way.title) });
     case "off":
       return say("cardOff");
   }

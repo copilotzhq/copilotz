@@ -32,8 +32,9 @@ PostgreSQL with pgvector, and on Node on Windows. macOS is off there for now: ru
 before tagging. On Deno it also checks the format, the types and the JSR package. On Node it also
 builds the npm package and smoke-tests it.
 
-The workflow runs when the publish workflow calls it, before a release, and on demand. It doesn't
-run on pushes or pull requests. So run what a change touches locally before merging it.
+The workflow runs on every push to main (a merged pull request), once for each commit. It doesn't
+run on pull requests or other branches, so run what a change touches locally before merging it. By
+hand (Actions → Test → Run workflow), it's only for seeing a CI-only failure again while fixing it.
 
 `bench/memory/budget.test.ts` holds the docs app's shape (an MCP server on the memory store) to a
 memory budget on Deno and Node: RSS and heap after a full GC, the heap 200 calls keep, and no model
@@ -200,8 +201,8 @@ The composer also records voice messages.
 
 ## Releasing
 
-Releases are tags. A `v1.*` tag publishes that version to JSR and npm, once the suite passes on
-every runtime.
+Releases are tags. A `v1.*` tag publishes that version to JSR and npm, once the suite has passed on
+every runtime for that commit on main.
 
 1. **The release commit.** On a branch, one commit named "Release X.Y.Z" sets the version everywhere
    it's named:
@@ -217,15 +218,17 @@ every runtime.
 
    In [CHANGELOG.md](CHANGELOG.md), the commit turns "## Unreleased" into the version's heading,
    `## X.Y.Z — YYYY-MM-DD`. The release notes are what's under it.
-2. **A pull request** for the branch, merged with a squash merge.
-3. **A lightweight tag** `vX.Y.Z` on the merge commit, pushed:
+2. **A pull request** for the branch, merged with a squash merge. The push to main runs the test
+   workflow on the merge commit.
+3. **A lightweight tag** `vX.Y.Z` on the merge commit, pushed (right away, or once its tests pass):
 
    ```sh
    git tag vX.Y.Z <merge-commit> && git push origin vX.Y.Z
    ```
 
 The tag runs `.github/workflows/publish.yml`. It checks that the tag names the version `deno.json`,
-`package.json` and the computer program say. It runs the test workflow. It makes the tag's GitHub
+`package.json` and the computer program say. It checks that the commit is on main and that its test
+run there passed, waiting while it runs; it runs no tests of its own. It makes the tag's GitHub
 release with the computer program: built on a Mac, or the last release's binaries when the program
 hasn't changed. Then it publishes to JSR (`@copilotz/copilotz`) and to npm (`copilotz`), both
 through GitHub's OIDC, with no token.
@@ -233,7 +236,8 @@ through GitHub's OIDC, with no token.
 A version with a pre-release part, such as `-rc.32`, goes to npm's `next` tag, so
 `npm install copilotz` keeps the last stable one.
 
-A release whose tests fail publishes nothing. It's fixed forward and tagged again.
+A release whose commit failed its tests on main publishes nothing. It's fixed on main, and the fixed
+commit is tagged (the tag moved, while no registry has the version yet).
 
 ## Designs
 

@@ -3,23 +3,30 @@
  * (drawn as the server would, through React's own renderer) with no computer yet, and with
  * computers in each state (signed in as whom, installed, its CLI missing, offline, not checked,
  * shared with others' agents); the sign-in dialog's choice of computer and what that one still
- * needs; how a sign-in is asked again until it's done; what a CLI says, as it's shown; the
- * palette's commands; and words: nothing English left once the app gives its own.
+ * needs; a missing CLI installed by Sign in (macOS and Linux; Windows keeps the instructions),
+ * and an installer that fails; signing out, and why a computer signed in to a plan isn't shared
+ * with others' agents; how a sign-in is asked again until it's done; what a CLI says, as it's
+ * shown; the palette's commands; and words: nothing English left once the app gives its own.
  */
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import type { ReactNode } from "react";
+import { act, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ViewContext } from "../../../runtime/mod.ts";
 import type { PaletteGroup } from "../../../hosts/web/mod.ts";
 import { setWords } from "../../../hosts/web/words.ts";
 import { englishLeft, pseudoWords } from "../../../testing/words.ts";
+import { page } from "../../../hosts/web/tests/page.ts";
 import type { Computer } from "../computers/collections/computer.ts";
 import type { Desk } from "../computers/collections/desk.ts";
 import { plansView } from "../computers/views/web/plans.tsx";
 import { plansPaletteView } from "../computers/views/web/plans-palette.ts";
 import { SignInDialog } from "../computers/views/web/plan-sign-in.tsx";
+import { SignedInNotice } from "../computers/views/web/plan-shared.tsx";
+import { ShareWarning } from "../computers/views/web/desks.tsx";
+import { computers as computersPtBR } from "../../../hosts/web/pt-br/computers.ts";
 import {
   asksForCode,
+  installable,
   type LoginEvent,
   type LoginStep,
   type Machine,
@@ -29,6 +36,7 @@ import {
   safeLink,
   sharedIn,
   shownCode,
+  signedPlan,
   signingIn,
   standingOf,
   straightTo,
@@ -158,9 +166,9 @@ test("a card per plan, each computer as it stands: signed in as whom, installed,
   assertStringIncludes(shown, "Offline");
   // Codex: installed on the Mac, not signed in: the card's Sign in goes straight there.
   assertStringIncludes(shown, "ChatGPT plan, through Codex");
-  // Antigravity: missing on the Mac, its install offered.
+  // Antigravity: missing on the Mac, Sign in installs it (rc.64 showed how to, by hand).
   assertStringIncludes(shown, "Antigravity isn't installed");
-  assertStringIncludes(shown, "How to install");
+  assertStringIncludes(shown, "Install Antigravity and sign in");
   // Shared into Acme: said once, over the cards, with how to change it; not a line of each card.
   assertStringIncludes(shown, "studio-linux is shared with others' agents in Acme");
   assertStringIncludes(shown, "How to use it");
@@ -230,9 +238,185 @@ test("the sign-in dialog: which computer, and what the one chosen still needs", 
   assertStringIncludes(missing, "your own use of Antigravity on that computer stays as it is");
   // The shared one is there, and can't be chosen.
   const markup = dialog("claude");
-  assertStringIncludes(text(markup), "Shared with others' agents");
+  assertStringIncludes(
+    text(markup),
+    "Your plan runs on your own computer. This shared one runs your agents' tools.",
+  );
   assertEquals((markup.match(/disabled=""/g) ?? []).length >= 1, true);
   assertStringIncludes(text(markup), "Signed in as ana@example.com");
+});
+
+const box = computerOf({
+  _id: "box",
+  name: "Cloud box",
+  info: { os: "linux" },
+  engines: { antigravity: { installed: false, signedIn: false, at: AT } },
+});
+const pc = computerOf({
+  _id: "pc",
+  name: "Desk PC",
+  info: { os: "win32" },
+  engines: { antigravity: { installed: false, signedIn: false, at: AT } },
+});
+const signInto = (m: Machine, call = () => Promise.resolve({} as never)) => (
+  <SignInDialog
+    plan={planOf("antigravity")!}
+    machines={[m]}
+    open
+    onClose={() => {}}
+    check={() => Promise.resolve()}
+    call={call}
+  />
+);
+
+test("a missing CLI: Sign in installs it first, saying what it runs; Windows keeps the instructions", () => {
+  assertEquals(installable(machine(box), "antigravity"), true);
+  assertEquals(installable(machine(pc), "antigravity"), false);
+  assertEquals(installable(machine(mac), "codex"), false);
+  assertEquals(installable(machine({ ...box, online: false }), "antigravity"), false);
+  // A cloud computer asleep wakes for it.
+  const asleep = { ...machine({ ...box, online: false }), kind: { view: "cloud.state" } };
+  assertEquals(installable(asleep, "antigravity"), true);
+
+  const posix = text(draw(signInto(machine(box))));
+  assertStringIncludes(
+    posix,
+    "Antigravity isn't installed on Cloud box yet. Signing in runs Antigravity's official installer there first:",
+  );
+  assertStringIncludes(posix, "$ curl -fsSL https://antigravity.google/cli/install.sh | bash");
+  assertStringIncludes(posix, "Cancel Install Antigravity and sign in");
+  const windows = text(draw(signInto(machine(pc))));
+  assertStringIncludes(
+    windows,
+    "Antigravity isn't installed on Desk PC yet. In a terminal there, run:",
+  );
+  assert(!windows.includes("Install Antigravity"), windows);
+
+  // The card's rows: the same.
+  const card = text(draw(plansView(
+    {},
+    ctxOf({
+      "computer.mine": [box, pc],
+      "space.reached": SPACES,
+      "desk.of.box": [],
+      "desk.of.pc": [],
+    }),
+  )));
+  assertStringIncludes(
+    card,
+    "Cloud box Antigravity isn't installed Install Antigravity and sign in",
+  );
+  assertStringIncludes(card, "Desk PC Antigravity isn't installed How to install");
+});
+
+test("an installer that fails: what it said last, and how to install it by hand", () =>
+  page(async (render) => {
+    const asked: unknown[] = [];
+    const answers: LoginStep[] = [
+      { state: "running", output: "Downloading Antigravity…\n", signedIn: false },
+      { state: "done", output: "curl: (6) Could not resolve host\n", signedIn: false },
+    ];
+    const call = <R,>(_action: string, input?: unknown) => {
+      asked.push(input);
+      return Promise.resolve(answers.shift() as R);
+    };
+    await render(signInto(machine(box), call as never));
+    const button = [...document.querySelectorAll("button")]
+      .find((b) => b.textContent === "Install Antigravity and sign in")!;
+    await act(async () => button.click());
+    for (let i = 0; i < 100 && answers.length; i++) {
+      await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    }
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    assertEquals(asked[0], { computer: "box", engine: "antigravity", install: true });
+    const shown = document.body.textContent!;
+    assertStringIncludes(shown, "Antigravity didn't install on Cloud box");
+    assertStringIncludes(shown, "Could not resolve host");
+    assertStringIncludes(shown, "In a terminal there, run:");
+    assertStringIncludes(shown, "curl -fsSL https://antigravity.google/cli/install.sh | bash");
+  }));
+
+test("asked to install, a sign-in's first call says so, and only the first", async () => {
+  const asked: unknown[] = [];
+  const answers: LoginStep[] = [
+    { state: "running", output: "Installing…\n", signedIn: false },
+    { state: "done", output: "", signedIn: true },
+  ];
+  await new Promise<void>((done) => {
+    signingIn({
+      computer: "box",
+      engine: "antigravity",
+      install: true,
+      every: 5,
+      call: <R,>(_action: string, input?: unknown) => {
+        asked.push(input);
+        return Promise.resolve(answers.shift() as R);
+      },
+      on: (event) => ("error" in event || event.step.state === "done") && done(),
+    });
+  });
+  assertEquals(asked, [
+    { computer: "box", engine: "antigravity", install: true },
+    { computer: "box", engine: "antigravity" },
+  ]);
+});
+
+test("signed in, a computer signs out from its menu; a cloud one isn't shared with others' agents until it does, and sharing one's own says what it means: in English and Portuguese", () => {
+  assertEquals(signedPlan(mac)?.engine, "claude");
+  assertEquals(signedPlan(studio), undefined);
+  // The card: the Mac's Claude line signs out from its menu.
+  assertStringIncludes(text(draw(plansView({}, ctxOf(READS)))), "Sign in again Sign out");
+  const notice = () => draw(<SignedInNotice computer="MacBook Pro" plan={signedPlan(mac)!.plan} />);
+  assertStringIncludes(
+    text(notice()),
+    "MacBook Pro is signed in to your Claude plan. Sign out of it first: a computer shared with " +
+      "others can't keep plan sign-ins. Plans on your computers",
+  );
+  assertStringIncludes(notice(), 'href="/accounts"');
+  const acme = SPACES[1] as Parameters<typeof ShareWarning>[0]["space"];
+  const own = () => text(draw(<ShareWarning space={acme} name="MacBook Pro" />));
+  assertStringIncludes(
+    own(),
+    "Agents in Acme run on MacBook Pro as you: they can read everything you can on it, including " +
+      "your own sign-ins (Claude Code, Codex, SSH keys). Share it only with people you trust.",
+  );
+  // A cloud computer's says what it said.
+  assertStringIncludes(
+    text(draw(<ShareWarning space={acme} name="Cloud box" kept />)),
+    "It all runs as you: share it with people you trust.",
+  );
+  const restore = setWords(computersPtBR);
+  try {
+    assertStringIncludes(
+      text(notice()),
+      "MacBook Pro está conectado ao seu plano do Claude. Saia dele primeiro: um computador " +
+        "compartilhado com outros não pode manter logins de planos.",
+    );
+    const all = [machine(mac), machine(studio, [{ _id: "acme", name: "Acme" }])];
+    const shown = text(draw(
+      <SignInDialog
+        plan={planOf("claude")!}
+        machines={all}
+        open
+        onClose={() => {}}
+        check={() => Promise.resolve()}
+        call={() => Promise.resolve({} as never)}
+      />,
+    ));
+    assertStringIncludes(
+      shown,
+      "Seu plano roda no seu próprio computador. Este, compartilhado, roda as ferramentas dos seus agentes.",
+    );
+    assertStringIncludes(text(draw(plansView({}, ctxOf(READS)))), "Entrar de novo Sair");
+    assertStringIncludes(
+      own(),
+      "Os agentes de Acme rodam em MacBook Pro como você: eles podem ler tudo o que você pode lá, " +
+        "inclusive seus próprios logins (Claude Code, Codex, chaves SSH). Compartilhe só com " +
+        "pessoas de confiança.",
+    );
+  } finally {
+    restore();
+  }
 });
 
 test("a sign-in is asked again until it's done, one call at a time; a code goes with the next", async () => {

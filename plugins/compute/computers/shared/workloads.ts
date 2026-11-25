@@ -69,6 +69,8 @@ export const WORK = {
   agentsPrompt: "computer.agents.prompt",
   /** Stops what an engine's session is doing: `{ session }` → `{ ok: true }`. */
   agentsCancel: "computer.agents.cancel",
+  /** Signs an engine out: its sessions close and its home goes (`LogoutInput` → `{ ok: true }`). */
+  agentsLogout: "computer.agents.logout",
 } as const;
 
 export type Enrolled = { id: string; secret: string };
@@ -338,7 +340,20 @@ export type StatusInput = { engines?: string[] };
  * first call starts its CLI's sign-in; `input` goes to it (a code pasted
  * after signing in elsewhere); an empty call polls; `stop` ends it.
  */
-export type LoginInput = { engine: string; input?: string; stop?: boolean };
+export type LoginInput = {
+  engine: string;
+  input?: string;
+  stop?: boolean;
+  /**
+   * Its CLI's official installer (a shell command), run first, in the
+   * computer's home, when the CLI is missing; the sign-in follows once it
+   * succeeds. Not on Windows.
+   */
+  install?: string;
+};
+
+/** `computer.agents.logout`: signs an engine out, deleting its home (its sign-in, its sessions). */
+export type LogoutInput = { engine: string };
 
 export type LoginState = {
   state: "running" | "done";

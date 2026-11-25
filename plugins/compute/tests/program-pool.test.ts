@@ -4,13 +4,14 @@
  * assigned a computer (its disk: here, a folder, as the local host gives),
  * it runs it until it's connected, enrolling it the first time with a code;
  * released, it stops it (its kept jobs listed on the disk), and the next
- * wake starts them again. It serves one computer at a time, and never
- * another after.
+ * wake starts them again. Its work runs in a home on the disk, so a CLI
+ * installed there is found on its next wake too. It serves one computer at
+ * a time, and never another after.
  */
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { spawn } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
@@ -25,7 +26,15 @@ import { POOL, type PoolAssign } from "../computers/shared/pool.ts";
 import { audienceOf, type Pool, type PoolOptions, startPool } from "../computers/program/pool.ts";
 import { connectionOf, loadState } from "../computers/program/state.ts";
 import { alive } from "../computers/program/workloads/processes.ts";
-import { type Job, type Scope, WORK } from "../computers/shared/workloads.ts";
+import {
+  type EngineStatus,
+  type Job,
+  type JobsWaited,
+  type Scope,
+  type TerminalResult,
+  WORK,
+} from "../computers/shared/workloads.ts";
+import { fakeCli } from "./fake-cli.ts";
 import { CODE, computers, until } from "./program-setup.ts";
 
 const TOKEN = "local:vm-1.t0ken";
@@ -212,6 +221,73 @@ test({
       // A VM that served one computer never serves another.
       const used = await app.assign("vm-1", { computer: "c1", device: tempDir() });
       assertEquals(used.error?.code, "denied");
+    });
+  },
+});
+
+test({
+  name:
+    "a cloud computer's work runs in a home on its disk: a CLI installed there is found, on its next wake too",
+  // Pool VMs are Linux (POSIX) machines.
+  ignore: POSIX_ONLY,
+  fn: async () => {
+    await app(async (app) => {
+      await (await app.pool()).ready;
+      const disk = tempDir();
+      assertEquals(await app.assign("vm-1", { computer: "c2", device: disk, code: CODE }), {
+        ok: true,
+      });
+      const home = join(realpathSync(disk), "home");
+      assert(existsSync(home), "its home is made on the disk");
+
+      // A job and the terminal: HOME, npm's global prefix under it, and their programs first.
+      const job = await app.work<Job>("c2", WORK.jobsStart, {
+        scope,
+        command: 'printf "%s\\n" "$HOME" "$NPM_CONFIG_PREFIX" "$PATH"',
+      });
+      const ended = await app.work<JobsWaited>("c2", WORK.jobsWait, { scope, id: job.id });
+      const [HOME, prefix, PATH] = ended.stdout!.split("\n");
+      assertEquals([HOME, prefix], [home, join(home, ".npm-global")]);
+      assertEquals(PATH.split(delimiter).slice(0, 3), [
+        join(home, ".local", "bin"),
+        join(home, ".npm-global", "bin"),
+        process.env.PATH!.split(delimiter)[0],
+      ]);
+      const shell = await app.work<TerminalResult>("c2", WORK.terminal, {
+        scope,
+        stdin: 'echo "$HOME"',
+      });
+      assertEquals(shell.stdout, `${home}\n`);
+
+      // Claude Code, where its installer puts it (~/.local/bin): found, in place of any other.
+      mkdirSync(join(home, ".local", "bin"), { recursive: true });
+      fakeCli(
+        join(home, ".local", "bin"),
+        "claude",
+        "./program-agents-claude.ts",
+        join(tempDir(), "claude.log"),
+      );
+      const claude = async () =>
+        (await app.work<EngineStatus[]>("c2", WORK.agentsStatus, { engines: ["claude"] }))[0];
+      assertEquals(await claude(), {
+        engine: "claude",
+        installed: true,
+        version: "2.1.999",
+        signedIn: false,
+      });
+
+      // Released, and woken on another VM: still there.
+      await until(
+        async () =>
+          !!connectionOf(await loadState(join(disk, ".copilotz", "computer.json")), app.url)
+            ?.secret,
+        "enrolled",
+      );
+      assertEquals(await app.release("vm-1", "c2"), { ok: true });
+      await until(async () => !(await answers(app, "c2")), "it disconnected");
+      await (await app.pool({ vm: "vm-2", token: "local:vm-2.t0ken" })).ready;
+      assertEquals(await app.assign("vm-2", { computer: "c2", device: disk }), { ok: true });
+      assertEquals((await claude()).version, "2.1.999");
     });
   },
 });

@@ -1,12 +1,19 @@
 /**
  * Engines: agents' model calls on the plans' CLIs this computer has (see
  * agents/). Which it has and whether each is signed in
- * (`computer.agents.status`); signing one in (`computer.agents.login`); one
+ * (`computer.agents.status`); signing one in (`computer.agents.login`) and
+ * out (`computer.agents.logout`); one
  * step of a model call, its events streamed as JSON lines
  * (`computer.agents.prompt`); and stopping one (`computer.agents.cancel`).
  */
 import type { WorkerWorkHandler } from "@oxian/oxian-js";
-import type { CancelInput, LoginInput, PromptInput, StatusInput } from "../../shared/workloads.ts";
+import type {
+  CancelInput,
+  LoginInput,
+  LogoutInput,
+  PromptInput,
+  StatusInput,
+} from "../../shared/workloads.ts";
 import { createSessions } from "../agents/acp.ts";
 import { createEngines } from "../agents/engines.ts";
 import { answer, fail } from "./answer.ts";
@@ -24,13 +31,14 @@ export type AgentsOptions = {
   stepMs?: number;
 };
 
-/** The engines' work, for the computer at `root`. */
+/** The engines' work, for the computer at `root` (its work in `home`, when it has one of its own). */
 export function createAgents(
   root: string,
   log: (line: string) => void,
   options: AgentsOptions = {},
+  home?: string,
 ) {
-  const engines = createEngines({ root, commands: options.commands, log });
+  const engines = createEngines({ root, commands: options.commands, log, home });
   const sessions = createSessions({ engines, log, ...options });
 
   const prompt: WorkerWorkHandler = async ({ input, signal }) => {
@@ -55,6 +63,13 @@ export function createAgents(
       return engines.status(names);
     }),
     login: answer((input: LoginInput) => engines.login(input)),
+    /** Signed out: its sessions close first, so none writes its sign-in back. */
+    logout: answer(async (input: LogoutInput) => {
+      if (typeof input?.engine !== "string") fail("engine is required");
+      await sessions.close(input.engine);
+      await engines.logout(input);
+      return { ok: true };
+    }),
     prompt,
     cancel: answer((input: CancelInput) => {
       if (typeof input?.session !== "string" || !input.session) fail("session is required");

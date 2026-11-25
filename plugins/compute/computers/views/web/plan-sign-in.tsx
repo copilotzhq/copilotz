@@ -2,7 +2,11 @@
  * Signing a plan in, in a dialog: on which computer (the best one first: on,
  * not shared, its CLI there; straight to it when it's the only one, or a
  * computer's own Sign in was pressed), what that one still needs (its CLI
- * installed, to be on), then the CLI's own sign-in there
+ * installed, to be on), then the CLI's own sign-in there. A missing CLI is
+ * installed first, on macOS and Linux, when the person presses "Install
+ * {cli} and sign in" (it says what it runs there); an installer that fails
+ * shows what it said last and how to install it by hand, as Windows always
+ * does. The sign-in
  * (`computer.engine.login`, asked again every second while it runs):
  * starting it, the sign-in page (on a laptop the CLI opens it there itself;
  * on a cloud computer, a link here), a code to paste back when it asks for
@@ -28,6 +32,7 @@ import { ComputerMark } from "./mark.tsx";
 import { Install } from "./plan-card.tsx";
 import {
   asksForCode,
+  installable,
   listed,
   type Machine,
   plainOutput,
@@ -78,11 +83,13 @@ export function SignInDialog(
   const [sent, setSent] = useState(false);
   const [askCode, setAskCode] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [installing, setInstalling] = useState(false);
   const session = useRef<ReturnType<typeof signingIn>>(undefined);
   const machine = machines.find((m) => m.computer._id === chosen);
 
-  const start = (computer: string) => {
+  const start = (computer: string, install = false) => {
     session.current?.leave();
+    setInstalling(install);
     setOutput("");
     setUrl(undefined);
     setError(undefined);
@@ -94,6 +101,7 @@ export function SignInDialog(
       call,
       computer,
       engine: plan.engine,
+      install,
       on: (event) => {
         if ("error" in event) {
           setError(message(event.error));
@@ -138,6 +146,10 @@ export function SignInDialog(
   const shown = shownCode(plain);
   const codeField = askCode || (!!link && !shown && (cloud || asksForCode(plain)));
   const on = machine ? { cli: plan.cli, computer: machine.name } : undefined;
+  // Its CLI missing there, Sign in installs it first (not on Windows).
+  const install = !!machine && installable(machine, plan.engine);
+  const can = !!machine && (startable(machine, plan.engine) || install);
+  const missing = !!machine && standingOf(machine, plan.engine).state === "missing";
   const account = machine && phase === "done"
     ? (() => {
       const standing = standingOf(machine, plan.engine);
@@ -166,8 +178,8 @@ export function SignInDialog(
         <Button
           variant="primary"
           icon="refresh"
-          disabled={!machine || !startable(machine, plan.engine)}
-          onClick={() => machine && start(machine.computer._id)}
+          disabled={!can}
+          onClick={() => machine && start(machine.computer._id, install)}
         >
           {say("tryAgain")}
         </Button>
@@ -180,10 +192,10 @@ export function SignInDialog(
         <Button onClick={close}>{say("cancel")}</Button>
         <Button
           variant="primary"
-          disabled={!machine || !startable(machine, plan.engine)}
-          onClick={() => machine && start(machine.computer._id)}
+          disabled={!can}
+          onClick={() => machine && start(machine.computer._id, install)}
         >
-          {say("start")}
+          {install ? say("installAndSignIn", { cli: plan.cli }) : say("start")}
         </Button>
       </>
     );
@@ -223,9 +235,21 @@ export function SignInDialog(
         : phase === "failed"
         ? (
           <div className="plan-signin">
-            <Notice tone="destructive" role="alert" title={say("failedTitle", { cli: plan.cli })}>
-              {error ? say("failedStart", { why: error }) : say("failedEnded")}
-            </Notice>
+            {missing && on && !error
+              ? (
+                <Notice tone="destructive" role="alert" title={say("installFailedTitle", on)}>
+                  {say("installFailedText")}
+                </Notice>
+              )
+              : (
+                <Notice
+                  tone="destructive"
+                  role="alert"
+                  title={say("failedTitle", { cli: plan.cli })}
+                >
+                  {error ? say("failedStart", { why: error }) : say("failedEnded")}
+                </Notice>
+              )}
             {plain.trim()
               ? (
                 <CodeBlock
@@ -237,6 +261,17 @@ export function SignInDialog(
                 />
               )
               : null}
+            {missing && machine
+              ? (
+                <Install
+                  plan={plan}
+                  computer={machine.name}
+                  lead={say("installMissing", on!)}
+                  check={recheck}
+                  checking={checking}
+                />
+              )
+              : null}
           </div>
         )
         : phase === "running" && machine
@@ -245,9 +280,11 @@ export function SignInDialog(
             <ol className="plan-steps">
               <Step
                 n={1}
-                state={output || link ? "done" : "active"}
+                state={link || (output && !installing) ? "done" : "active"}
                 title={!machine.computer.online && machine.kind
                   ? say("stepWake", { computer: machine.name })
+                  : installing
+                  ? say("stepInstall", on!)
                   : say("stepStart", on!)}
               />
               <Step
@@ -517,6 +554,22 @@ function Needs(
         <Notice tone="warning" icon="computer">
           {say("offlineNote", { computer: m.name })}
         </Notice>
+      </>
+    );
+  }
+  if (standing.state === "missing" && installable(m, plan.engine)) {
+    return (
+      <>
+        {named}
+        <div className="plan-install">
+          <p>{say("installRuns", { cli: plan.cli, computer: m.name })}</p>
+          <CodeBlock
+            className="plan-install-command"
+            label={say("installCommand", { cli: plan.cli })}
+            code={[{ text: "$ ", tone: "muted" }, { text: plan.install }]}
+            copy={plan.install}
+          />
+        </div>
       </>
     );
   }

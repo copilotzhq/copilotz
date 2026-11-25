@@ -5,11 +5,14 @@
  * ask (`answers`: whom the agent works for, or `owner`, only you).
  *
  * Their agents run commands as you, on your machine: share a computer you
- * mean to share.
+ * mean to share. A cloud computer signed in to a plan isn't shared with
+ * others' agents (answering to whoever they work for, outside a Personal
+ * space): its person signs out of it first (`plan_signed_in`).
  */
 import { defineAction, people } from "../../../../runtime/mod.ts";
 import type { Computer } from "../collections/computer.ts";
 import { deskIn } from "../shared/desks.ts";
+import { shareable } from "../shared/engines.ts";
 import { must } from "../../../access/spaces/contract.ts";
 
 export const shareAction = defineAction({
@@ -32,6 +35,7 @@ export const shareAction = defineAction({
     await must(ctx, "write", input.in, "You can't work in this space.");
     const desk = await deskIn(ctx, computer, input.in, input.answers);
     if (input.answers && desk.answers !== input.answers) {
+      await shareable(ctx, computer, input.in, input.answers);
       await ctx.as().db.collection("desk").updateOne({ _id: desk._id }, {
         $set: { answers: input.answers },
       });

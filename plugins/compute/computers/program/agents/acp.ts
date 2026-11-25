@@ -55,6 +55,8 @@ export type Sessions = {
   cancel(session: string): void;
   /** Closes every session. */
   stop(): Promise<void>;
+  /** Closes every session on `engine` (it's signed out), once their processes end. */
+  close(engine: string): Promise<void>;
 };
 
 /** What failures are called, on the stream. */
@@ -490,6 +492,11 @@ export function createSessions(options: SessionsOptions): Sessions {
   sweeper.unref?.();
 
   return {
+    async close(engine) {
+      const going = [...sessions.values()].filter((session) => session.engine === engine);
+      for (const session of going) drop(session);
+      await Promise.all(going.map((session) => session.peer.closed.catch(() => {})));
+    },
     prompt(input, signal) {
       let checked: Checked;
       try {

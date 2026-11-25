@@ -7,7 +7,10 @@
  * Assigned one (`pool.assign`), it mounts the computer's disk as its root
  * (formatting it first, its first wake), and runs it as a laptop does
  * (startComputer): its state on the disk (`.copilotz/computer.json`), its
- * spaces under `spaces/`, its kept jobs started again. The first time, it
+ * spaces under `spaces/`, its kept jobs started again, and its work (its
+ * shells, jobs, engines, browser) in a home on the disk (`home/`, its `HOME`,
+ * with npm's global prefix under it and both on the `PATH`), so what's
+ * installed there (a plan's CLI) is there on its next wake. The first time, it
  * enrolls with the code the assignment carries and keeps its id and secret
  * on the disk. It answers once the computer is connected. Released
  * (`pool.release`), it stops the computer (its jobs stop; the list of those
@@ -208,6 +211,7 @@ export async function startPool(options: PoolOptions): Promise<Pool> {
       // Pool VMs don't update themselves (their image does), nor have a screen.
       program: null,
       windows: "never",
+      home: join(root, "home"),
       log: (line) => log(`${input.computer}: ${line}`),
       ...options.computer,
     });

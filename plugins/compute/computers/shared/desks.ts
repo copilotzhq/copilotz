@@ -1,12 +1,14 @@
 /**
  * Desks: a computer in a space (see collections/desk.ts). Made here, as the
  * system, once whoever asks may: its folder named after the space, apart
- * from the computer's other folders. And `may`: whether the actor may
+ * from the computer's other folders; never one that shares a cloud computer
+ * signed in to a plan with others' agents (`shareable`). And `may`: whether the actor may
  * write in or manage a space, as the spaces plugin says (`space.can`).
  */
 import { type Context, forbidden } from "../../../../runtime/mod.ts";
 import type { Computer } from "../collections/computer.ts";
 import type { Desk } from "../collections/desk.ts";
+import { shareable } from "./engines.ts";
 import { folderFor } from "./folder.ts";
 import { wake } from "./wake.ts";
 import { must } from "../../../access/spaces/contract.ts";
@@ -23,7 +25,7 @@ export async function deskIn(
   ctx: Context,
   computer: Pick<
     Computer,
-    "_id" | "owner" | "name" | "online" | "seen" | "info" | "approve" | "status"
+    "_id" | "owner" | "name" | "online" | "seen" | "info" | "approve" | "status" | "engines"
   >,
   space: string,
   answers: Desk["answers"] = "asker",
@@ -31,6 +33,7 @@ export async function deskIn(
   const desks = ctx.as().db.collection<Desk>("desk");
   const had = await desks.findOne({ computer: computer._id, in: space });
   if (had) return had;
+  await shareable(ctx, computer, space, answers);
   const taken = (await desks.find({ computer: computer._id })).map((d) => d.folder);
   const desk = {
     in: space,

@@ -341,10 +341,14 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.hideInstall` | Hide |
 | `computers.howToFix` | How to use it |
 | `computers.howToInstall` | How to install |
+| `computers.installAndSignIn` | Install {cli} and sign in |
 | `computers.installAnywhere` | In a terminal on that computer, run: |
 | `computers.installCommand` | The command that installs {cli} |
+| `computers.installFailedText` | Its installer stopped. What it said last is below, and how to install it yourself. |
+| `computers.installFailedTitle` | {cli} didn't install on {computer} |
 | `computers.installIn` | In a terminal on {computer}, run: |
 | `computers.installMissing` | {cli} isn't installed on {computer} yet. In a terminal there, run: |
+| `computers.installRuns` | {cli} isn't installed on {computer} yet. Signing in runs {cli}'s official installer there first: |
 | `computers.installThen` | Then check again here. It's {cli}'s official install. |
 | `computers.keepAsIs` | Keep it as it is |
 | `computers.keepBoth` | Keep both |
@@ -388,7 +392,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.rowInstalled` | Installed, not signed in |
 | `computers.rowMissing` | {cli} isn't installed |
 | `computers.rowOld` | Didn't say: its computer program may need an update |
-| `computers.rowSharedSomewhere` | Shared with others' agents |
+| `computers.rowSharedSomewhere` | Your plan runs on your own computer. This shared one runs your agents' tools. |
 | `computers.rowSignedIn` | Signed in |
 | `computers.rowSignedInAs` | Signed in as {account} |
 | `computers.rowUnchecked` | Not checked yet |
@@ -400,6 +404,8 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.sharedTitle` | {computer} is shared with others' agents |
 | `computers.sharedWhy` | In {spaces}, each person's agents work on {computer} as you. Signed in there, your plan would be theirs to use too, so it can't run on it. |
 | `computers.sharedWhySomewhere` | Others' agents work on {computer} as you, where it's shared. Signed in there, your plan would be theirs to use too, so it can't run on it. |
+| `computers.shareOwnWarning` | Agents in {space} run on {computer} as you: they can read everything you can on it, including your own sign-ins (Claude Code, Codex, SSH keys). Share it only with people you trust. |
+| `computers.shareSignedIn` | {computer} is signed in to your {plan}. Sign out of it first: a computer shared with others can't keep plan sign-ins. |
 | `computers.signedIn` | Signed in |
 | `computers.signIn` | Sign in |
 | `computers.signInAgain` | Sign in again |
@@ -407,10 +413,13 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.signInOther` | Sign in on another computer |
 | `computers.signInThrough` | Through {cli}, on a computer of yours. |
 | `computers.signInTitle` | Sign in to your {plan} |
+| `computers.signOut` | Sign out |
+| `computers.signOutFailed` | Couldn't sign out of {computer}: {why} |
 | `computers.skip` | Skip |
 | `computers.start` | Start signing in |
 | `computers.stepCode` | Paste the code it gives you |
 | `computers.stepEnterCode` | Open the sign-in page, sign in with the account that has your plan, and enter this code there: |
+| `computers.stepInstall` | Installing {cli} on {computer} |
 | `computers.stepSaved` | Saved {file} to {path} |
 | `computers.stepSaves` | Saves {file} to {path} |
 | `computers.stepSavesFile` | Saves a file from this chat to {path} |

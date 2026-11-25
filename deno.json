@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/copilotz",
-  "version": "1.0.0-rc.64",
+  "version": "1.0.0-rc.65",
   "exports": {
     ".": "./runtime/mod.ts",
     "./gen": "./cli/mod.ts",

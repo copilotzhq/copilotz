@@ -3,8 +3,10 @@
  * agent's model call, its events streamed step by step; a tool call ends a
  * step and waits, held, for the next one to answer it; sessions go on in
  * the same process, are loaded again when they're gone, and are fixed to
- * what they were made with. With fake CLIs: Claude Code's stream-json
- * (program-agents-claude.ts), and a native ACP agent (program-agents-acp.ts).
+ * what they were made with. Signing in installs a missing CLI first, with
+ * the installer it's given; signing out is each CLI's own, in its home. With fake CLIs: Claude Code's stream-json
+ * (program-agents-claude.ts), and a native ACP agent (program-agents-acp.ts),
+ * and fake installers (never the network).
  */
 import { assert, assertEquals, assertMatch } from "@std/assert";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -12,6 +14,7 @@ import { join } from "node:path";
 import process from "node:process";
 import { tempDir, test } from "../../../testing/mod.ts";
 import { createMcp } from "../computers/program/agents/mcp.ts";
+import { alive } from "../computers/program/workloads/processes.ts";
 import type { AgentsOptions } from "../computers/program/workloads/agents.ts";
 import {
   type EngineStatus,
@@ -434,6 +437,150 @@ posix(
     });
     assertEquals(none.error.code, "not_found");
   }),
+);
+
+posix(
+  "signing in a missing CLI installs it first, in the computer's home; a failed installer says why",
+  async () => {
+    const dir = tempDir();
+    const home = join(tempDir(), "home");
+    const agy = fakeCli(dir, "agy", "./program-agents-acp.ts", join(dir, "agy.log"));
+    // Antigravity's installer, as a fake: it puts the CLI in ~/.local/bin, saying where.
+    const installer = join(dir, "install.sh");
+    writeFileSync(
+      installer,
+      `#!/bin/sh\necho "Installing into $HOME (from https://example.com/agy.tar.gz)"\n` +
+        `mkdir -p "$HOME/.local/bin" && cp '${agy}' "$HOME/.local/bin/agy"\necho Installed.\n`,
+      { mode: 0o755 },
+    );
+    // So no Antigravity of this machine's is found: only what's installed in the home.
+    const PATH = process.env.PATH;
+    process.env.PATH = "/usr/bin:/bin";
+    try {
+      await setup(async ({ work }) => {
+        const login = (input: Record<string, unknown>) =>
+          work<LoginState>(WORK.agentsLogin, { engine: "antigravity", ...input });
+        const poll = async (state: LoginState, done: (state: LoginState) => boolean) => {
+          let output = state.output;
+          while (!done(state)) output += (state = await login({})).output;
+          return { ...state, output };
+        };
+        const status = async () =>
+          (await work<EngineStatus[]>(WORK.agentsStatus, { engines: ["antigravity"] }))[0];
+
+        // Not asked to install: missing, as before.
+        const missing = await work<{ error: { code: string } }>(WORK.agentsLogin, {
+          engine: "antigravity",
+        });
+        assertEquals(missing.error.code, "missing");
+
+        // An installer that fails: what it said, and still not installed.
+        const failed = await poll(
+          await login({ install: "echo 'curl: (6) Could not resolve host' >&2; exit 6" }),
+          (state) => state.state === "done",
+        );
+        assertEquals([failed.signedIn, failed.url], [false, undefined]);
+        assertMatch(failed.output, /Could not resolve host/);
+        assertEquals((await status()).installed, false);
+
+        // Its installer, then its sign-in: the link is the sign-in's, not the installer's.
+        const linked = await poll(
+          await login({ install: `'${installer}'` }),
+          (state) => !!state.url || state.state === "done",
+        );
+        assertMatch(linked.output, new RegExp(`Installing into ${home}`));
+        assertMatch(linked.output, /Installed\.\nSign in at/);
+        assertEquals([linked.state, linked.url], ["running", "https://agy.example/login"]);
+        const done = await poll(
+          await login({ input: "good-code" }),
+          (state) => state.state === "done",
+        );
+        assertEquals(done.signedIn, true);
+        assertEquals(await status(), {
+          engine: "antigravity",
+          installed: true,
+          version: "1.4.2",
+          signedIn: true,
+        });
+        assert(existsSync(join(home, ".local", "bin", "agy")), "installed in the computer's home");
+      }, { home, agents: { commands: { claude: null, codex: null } } });
+    } finally {
+      process.env.PATH = PATH;
+    }
+  },
+);
+
+posix(
+  "signing out closes its sessions first, then signs its CLI out; with no CLI there, its home goes",
+  engines(async ({ work, root, step, signIn }) => {
+    const home = (engine: string) => join(root, ".copilotz", "engines", engine);
+    const status = async () =>
+      (await work<EngineStatus[]>(WORK.agentsStatus, { engines: ["claude"] }))[0];
+    signIn("claude");
+    const pid = Number(said(await step(ask("pid"))));
+    assertEquals((await status()).signedIn, true);
+    assertEquals(await work(WORK.agentsLogout, { engine: "claude" }), { ok: true });
+    assert(!alive(pid), "its session's process ended");
+    assert(!existsSync(join(home("claude"), "fake-auth.json")), "its sign-in is gone");
+    assert(existsSync(home("claude")), "by its own sign-out: its home stays");
+    assertEquals(await status(), {
+      engine: "claude",
+      installed: true,
+      version: "2.1.999",
+      signedIn: false,
+    });
+    // No Codex here to sign out: its home, where its sign-in is, goes.
+    mkdirSync(home("codex"), { recursive: true });
+    writeFileSync(join(home("codex"), "fake-auth.json"), '{"type":"chatgpt"}');
+    assertEquals(await work(WORK.agentsLogout, { engine: "codex" }), { ok: true });
+    assert(!existsSync(home("codex")), "its home is gone");
+    const unknown = await work<{ error: { code: string } }>(WORK.agentsLogout, { engine: "x" });
+    assertEquals(unknown.error.code, "invalid");
+  }),
+);
+
+posix(
+  "each CLI signs out in its own home, never the person's own; Antigravity's can't be from here",
+  async () => {
+    const dir = tempDir();
+    const person = join(tempDir(), "home");
+    const log = join(dir, "fake.log");
+    // The person's own sign-ins, in their own config: never Copilotz's to touch.
+    for (const own of [".claude", ".codex"]) {
+      mkdirSync(join(person, own), { recursive: true });
+      writeFileSync(join(person, own, "fake-auth.json"), '{"type":"chatgpt","email":"ana@x"}');
+    }
+    const commands = {
+      claude: fakeCli(dir, "claude", "./program-agents-claude.ts", log),
+      codex: fakeCli(dir, "codex", "./program-codex-fake.ts", log),
+      antigravity: fakeCli(dir, "agy", "./program-agents-acp.ts", log),
+    };
+    await setup(async ({ work, root }) => {
+      const home = (engine: string) => join(root, ".copilotz", "engines", engine);
+      for (const engine of ["claude", "codex"]) {
+        mkdirSync(home(engine), { recursive: true });
+        writeFileSync(join(home(engine), "fake-auth.json"), '{"type":"chatgpt","email":"ana@x"}');
+      }
+      const signed = async () =>
+        (await work<EngineStatus[]>(WORK.agentsStatus, { engines: ["claude", "codex"] }))
+          .map((s) => s.signedIn);
+      assertEquals(await signed(), [true, true]);
+      for (const engine of ["claude", "codex"]) {
+        assertEquals(await work(WORK.agentsLogout, { engine }), { ok: true });
+        assert(existsSync(home(engine)), `${engine} signed out by its own CLI`);
+      }
+      assertEquals(await signed(), [false, false]);
+      for (const own of [".claude", ".codex"]) {
+        assert(existsSync(join(person, own, "fake-auth.json")), `the person's own ${own} stays`);
+      }
+      // Antigravity has no sign-out of its own: it says so, and what to do.
+      const agy = await work<{ error: { code: string; message: string } }>(WORK.agentsLogout, {
+        engine: "antigravity",
+      });
+      assertEquals(agy.error.code, "unsupported");
+      assertMatch(agy.error.message, /keyring.*Sign out in agy on the computer itself/s);
+    }, { home: person, agents: { commands } });
+  },
 );
 
 posix(

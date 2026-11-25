@@ -2,7 +2,8 @@
 # `v1.0.0`, `v1.2.3`) checks that it names the version deno.json,
 # package.json, the computer program and every product package (each
 # packages/<name>: its deno.json, its package.json and the Copilotz it
-# imports) say, runs the whole test workflow, then makes the tag's GitHub
+# imports) say, checks that the tagged commit is on main and that its Test run
+# there passed (waiting while it runs), then makes the tag's GitHub
 # release with the computer program (its binaries, install scripts and
 # manifest: built on a Mac, or, when the program is the same as the last
 # release's, that release's, so computers don't update to what they have;
@@ -69,13 +70,51 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if [[ "$version" == *-* ]]; then echo "tag=next" >> "$GITHUB_OUTPUT"; else echo "tag=latest" >> "$GITHUB_OUTPUT"; fi
 
-  test:
+  tested:
+    name: Its commit passed its tests on main
     needs: version
-    uses: ./.github/workflows/test.yml
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) isn't on main: tag a commit of main"
+            exit 1
+          fi
+          # The Test run main's push of this commit started: waited for while it runs (an hour at
+          # most), and looked for a few minutes when the tag came right after the push.
+          for i in $(seq 1 130); do
+            run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow test.yml --branch main --event push \
+              --commit "$GITHUB_SHA" --limit 1 --json status,conclusion,url --jq '.[0] // empty')
+            if [ -z "$run" ]; then
+              if [ "$i" -le 10 ]; then sleep 30; continue; fi
+              echo "::error::no Test run for $GITHUB_SHA on main: it runs when a commit is pushed to main"
+              exit 1
+            fi
+            status=$(jq -r .status <<<"$run"); conclusion=$(jq -r .conclusion <<<"$run"); url=$(jq -r .url <<<"$run")
+            if [ "$status" = completed ]; then
+              if [ "$conclusion" = success ]; then echo "Tested on main: $url"; exit 0; fi
+              echo "::error::its Test run on main ended $conclusion ($url): fix it on main, and tag the fixed commit"
+              exit 1
+            fi
+            echo "Its Test run on main is $status ($url): waiting"
+            sleep 30
+          done
+          echo "::error::its Test run on main didn't finish within an hour"
+          exit 1
 
   computer:
     name: The release, with the computer program
-    needs: [version, test]
+    needs: [version, tested]
     # macOS binaries are signed (ad hoc) on a Mac; Bun builds the others there too.
     runs-on: macos-latest
     permissions:
@@ -116,7 +155,7 @@ jobs:
 
   jsr:
     name: JSR
-    needs: [version, test, computer]
+    needs: [version, tested, computer]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -155,7 +194,7 @@ jobs:
 
   npm:
     name: npm, and the release's tarballs
-    needs: [version, test, computer]
+    needs: [version, tested, computer]
     runs-on: ubuntu-latest
     permissions:
       # The tarballs go on the release.

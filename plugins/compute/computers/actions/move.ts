@@ -2,8 +2,9 @@
  * Moves one of the person's computers from one space to another: its desk
  * there goes (and what agents waited on or were let do with it), and it has
  * one in the other, its folder named after that space, answering as it
- * did. Only its owner moves it, into a space they may work in. Its old
- * folder stays on the machine.
+ * did. Only its owner moves it, into a space they may work in, and not where
+ * it would share a cloud computer's plan sign-in with others' agents (see
+ * share.ts). Its old folder stays on the machine.
  */
 import { defineAction, people } from "../../../../runtime/mod.ts";
 import type { Computer } from "../collections/computer.ts";

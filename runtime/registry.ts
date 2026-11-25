@@ -61,9 +61,15 @@ export function unprivate<T>(value: T, fields: string[]): T {
 }
 
 /** A short hash identifying an action call by what it does: its action and input. */
-export async function fingerprint(action: string, input: unknown): Promise<string> {
-  const data = new TextEncoder().encode(canonical([action, input ?? null]));
-  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+export function fingerprint(action: string, input: unknown): Promise<string> {
+  return fingerprintOf(canonical([action, input ?? null]));
+}
+
+/** `fingerprint`, of a call's canonical `[action, input]` already worked out. */
+export async function fingerprintOf(text: string): Promise<string> {
+  const hash = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)),
+  );
   return Array.from(hash.slice(0, 8), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 

@@ -24,6 +24,7 @@ import { FILE_DATA, sizeOf } from "../collections/file.ts";
 import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 import { agentsNamed, now, rosterOf } from "../shared/agents.ts";
+import { chatOf } from "../shared/chat-of.ts";
 import { noted } from "../shared/summary.ts";
 import { MEDIA_TYPE, MEDIA_TYPE_LENGTH } from "./send.ts";
 
@@ -154,11 +155,13 @@ export const sayAction = defineAction({
       hops: 1,
       at,
     };
+    // The chat it belongs to (notes', a subthread's): archived, it comes back with this.
+    const chat = await chatOf(ctx.as().db, thread);
     try {
       await ctx.transaction(async (tx) => {
         if (files.length) await tx.db.collection("file").insertMany(files);
         await tx.db.collection("message").insertOne(said);
-        await noted(tx, said);
+        await noted(tx, said, chat);
       });
     } catch (error) {
       // Said just now, by the same cause.

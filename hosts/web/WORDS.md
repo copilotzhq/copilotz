@@ -33,6 +33,14 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.answersWhereSeen` | {agents} will answer here, where {name} can read it. To look something up just for your team, ask in staff notes. |
 | `chat.answerThread` | Yes, for this conversation |
 | `chat.answerWentTo` | The answer went to {name} only. |
+| `chat.archive` | Archive |
+| `chat.archived` | Archived |
+| `chat.archivedIn` | Archived, in {space} |
+| `chat.archivedNone` | No archived chats here. |
+| `chat.archivedNote` | It's listed apart, under Archived in its space's chats. A new message brings it back. |
+| `chat.archivedTitle` | This chat is archived |
+| `chat.archiveNewer` | Something new arrived in this conversation: see it, then archive it. |
+| `chat.archiveThisChat` | Archive this chat |
 | `chat.areWorking` | one: {names} is working… / other: {names} are working… |
 | `chat.askBack` | Post {agent}'s answer here? |
 | `chat.askedInSideThread` | Asked in a side thread |
@@ -93,7 +101,9 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.keyEsc` | Esc |
 | `chat.keyShift` | Shift |
 | `chat.keysHint` | {enter} to send · {shift} + {enter} for a new line |
+| `chat.keywordArchive` | put away |
 | `chat.keywordConversation` | conversation |
+| `chat.keywordRestore` | unarchive |
 | `chat.keywordSpace` | space |
 | `chat.keywordStart` | start |
 | `chat.keywordTitle` | change title |
@@ -146,6 +156,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.noChatsYet` | No chats yet |
 | `chat.noSpeech` | No speech was heard. |
 | `chat.notesAbout` | Staff notes about the conversation with {name} |
+| `chat.notesArchivedTitle` | Archived, with the chat they're about |
 | `chat.notesAsPage` | Open staff notes as a page |
 | `chat.notesClose` | Close staff notes |
 | `chat.notesEmptyBody` | Ask an agent to look something up or draft a reply, or leave a note for whoever picks this up. Nothing here reaches {name}. |
@@ -163,7 +174,9 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.notYourSpaceTitle` | Not your space |
 | `chat.ofMinutes` | one: , of {count} minute at most / other: , of {count} minutes at most |
 | `chat.open` | Open {name} |
+| `chat.openChat` | Open chat |
 | `chat.openConversation` | Open conversation |
+| `chat.openNotes` | Open staff notes |
 | `chat.openSpace` | Open {space} |
 | `chat.otherSpaces` | one: {count} other space / other: {count} other spaces |
 | `chat.overLimit` | Over 10 MB |
@@ -185,6 +198,8 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `chat.renameThisChat` | Rename this chat… |
 | `chat.renameTitle` | Rename “{title}” |
 | `chat.renameTo` | Rename to “{title}” |
+| `chat.restore` | Restore |
+| `chat.restoreThisChat` | Restore this chat |
 | `chat.result` | Result |
 | `chat.retry` | Retry |
 | `chat.retrying` | Retrying… |
@@ -326,10 +341,14 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.hideInstall` | Hide |
 | `computers.howToFix` | How to use it |
 | `computers.howToInstall` | How to install |
+| `computers.installAndSignIn` | Install {cli} and sign in |
 | `computers.installAnywhere` | In a terminal on that computer, run: |
 | `computers.installCommand` | The command that installs {cli} |
+| `computers.installFailedText` | Its installer stopped. What it said last is below, and how to install it yourself. |
+| `computers.installFailedTitle` | {cli} didn't install on {computer} |
 | `computers.installIn` | In a terminal on {computer}, run: |
 | `computers.installMissing` | {cli} isn't installed on {computer} yet. In a terminal there, run: |
+| `computers.installRuns` | {cli} isn't installed on {computer} yet. Signing in runs {cli}'s official installer there first: |
 | `computers.installThen` | Then check again here. It's {cli}'s official install. |
 | `computers.keepAsIs` | Keep it as it is |
 | `computers.keepBoth` | Keep both |
@@ -373,7 +392,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.rowInstalled` | Installed, not signed in |
 | `computers.rowMissing` | {cli} isn't installed |
 | `computers.rowOld` | Didn't say: its computer program may need an update |
-| `computers.rowSharedSomewhere` | Shared with others' agents |
+| `computers.rowSharedSomewhere` | Your plan runs on your own computer. This shared one runs your agents' tools. |
 | `computers.rowSignedIn` | Signed in |
 | `computers.rowSignedInAs` | Signed in as {account} |
 | `computers.rowUnchecked` | Not checked yet |
@@ -385,6 +404,8 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.sharedTitle` | {computer} is shared with others' agents |
 | `computers.sharedWhy` | In {spaces}, each person's agents work on {computer} as you. Signed in there, your plan would be theirs to use too, so it can't run on it. |
 | `computers.sharedWhySomewhere` | Others' agents work on {computer} as you, where it's shared. Signed in there, your plan would be theirs to use too, so it can't run on it. |
+| `computers.shareOwnWarning` | Agents in {space} run on {computer} as you: they can read everything you can on it, including your own sign-ins (Claude Code, Codex, SSH keys). Share it only with people you trust. |
+| `computers.shareSignedIn` | {computer} is signed in to your {plan}. Sign out of it first: a computer shared with others can't keep plan sign-ins. |
 | `computers.signedIn` | Signed in |
 | `computers.signIn` | Sign in |
 | `computers.signInAgain` | Sign in again |
@@ -392,10 +413,13 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.signInOther` | Sign in on another computer |
 | `computers.signInThrough` | Through {cli}, on a computer of yours. |
 | `computers.signInTitle` | Sign in to your {plan} |
+| `computers.signOut` | Sign out |
+| `computers.signOutFailed` | Couldn't sign out of {computer}: {why} |
 | `computers.skip` | Skip |
 | `computers.start` | Start signing in |
 | `computers.stepCode` | Paste the code it gives you |
 | `computers.stepEnterCode` | Open the sign-in page, sign in with the account that has your plan, and enter this code there: |
+| `computers.stepInstall` | Installing {cli} on {computer} |
 | `computers.stepSaved` | Saved {file} to {path} |
 | `computers.stepSaves` | Saves {file} to {path} |
 | `computers.stepSavesFile` | Saves a file from this chat to {path} |
@@ -861,11 +885,13 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `toolkit.chosen` | one: {count} chosen / other: {count} chosen |
 | `toolkit.close` | Close |
 | `toolkit.columns` | Columns |
+| `toolkit.confirm` | Confirm |
 | `toolkit.copied` | Copied |
 | `toolkit.copy` | Copy |
 | `toolkit.copyCode` | Copy code |
 | `toolkit.copyId` | Copy ID |
 | `toolkit.customRange` | Custom range |
+| `toolkit.delete` | Delete |
 | `toolkit.done` | Done |
 | `toolkit.dropFiles` | Drop files here |
 | `toolkit.export` | Export |
@@ -896,6 +922,7 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `toolkit.noMatches` | Nothing matches “{text}” |
 | `toolkit.noneChosen` | None chosen |
 | `toolkit.noRows` | Nothing to show |
+| `toolkit.notDone` | It wasn't done. Try again. |
 | `toolkit.notifications` | Notifications |
 | `toolkit.notSaved` | It wasn't saved. Try again. |
 | `toolkit.now` | now |

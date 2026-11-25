@@ -6,6 +6,10 @@ export const say = defineWords("toolkit", {
   close: "Close",
   save: "Save",
   cancel: "Cancel",
+  // Asking before going on (ConfirmDialog, useConfirm)
+  confirm: "Confirm",
+  delete: "Delete",
+  notDone: "It wasn't done. Try again.",
   // Copying
   copy: "Copy",
   copied: "Copied",

@@ -41,7 +41,7 @@ import { createHttp } from "./workloads/http.ts";
 import { machineInfo } from "./workloads/info.ts";
 import { createJobs } from "./workloads/jobs.ts";
 import { createSpaces } from "./workloads/spaces.ts";
-import { childEnv } from "./workloads/processes.ts";
+import { childEnv, homeEnv } from "./workloads/processes.ts";
 import { search } from "./workloads/search.ts";
 import { findShell, type Shell } from "./workloads/shell.ts";
 import { createShells, type ShellLimits } from "./workloads/terminal.ts";
@@ -79,6 +79,14 @@ export type ComputerOptions = {
   browserIdleMs?: number;
   /** Its engines (plans' CLIs agents' model calls run on): their CLIs, found unless given; limits. */
   agents?: AgentsOptions;
+  /**
+   * The home its work runs in (its shells, jobs, engines and browser), made
+   * if it isn't there: `HOME`, with npm's global prefix under it and the
+   * folders both put programs in first on the `PATH` (homeEnv). A cloud
+   * computer's is on its disk, so what's installed there stays across sleep.
+   * The person's own unless given.
+   */
+  home?: string;
   /** Where its concise log lines go (never a secret). */
   log?: (line: string) => void;
 };
@@ -121,13 +129,16 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
   const shell = options.shell ?? await findShell();
   const program = options.program === undefined ? PROGRAM : options.program;
   const searchUrl = options.searchUrl ?? process.env.COPILOTZ_SEARCH_URL;
+  if (options.home) await mkdir(options.home, { recursive: true });
+  const env = options.home ? homeEnv(options.home) : undefined;
 
   const spaces = createSpaces(root);
-  const shells = createShells(spaces, shell, options.shells);
+  const shells = createShells(spaces, shell, options.shells, env);
   const jobs = createJobs(spaces, shell, {
     stopGraceMs: options.jobStopGraceMs,
     kept: join(root, ".copilotz", "jobs.json"),
     log,
+    env,
   });
   const files = createFiles(spaces);
   const browsers = createBrowsers({
@@ -135,11 +146,11 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
     chromium,
     windows: options.windows,
     searchUrl,
-    env: childEnv(),
+    env: childEnv(env),
     idleMs: options.browserIdleMs,
   });
   const browser = createBrowserWork(browsers, spaces);
-  const agents = createAgents(root, log, options.agents);
+  const agents = createAgents(root, log, options.agents, options.home);
   const info = machineInfo(root, shell, chromium, options.name, options.windows);
   const halt = new AbortController();
   let reason: "stopped" | "updated" = "stopped";
@@ -221,6 +232,7 @@ export async function startComputer(options: ComputerOptions): Promise<Computer>
     [WORK.archive]: createArchive(spaces),
     [WORK.agentsStatus]: agents.status,
     [WORK.agentsLogin]: agents.login,
+    [WORK.agentsLogout]: agents.logout,
     [WORK.agentsCancel]: agents.cancel,
     // Its events, as JSON lines.
     [WORK.agentsPrompt]: agents.prompt,

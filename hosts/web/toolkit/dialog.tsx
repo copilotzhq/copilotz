@@ -7,7 +7,13 @@
  * what's in it (a picture), named by `label`. Centred, or near the top
  * (`placement="top"`: a form that grows downwards stays put). Opened, focus
  * goes to its first field, or stays on the dialog itself (`focus="dialog"`:
- * nothing is typed into until someone chooses to).
+ * nothing is typed into until someone chooses to). While `busy` (a save it
+ * started is under way), Escape, the backdrop and its close button wait, and
+ * it says so (`aria-busy`). `role="alertdialog"` for one that interrupts to
+ * ask (`ConfirmDialog`), and `aria-describedby` for what describes it when
+ * that isn't its `description`. `isolated`: its close and Escape are its
+ * own: a dialog shown inside it (a confirmation over a form) closing doesn't
+ * close it, and its own closing doesn't reach a dialog it's shown inside.
  *
  * Its look is the theme's: `dialog-width` (and `-sm`, `-lg`), `dialog-radius`,
  * `dialog-head-*` (background, foreground, padding, border), `dialog-title-*`,
@@ -74,9 +80,13 @@ export function Dialog(
     placement = "center",
     focus = "first",
     bare,
+    busy = false,
+    isolated = false,
+    role,
     footer,
     className,
     children,
+    "aria-describedby": describedBy,
   }: {
     open: boolean;
     onClose(): void;
@@ -90,13 +100,29 @@ export function Dialog(
     /** What has focus once it opens: its first field, or the dialog itself. */
     focus?: "first" | "dialog";
     bare?: boolean;
+    /**
+     * Something it started is under way (a save): Escape, a press on the backdrop and its close
+     * button wait (the button is disabled), and it says so (`aria-busy`). Closing it from its
+     * `open` still closes it.
+     */
+    busy?: boolean;
+    /**
+     * Its close and Escape are its own: a dialog shown inside it (a confirmation over a form)
+     * closing doesn't close it, and its own closing doesn't reach a dialog it's shown inside (React
+     * passes those events up through the components).
+     */
+    isolated?: boolean;
+    /** `alertdialog` for one that interrupts to ask before going on (see `ConfirmDialog`). */
+    role?: "dialog" | "alertdialog";
+    /** The id of what describes it, when that isn't its `description`. */
+    "aria-describedby"?: string;
     footer?: ReactNode;
     /** The box inside it. */
     className?: string;
     children?: ReactNode;
   },
 ): ReactNode {
-  const { ref, events } = useModal(open, onClose, { focus });
+  const { ref, events } = useModal(open, onClose, { focus, keep: busy, isolated });
   const id = useId();
   return (
     <dialog
@@ -107,10 +133,12 @@ export function Dialog(
         placement === "top" && "copilotz-dialog-top",
       )}
       tabIndex={focus === "dialog" ? -1 : undefined}
+      role={role === "alertdialog" ? role : undefined}
       aria-labelledby={title ? `${id}-title` : undefined}
       aria-label={title ? undefined : label}
-      aria-describedby={description ? `${id}-description` : undefined}
-      closedby="any"
+      aria-describedby={describedBy ?? (description ? `${id}-description` : undefined)}
+      aria-busy={busy || undefined}
+      closedby={busy ? "none" : "any"}
       {...events}
     >
       {SHEET}
@@ -132,6 +160,7 @@ export function Dialog(
                 icon="close"
                 label={say("close")}
                 size="sm"
+                disabled={busy || undefined}
                 onClick={() => ref.current?.close()}
               />
             </header>

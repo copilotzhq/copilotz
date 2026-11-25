@@ -13,7 +13,7 @@ plugin Copilotz ships has [a page of its own](reference/plugins.md), read from t
 
 ## Install
 
-Start a new app with `npx copilotz@1.0.0-rc.64 init orders`. The starter includes the compiler, a
+Start a new app with `npx copilotz@1.0.0-rc.65 init orders`. The starter includes the compiler, a
 plugin, a web page and tests. [Start an app](guides/the-compiler.md#start-an-app).
 
 To add the runtime to an existing project:
@@ -21,19 +21,19 @@ To add the runtime to an existing project:
 ```sh
 npm install copilotz@next                      # Node 24+ (npm, pnpm, yarn)
 bun add copilotz@next                          # Bun
-deno add jsr:@copilotz/copilotz@^1.0.0-rc.64   # Deno 2.9+ (or `deno add npm:copilotz@next`)
+deno add jsr:@copilotz/copilotz@^1.0.0-rc.65   # Deno 2.9+ (or `deno add npm:copilotz@next`)
 ```
 
 Until 1.0, the release candidates are on npm's `next` tag, and a plain `npm install copilotz` or
 `deno add jsr:@copilotz/copilotz` gets an older version. At 1.0, stable installs drop `@next` and
 the version.
 
-On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.64"`), and the
+On Deno, map the name in `deno.json` (`"copilotz": "jsr:@copilotz/copilotz@^1.0.0-rc.65"`), and the
 imports read the same everywhere. 3 pieces need a package of their own, installed beside it:
 `esbuild` to bundle the page's code on Node (`bundle`), `@electric-sql/pglite` for PostgreSQL in the
 process, and `@types/react` for the front ends' types. A product's plugins are packages of their own
 too, at Copilotz's version (`npm install @copilotz/work@next`,
-`deno add jsr:@copilotz/work@^1.0.0-rc.64`): see [Product packages](#product-packages).
+`deno add jsr:@copilotz/work@^1.0.0-rc.65`): see [Product packages](#product-packages).
 
 ## Entry points
 
@@ -95,7 +95,7 @@ same plugin, with less code in the server's memory.
 ## Product packages
 
 What a product does its own way, rather than what every app needs, is a package of its own, released
-with Copilotz at its version: `@copilotz/work@1.0.0-rc.64` goes with `copilotz@1.0.0-rc.64`. Each
+with Copilotz at its version: `@copilotz/work@1.0.0-rc.65` goes with `copilotz@1.0.0-rc.65`. Each
 has the same entry points, its plugins (`@copilotz/work`), their front ends (`@copilotz/work/web`)
 and their shapes, for plugins built on them (`@copilotz/work/contract`), with the same names on npm
 and JSR.
@@ -432,6 +432,68 @@ retryable by id, and everything it causes is its caller's, where its caller is. 
 startup checks may call unrecorded Actions, read-only. One that acts as someone else (`ctx.as`)
 reads as them there too, as when an Action calls it; a startup check, which reads nothing, refuses.
 
+#### Nested calls and retries
+
+Code calls another Action with `ctx.call(action, input)`, or `tx.call` in a transaction. A recorded
+nested call is kept under an id that names its caller, the Action, how many calls of it with the
+same input the caller made before, and its input's hash: `<caller>.<action>#<n>.<inputHash>`. The
+caller is the call's own id, `<event>:<processor>` in a Processor's delivery, and `<caller>/<key>`
+in `ctx.branch(key)`. An unrecorded Action's calls are its caller's.
+
+A call retried with its id (`runtime.call(…, { id })`, a timer's occurrence, a Processor's delivery
+after a failure or a restart) has `ctx.retry` true. Each nested call that completed answers its
+recorded result without running again, and one that didn't complete runs.
+
+```ts
+import { defineAction, people } from "copilotz";
+
+export default defineAction({
+  allow: people,
+  input: {
+    type: "object",
+    properties: { order: { type: "string" } },
+    required: ["order"],
+  } as const,
+  run: async (ctx, { order }) => {
+    // Refused for some callers. On a retry, the calls after it are found either way.
+    await ctx.call("discount.apply", { order }).catch(() => null);
+    await ctx.call("inventory.reserve", { order });
+    return ctx.call("invoice.create", { order });
+  },
+});
+```
+
+- **Calls of other Actions or inputs don't move it.** One refused or allowed on the retry, one
+  added, or calls that start in another order (each after a read) leave it where the retry finds it.
+- **Identical calls are matched in the order they're made.** The same call twice is two calls, `#1`
+  and `#2`; a retry answers both from their records and runs a third if the code makes one. An
+  identical call made earlier takes the lower number. So code that calls a failed Action again
+  itself (a retry loop of its own) charges twice when its caller is retried: the first call failed,
+  so it runs again, and the second answers from its record. Let the failure fail the caller, and
+  retry the caller.
+- **Refusals.** A call a synchronous `allow` refuses takes no number and records nothing: the same
+  call made next (through a grant, `ctx.as(grant(…)).call(…)`) takes the number, and a retry finds
+  it whichever way the permission went. A call an asynchronous `allow` refuses keeps the number it
+  took before waiting, so the same call made after it as a fallback can run once more on a retry
+  whose permission went the other way. So can it under a rule that answers at once on one attempt
+  and after a wait on another (a cached answer), even with no change in permission. Who makes a call
+  isn't part of it: calls that differ only by who makes them (`ctx.as(person).call(…)` for each of
+  several people) must carry that difference in their input (`{ order, by: person.id }`), or a retry
+  can answer one person's call from another's record.
+- **A changed input is a new call:** the hash covers the whole input, private fields too. Keep a
+  nested call's input the same across attempts: a time or a random id in it comes from the caller's
+  input, not from the clock.
+- **Processors are apart.** Two Processors handling one event never share a call's record or a
+  timer. A Processor's name is part of its calls' ids: renamed, a Processor replays the log from the
+  start (its position is kept by name), and its nested calls run again for every event it replays.
+- **`ctx.branch(key)`** keeps identical calls of concurrent work apart (each of a step's tool
+  calls), when they may start in another order.
+- **Names.** `:` and `/` join a caller's parts, and no name is checked for them: a Processor named
+  `a/k` and Processor `a`'s branch `k` name the same caller, and so can an event id and a Processor
+  name with `:` in them. Keep `/` and `:` out of Processor names, branch keys and the event ids you
+  give.
+- **The id is the log's, not an API.** Read a call's `cause` and `data.action`, not the id's parts.
+
 #### Actions with no parameters
 
 Omit `input` to accept either `runtime.call("order.expire")` or `runtime.call("order.expire", {})`.
@@ -670,7 +732,7 @@ What plugin code gets. `Context` is an Action's, a Processor's and a tool's.
 | `stream(channel)`                       | live frames for subscribers, never stored (tokens being written)                                            |
 | `render(name, item)`                    | renders a View                                                                                              |
 | `graph`                                 | `link`, `unlink` and `edges` between documents                                                              |
-| `branch(key)`                           | this context with its calls numbered apart, for work run at once (a step's tool calls)                      |
+| `branch(key)`                           | this context with its calls and timers named apart, for identical calls of work run at once                 |
 | `cancel(target)`, `disconnect(actor)`   | stops a running call or delivery; ends an actor's browsers                                                  |
 | `workers`, `fetch`, `metrics`           | workers by kind and id; the outside `fetch` (a test's fake, if given); counters, histograms and gauges      |
 | `resources`, `adapters`                 | the merged configuration                                                                                    |
@@ -778,9 +840,9 @@ The log records what happened, with no bookkeeping tables beside it. Every event
 - **Retries:** `runtime.call(action, input, { id })` is retryable. An id that completed answers its
   recorded result without running. One still running is joined. Otherwise the call runs again. An id
   reused for another action or input is refused (`id_conflict`). A call whose executor died fails
-  with `executor_lost`. A nested call's id comes from its cause, its place, and its input. A
-  synchronous permission refusal takes no place. An asynchronous check reserves the recorded call's
-  place before it waits.
+  with `executor_lost`. A nested call's id names its caller, the Action, its number among identical
+  calls and its input, so a retry finds it wherever it's made
+  ([nested calls and retries](#nested-calls-and-retries)).
 - **Timers:** an occurrence is the call `<timer>@<due time>`, and a failed one runs again as that
   same call.
 - **Causes:** every event names its cause, so the log is a tree you walk from any event back to the
@@ -819,8 +881,13 @@ schedules: {
   runs timers, so instances started together run it once.
 - **From code:** `ctx.schedule(action, input, { at | cron | every, id?, retries? })` sets a timer
   with the call's writes, and `ctx.unschedule(id)` removes it. In a transaction, `tx.schedule`
-  commits with the rest. Scheduling an id again replaces its timer. Without an `id`, a retried call
-  sets the same timers again rather than more. A declared timer can't be changed from code.
+  commits with the rest. Scheduling an id again replaces its timer. Without an `id`, a timer is
+  named by its place among the timers its caller set: `<call>:timer.<n>`, or
+  `<event>:<processor>:timer.<n>` for a Processor's, apart from another Processor's. A retry that
+  sets the same timers in the same order replaces them rather than adding more. One that sets
+  another first, or skips one, replaces the timer the first attempt set under that number, and the
+  first attempt's timer under the next number stays, so it can fire twice. Give a timer an `id` when
+  a retry may set it in another order. A declared timer can't be changed from code.
 - **As whom:** a timer set by an actor runs as them, where they were, and its call asks `allow`.
 - **Once:** the owner claims what's due in one commit and calls each occurrence as
   `<timer>@<due time>`, so an occurrence called twice runs once. A recurring timer that missed

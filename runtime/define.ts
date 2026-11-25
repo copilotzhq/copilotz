@@ -75,8 +75,8 @@ export type TransactionScope = {
    * it runs, and that ends nothing. Once it runs, its failure ends the
    * transaction, as a failed op does. A recorded one's `action.started` and
    * `action.completed` commit with it too, so a retry after a rollback runs
-   * it again, and one after a commit answers from the record. Calls run one
-   * at a time, in the order they're made.
+   * it again, and one after a commit answers from the record. Its id is named
+   * as `ctx.call`'s is. Calls run one at a time, in the order they're made.
    */
   call<R = unknown>(action: AppName<"actions">, input?: unknown): Promise<R>;
 };
@@ -95,11 +95,25 @@ export type Context = {
   transaction<R>(work: (tx: TransactionScope) => Promise<R>): Promise<R>;
   /** Live, non-durable frames for subscribers (for example tokens being generated). */
   stream(channel: string): { write(data: unknown): void };
+  /**
+   * Calls an Action, this plugin's or another's, as this code's actor: checked
+   * as an outside call is (its `allow`, its input). A recorded call is kept
+   * under an id naming its caller (this call, or this Processor and its
+   * event), the Action, how many calls of it with the same input the caller
+   * made before, and the input's hash: `<caller>.<action>#<n>.<inputHash>`.
+   * On a retry (`retry`), one that completed answers its recorded result
+   * without running again, and one that didn't runs. Calls of other Actions
+   * or inputs don't move it; identical ones are matched in the order they're
+   * made, so the same call made twice is two calls. One a synchronous `allow`
+   * refuses takes no number; one an asynchronous `allow` refuses keeps the
+   * number it took before waiting.
+   */
   call<R = unknown>(action: AppName<"actions">, input?: unknown): Promise<R>;
   /**
-   * This context, with the calls and timers it starts numbered apart, under
-   * `key`. For work run concurrently (each of a step's tool calls): a retry
-   * finds each branch's calls again, whatever order they start in. Writes
+   * This context, with the calls and timers it starts named apart, under
+   * `key`. A retry finds a call by what it is, not where it's made, so a
+   * branch is needed only to keep identical calls apart when concurrent work
+   * may make them in another order (each of a step's tool calls). Writes
    * still answer to the same cause.
    */
   branch(key: string): Context;

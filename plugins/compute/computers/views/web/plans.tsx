@@ -4,7 +4,9 @@
  * per plan (Claude, ChatGPT through Codex, Google AI through Antigravity),
  * each computer of theirs saying whether its CLI is installed and signed in,
  * as whom, and what to do: sign in (a dialog that picks the computer and
- * runs the CLI's own sign-in there), install the CLI (its official command),
+ * runs the CLI's own sign-in there, installing a missing CLI first on macOS
+ * and Linux), sign out of it on one computer (`computer.engine.logout`),
+ * install the CLI by hand (its official command, on Windows),
  * or, on a computer others' agents work on as them, why it can't be used and
  * how to change that. With no computer yet, connecting one (or adding a
  * cloud computer, a kind's) comes first.
@@ -140,9 +142,18 @@ function Plans(
       const answer = await call<ComputerEngines[]>("computer.engines", {});
       setSaid(Object.fromEntries(answer.map((c) => [c.computer, c])));
     } catch (error) {
-      setProblem(message(error));
+      setProblem(say("checkFailed", { why: message(error) }));
     } finally {
       setChecking(false);
+    }
+  };
+  const signOut = async (engine: string, computer: string) => {
+    setProblem(undefined);
+    try {
+      await call("computer.engine.logout", { computer, engine });
+    } catch (error) {
+      const name = live.find((m) => m.computer._id === computer)?.name ?? computer;
+      setProblem(say("signOutFailed", { computer: name, why: message(error) }));
     }
   };
   // Asked as it opens, and again as a computer comes online.
@@ -204,7 +215,7 @@ function Plans(
       {problem
         ? (
           <Notice tone="warning" role="alert">
-            {say("checkFailed", { why: problem })}
+            {problem}
           </Notice>
         )
         : null}
@@ -244,6 +255,7 @@ function Plans(
                     from: computer ? "row" : "card",
                     ...(computer ? { computer } : {}),
                   })}
+                signOut={(computer) => void signOut(plan.engine, computer)}
               />
             ))}
           </ul>

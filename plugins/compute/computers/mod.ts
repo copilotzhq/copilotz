@@ -23,7 +23,8 @@
  * to it: routes/upload.ts), where they may change it (`computer.upload`).
  *
  * A computer also runs its owner's plans: Claude Code, Codex or Antigravity,
- * signed in there once (`computer.engines`, `computer.engine.login`), so an
+ * signed in there once (`computer.engines`, `computer.engine.login`, out
+ * with `computer.engine.logout`), so an
  * agent's model calls for them run on their plan, through the CLI, instead
  * of on an API key (the `claude-plan`, `codex-plan` and `gemini-plan`
  * providers, see resources/engines.ts and shared/engines.ts). The CLI is
@@ -79,7 +80,7 @@ import { leftProcessor } from "./processors/left.ts";
 import { WORK } from "./shared/workloads.ts";
 import { engineAdapter } from "./adapters/engine.ts";
 import { engineAction, engineCancelAction } from "./actions/engine.ts";
-import { engineLoginAction, enginesAction } from "./actions/engines.ts";
+import { engineLoginAction, engineLogoutAction, enginesAction } from "./actions/engines.ts";
 import { engineCost, engineProviders } from "./resources/engines.ts";
 
 export type { Computer } from "./collections/computer.ts";
@@ -147,6 +148,7 @@ export const computers: Plugin = definePlugin({
     "computer.engine.cancel": engineCancelAction,
     "computer.engines": enginesAction,
     "computer.engine.login": engineLoginAction,
+    "computer.engine.logout": engineLogoutAction,
   },
   // A model call on a plan's CLI (the providers below name it).
   adapters: { llm: { engine: engineAdapter } },

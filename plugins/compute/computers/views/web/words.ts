@@ -54,7 +54,8 @@ export const say = defineWords("computers", {
   rowMissing: "{cli} isn't installed",
   rowUnchecked: "Not checked yet",
   rowOld: "Didn't say: its computer program may need an update",
-  rowSharedSomewhere: "Shared with others' agents",
+  rowSharedSomewhere:
+    "Your plan runs on your own computer. This shared one runs your agents' tools.",
   sharedNotice:
     "{computer} is shared with others' agents in {spaces}, so your plans can't run on it.",
   sharedNoticeSomewhere: "{computer} is shared with others' agents, so your plans can't run on it.",
@@ -72,6 +73,20 @@ export const say = defineWords("computers", {
   installAnywhere: "In a terminal on that computer, run:",
   installCommand: "The command that installs {cli}",
   installThen: "Then check again here. It's {cli}'s official install.",
+  installAndSignIn: "Install {cli} and sign in",
+  installRuns:
+    "{cli} isn't installed on {computer} yet. Signing in runs {cli}'s official installer there first:",
+  stepInstall: "Installing {cli} on {computer}",
+  signOut: "Sign out",
+  signOutFailed: "Couldn't sign out of {computer}: {why}",
+  shareSignedIn: "{computer} is signed in to your {plan}. Sign out of it first: " +
+    "a computer shared with others can't keep plan sign-ins.",
+  shareOwnWarning: "Agents in {space} run on {computer} as you: they can read everything you " +
+    "can on it, including your own sign-ins (Claude Code, Codex, SSH keys). Share it only with " +
+    "people you trust.",
+  installFailedTitle: "{cli} didn't install on {computer}",
+  installFailedText:
+    "Its installer stopped. What it said last is below, and how to install it yourself.",
 
   // A computer shared with others' agents
   sharedTitle: "{computer} is shared with others' agents",

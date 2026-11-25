@@ -5,6 +5,7 @@ import type { Message } from "../collections/message.ts";
 import type { Thread } from "../collections/thread.ts";
 import { beyond } from "../../../access/spaces/contract.ts";
 import { agentsNamed, now, rosterOf, SEND, type Team } from "./agents.ts";
+import { chatOf, subthreadOf } from "./chat-of.ts";
 import { starts } from "./delivery.ts";
 import { previewOf, type Refused } from "./share.ts";
 import { type Agent, DELEGATED, settingsOf, type Turn } from "./types.ts";
@@ -13,6 +14,11 @@ export type Send = {
   output: string;
   message?: Message & { hops: number };
   thread?: Thread;
+  /**
+   * The chat it's said in, when that's another conversation than the turn's
+   * (`chatOf`): archived, it comes back with it.
+   */
+  chat?: string;
   /** It goes to another space: trusted code writes it, once its person may. */
   across?: true;
   /**
@@ -176,6 +182,7 @@ async function toChat(
       chat.in ? `?in=${encodeURIComponent(chat.in)}` : ""
     })${input.expectReply === false ? "." : "; you'll have the reply before you continue."}`,
     across: true,
+    chat: await chatOf(ctx.as().db, chat),
     message: {
       _id: id,
       thread,
@@ -262,7 +269,7 @@ export const prepare = async (
   };
   const waits = input.expectReply === false ? "." : "; you'll have the reply before you continue.";
   if (place === "subthread") {
-    const sub = `${id}:sub`;
+    const sub = subthreadOf(id);
     return {
       output: `Sent to ${to} in a subthread${waits}`,
       message: { ...base, thread: t.thread, subthread: sub },

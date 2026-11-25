@@ -92,6 +92,8 @@ export {
   useFormState,
   useFormSubmit,
 } from "./toolkit/form.tsx";
+// The field a save's refusal is about (`detail.field`), to show it under that field's input.
+export { refusedField } from "./toolkit/refusal.ts";
 export { Autocomplete, type AutocompleteOption, optionId } from "./toolkit/autocomplete.tsx";
 // Surfaces and labels.
 export { Card } from "./toolkit/card.tsx";
@@ -104,6 +106,20 @@ export { Logo } from "./toolkit/logo.tsx";
 export { Menu, type MenuItem, type MenuTrigger } from "./toolkit/menu.tsx";
 export { Popover, type PopoverTrigger } from "./toolkit/popover.tsx";
 export { Dialog } from "./toolkit/dialog.tsx";
+// Asking before going on (a delete), and a record in a dialog, to add or edit.
+export {
+  ConfirmDialog,
+  type ConfirmDialogProps,
+  type ConfirmOptions,
+  useConfirm,
+} from "./toolkit/confirm-dialog.tsx";
+export {
+  type RecordChange,
+  RecordDialog,
+  type RecordDialogProps,
+  type RecordForm,
+  type RecordUpdate,
+} from "./toolkit/record-dialog.tsx";
 export { Drawer } from "./toolkit/drawer.tsx";
 export { type Tab, Tabs } from "./toolkit/tabs.tsx";
 export { NavItem } from "./toolkit/nav-item.tsx";
@@ -204,6 +220,9 @@ export {
   formatDayTime,
   TimeFields,
 } from "./toolkit/date-time-picker.tsx";
+// Typed day-times read back by a pattern, a language's own pattern, and the moment one names.
+export { dayTimePattern, parseDayTime, patternProblem } from "./toolkit/day-time-text.ts";
+export { dateOfDayTime } from "./toolkit/day-time-zone.ts";
 export { LiveClock } from "./toolkit/live-clock.tsx";
 // Telling: a few seconds' word over the page.
 export {

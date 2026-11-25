@@ -75,11 +75,17 @@ export const computers: Words = {
   "computers.hideInstall": "Ocultar",
   "computers.howToFix": "Como usar",
   "computers.howToInstall": "Como instalar",
+  "computers.installAndSignIn": "Instalar o {cli} e entrar",
   "computers.installAnywhere": "Num terminal nesse computador, rode:",
   "computers.installCommand": "O comando que instala o {cli}",
+  "computers.installFailedText":
+    "O instalador parou. O que ele disse por último está abaixo, e como instalar você mesmo.",
+  "computers.installFailedTitle": "O {cli} não foi instalado em {computer}",
   "computers.installIn": "Num terminal em {computer}, rode:",
   "computers.installMissing":
     "O {cli} ainda não está instalado em {computer}. Num terminal lá, rode:",
+  "computers.installRuns":
+    "O {cli} ainda não está instalado em {computer}. Para entrar, o instalador oficial do {cli} roda lá antes:",
   "computers.installThen": "Depois verifique de novo aqui. É a instalação oficial do {cli}.",
   "computers.keepAsIs": "Deixar como está",
   "computers.keepBoth": "Manter os dois",
@@ -139,13 +145,18 @@ export const computers: Words = {
   "computers.rowInstalled": "Instalado, sem login",
   "computers.rowMissing": "O {cli} não está instalado",
   "computers.rowOld": "Não respondeu: o programa do computador talvez precise de atualização",
-  "computers.rowSharedSomewhere": "Compartilhado com agentes de outros",
+  "computers.rowSharedSomewhere":
+    "Seu plano roda no seu próprio computador. Este, compartilhado, roda as ferramentas dos seus agentes.",
   "computers.rowSignedIn": "Conectado",
   "computers.rowSignedInAs": "Conectado como {account}",
   "computers.rowUnchecked": "Ainda não verificado",
   "computers.runsWhileOn":
     "Seus agentes o usam enquanto {computer} estiver ligado; até lá, usam os modelos do app.",
   "computers.send": "Enviar",
+  "computers.shareOwnWarning":
+    "Os agentes de {space} rodam em {computer} como você: eles podem ler tudo o que você pode lá, inclusive seus próprios logins (Claude Code, Codex, chaves SSH). Compartilhe só com pessoas de confiança.",
+  "computers.shareSignedIn":
+    "{computer} está conectado ao seu {plan}. Saia dele primeiro: um computador compartilhado com outros não pode manter logins de planos.",
   "computers.sharedFix":
     "Para usá-lo no seu plano, faça os agentes deles perguntarem a você antes lá: assim nada roda " +
     "nele sem o seu sim. Ou tire-o de {spaces}, pelo menu dele lá.",
@@ -166,12 +177,15 @@ export const computers: Words = {
   "computers.signInOther": "Entrar em outro computador",
   "computers.signInThrough": "Pelo {cli}, num computador seu.",
   "computers.signInTitle": "Entrar no seu {plan}",
+  "computers.signOut": "Sair",
+  "computers.signOutFailed": "Não deu para sair em {computer}: {why}",
   "computers.signedIn": "Conectado",
   "computers.skip": "Pular",
   "computers.start": "Começar o login",
   "computers.stepCode": "Cole o código que ela der",
   "computers.stepEnterCode":
     "Abra a página de login, entre com a conta que tem o seu plano, e digite este código lá:",
+  "computers.stepInstall": "Instalando o {cli} em {computer}",
   "computers.stepSaved": "Salvou {file} em {path}",
   "computers.stepSaves": "Salva {file} em {path}",
   "computers.stepSavesFile": "Salva um arquivo desta conversa em {path}",

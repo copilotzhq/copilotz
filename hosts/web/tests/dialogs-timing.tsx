@@ -266,7 +266,9 @@ test("H2: a record dialog that ended takes no more saves or closes", () =>
         { saves: 0, closed: 1 },
         end,
       );
-      assert.equal(input("name").closest("fieldset")!.disabled, true, end);
+      // Ended, read-only (round 2: by the draft and readOnly, never disabled).
+      assert.equal(input("name").readOnly, true, end);
+      assert.equal(input("name").disabled, false, end);
       toasts();
     }
   }));
@@ -291,7 +293,8 @@ test("H3: editable while parts run, read-only while the save runs, editable agai
         {(form) => fields(form, <Upload wait={upload.promise} />)}
       </RecordDialog>,
     );
-    const locked = () => input("name").closest("fieldset")!.disabled;
+    // Read-only by the draft and `readOnly` (round 2: never disabled, so FormData keeps it).
+    const locked = () => input("name").readOnly && !input("name").closest("fieldset[disabled]");
     await typeInto(input("name"), "First");
     await submit();
     assert.equal(locked(), false);
@@ -521,7 +524,7 @@ test("M2: a required field cleared while a part works stops the save", () =>
     await settle(upload.resolve);
     assert.deepEqual(saves, []);
     assert.equal(dialogs()[0].open, true);
-    assert.equal(input("name").closest("fieldset")!.disabled, false);
+    assert.equal(input("name").readOnly, false);
   }));
 
 test("M3: a part handing back the stored value writes nothing; an empty list over null is []", () => {
@@ -541,17 +544,18 @@ test("M3: a part handing back the stored value writes nothing; an empty list ove
   );
 });
 
-test("M4: a numeric step makes a list where there's none; dates and files are copied as they are", () => {
-  assert.deepEqual(createOf({}, { "lines.0.qty": { kind: "number", raw: "2" } }, {}), {
+// Round 2: a number step over nothing isn't guessed a list any more (a map of numbers looks the
+// same); it's refused, and goes into a list or an object that's there (dialogs-matrix.tsx).
+test("M4: a number step goes into the list that's there, not a made-up object; dates and files are copied as they are", () => {
+  assert.deepEqual(createOf({ lines: [] }, { "lines.0.qty": { kind: "number", raw: "2" } }, {}), {
     lines: [{ qty: 2 }],
   });
   assert.deepEqual(withValue({ lines: [{ qty: 1 }] }, "lines.0.qty", 3), { lines: [{ qty: 3 }] });
-  assert.deepEqual(
+  assert.throws(() =>
     updateOf({ _id: "x" }, {
       "lines.0.qty": { kind: "number", raw: "2" },
       "lines.0.sku": { kind: "text", raw: "P1" },
-    }, {})?.update,
-    { $set: { lines: [{ qty: 2, sku: "P1" }] } },
+    }, {})
   );
   const since = new Date("2026-11-25T12:00:00Z");
   const file = new Blob(["x"]);

@@ -262,12 +262,13 @@ function Question(
       failure = error;
     }
     const now = committed.current;
-    now.onRunning?.(false);
-    // Closed by the browser meanwhile, its close event maybe still on its way: dismissed now.
+    // Closed by the browser meanwhile, its close event maybe still on its way: dismissed now,
+    // while it still runs, so the dismissal leaves the answer to the outcome below.
     if (phase.current === "busy" && mounted.current && element()?.open !== true) {
       end();
       now.onDismissed();
     }
+    now.onRunning?.(false);
     const here = mounted.current && phase.current === "busy";
     if (done) {
       end();

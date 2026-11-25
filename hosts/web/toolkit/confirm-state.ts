@@ -50,10 +50,13 @@ export type Questions<O> = {
   close(): void;
 };
 
-/** Of the questions waiting, those on the screen: those whose operation runs, then the next. */
+/**
+ * Of the questions waiting, those on the screen, in order: every one whose operation runs (one
+ * is never hidden while it runs), and the first one waiting.
+ */
 export function visibleOf<O>(queue: readonly Asked<O>[]): readonly Asked<O>[] {
-  const end = queue.findIndex((q) => !q.running);
-  return end < 0 ? queue : queue.slice(0, end + 1);
+  const next = queue.find((q) => !q.running);
+  return queue.filter((q) => q.running || q === next);
 }
 
 export function questions<O>(): Questions<O> {

@@ -17,11 +17,14 @@
  *   With nothing changed, `onSave` isn't called and the dialog just closes.
  *
  * A `useFormSubmit` part (another plugin's View shown in the fields) takes part in the save: what
- * it hands up is set too, compared with the record as an edit is. The fields take edits while the
- * parts run: what's typed while a part uploads is saved. The values are read, and checked by the
- * browser again (`required`), when the save starts; from then until it answers the fields are
- * read-only, and after a refusal they take edits again, the draft as it was. While it saves,
- * Save is busy and the dialog can't be dismissed.
+ * it hands up is set too, compared with the record as an edit is, and over an edit of the same
+ * field, unless that edit was made after the submit started (a correction typed while the part
+ * works wins). The fields take edits while the parts run: what's typed while a part uploads is
+ * saved. The values are read, and checked by the browser again (`required`), when the save
+ * starts; from then until it answers the draft takes no edits and text and number fields are
+ * `readOnly`. Nothing is disabled or inert, so `new FormData(form)` in `onSave` holds every field
+ * and a question asked during the save can be answered. After a refusal the fields take edits
+ * again, the draft as it was. While it saves, Save is busy and the dialog can't be dismissed.
  * A save that's refused by its field (`detail.field`: a schema's refusal, an Action's `failure`
  * with a `detail`) shows under the `Field` whose `error` is `form.error(name)`, in the words
  * `errors` gives for it (a schema's are for developers), or its own; the focus goes to its
@@ -118,17 +121,27 @@ export type RecordForm<T> = {
   record: Partial<T>;
   /** A save is under way. */
   saving: boolean;
-  /** For an `Input`, a `Textarea` or a `Select`: the text. Emptied, the field is cleared. */
-  text(name: string): { name: string; value: string; onChange(change: TextChange): void };
+  /**
+   * For an `Input`, a `Textarea` or a `Select`: the text. Emptied, the field is cleared.
+   * `readOnly` while a save has the values, and once the session is done.
+   */
+  text(name: string): {
+    name: string;
+    value: string;
+    readOnly: boolean;
+    onChange(change: TextChange): void;
+  };
   /**
    * For a number `Input` (`type="number"`, any step): its text while it's typed, a number once
    * saved (text that isn't one stays text, for the schema to refuse). Emptied, it's cleared.
+   * `readOnly` while a save has the values, and once the session is done.
    */
   number(name: string): {
     name: string;
     type: "number";
     step: "any";
     value: string;
+    readOnly: boolean;
     onChange(change: TextChange): void;
   };
   /** For a `Checkbox` or a `Switch`: `true` or `false`, never cleared. */
@@ -257,10 +270,7 @@ type Refused = { field?: string; words: ReactNode };
  */
 type Phase = "open" | "saving" | "done";
 
-const SHEET = sheet(
-  "record-dialog",
-  `.copilotz-record-fields { display: contents; min-width: 0; margin: 0; padding: 0; border: 0; }`,
-);
+const SHEET = sheet("record-dialog", `.copilotz-record-fields { display: contents; }`);
 
 /**
  * One record, for as long as it's open. Its actions use what it was drawn with when last
@@ -286,6 +296,8 @@ function Session<T extends Record<string, unknown>>(props: RecordDialogProps<T>)
   const told = useRef(false);
   /** The form runs a submit: its parts, then its save. */
   const running = useRef(false);
+  /** The edits as they were when the running submit started. */
+  const atStart = useRef<Edits>({});
   const mounted = useRef(false);
   useLayoutEffect(() => {
     mounted.current = true;
@@ -333,6 +345,7 @@ function Session<T extends Record<string, unknown>>(props: RecordDialogProps<T>)
     text: (name) => ({
       name,
       value: display(name, "text") as string,
+      readOnly: locked,
       onChange: (change) =>
         edit(name, "text", typeof change === "string" ? change : change.target.value),
     }),
@@ -341,6 +354,7 @@ function Session<T extends Record<string, unknown>>(props: RecordDialogProps<T>)
       type: "number",
       step: "any",
       value: display(name, "number") as string,
+      readOnly: locked,
       onChange: (change) =>
         edit(name, "number", typeof change === "string" ? change : change.target.value),
     }),
@@ -412,9 +426,13 @@ function Session<T extends Record<string, unknown>>(props: RecordDialogProps<T>)
       element.reportValidity();
       return;
     }
+    // What the person edited after the submit started wins over a part's value for that field.
+    const later = new Set(
+      Object.keys(draft.current).filter((path) => draft.current[path] !== atStart.current[path]),
+    );
     let change: RecordChange<T>;
     if (now.record) {
-      const changed = updateOf(now.record, draft.current, handed);
+      const changed = updateOf(now.record, draft.current, handed, later);
       if (!changed) {
         if (here) tell();
         return;
@@ -425,6 +443,7 @@ function Session<T extends Record<string, unknown>>(props: RecordDialogProps<T>)
         (now.defaults ?? {}) as Record<string, unknown>,
         draft.current,
         handed,
+        later,
       );
       change = { kind: "create", values: values as T };
     }
@@ -506,7 +525,9 @@ function Session<T extends Record<string, unknown>>(props: RecordDialogProps<T>)
             event.stopPropagation();
             return;
           }
-          // A new attempt takes the last refusal away, before the form's own handler runs.
+          // A new attempt takes the last refusal away, before the form's own handler runs, and
+          // keeps the draft as it is: an edit made after this is a correction.
+          if (!running.current) atStart.current = draft.current;
           setRefused(undefined);
         }}
         // Its submit never reaches a form around this dialog.
@@ -515,9 +536,15 @@ function Session<T extends Record<string, unknown>>(props: RecordDialogProps<T>)
         <Form id={formId} onSubmit={save}>
           <Busy on={onBusy} />
           {atTop ? <Notice tone="destructive" role="alert">{top}</Notice> : null}
-          <fieldset className="copilotz-record-fields" disabled={locked}>
+          {/* A form in the fields (an app's own, in a dialog or not) submits on its own. */}
+          <div
+            className="copilotz-record-fields"
+            onSubmit={(event) => {
+              if (event.target !== ownForm()) event.stopPropagation();
+            }}
+          >
             {fields}
-          </fieldset>
+          </div>
         </Form>
       </div>
     </Dialog>

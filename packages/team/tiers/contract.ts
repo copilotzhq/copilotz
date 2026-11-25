@@ -2,13 +2,15 @@
  * The tiers plugin's contract: the shapes of a tier (its `tiers` resource), a
  * kind of work (`tierKinds`), what levels chose, and what its queries answer,
  * and the resource kinds it reads (`planTier`, `planCredits`,
- * `typicalMessage`). The rest is reached by name: its collections
- * (`modelChoice`, `tierTemplate`, `tierKind`), its queries
- * (`modelChoice.offered`, `modelChoice.agent`) and its Actions
- * (`tiers.model`, `tiers.choose`, `tiers.cap`, `tiers.save`, `tiers.remove`,
- * `tiers.restore`, `tiers.kind`).
+ * `typicalMessage`, and the models plugin's `connectedPlans`). The rest is
+ * reached by name: its collections (`modelChoice`, `tierTemplate`,
+ * `tierKind`), its queries (`modelChoice.offered`, `modelChoice.agent`,
+ * `modelChoice.harnesses`) and its Actions (`tiers.model`, `tiers.choose`,
+ * `tiers.cap`, `tiers.save`, `tiers.remove`, `tiers.restore`, `tiers.kind`,
+ * `tiers.harnesses`).
  */
 export type { By, Choice, Kind, Tier } from "./shared/tiers.ts";
+export type { HarnessShown } from "./shared/plans.ts";
 export type { ModelChoice } from "./collections/choice.ts";
 export type {
   AgentNow,

@@ -19,6 +19,10 @@
  * - `tiers.restore` `{ tier }`: one of the app's back as the app has it.
  * - `tiers.kind` `{ kind?, title, base }`: a kind of work of the org's own,
  *   starting from one of the app's (its chain in every tier, until changed).
+ * - `tiers.harnesses` `{ harnesses }`: the order the person's plans run
+ *   their agents' models in (the app's plans, by provider; the rest after,
+ *   in the app's order); null: the app's. Kept on their own choice, beside
+ *   their tier for new chats.
  *
  * A change applies from each conversation's next reply.
  */
@@ -26,6 +30,7 @@ import { type Context, defineAction, failure, inPerson, invalid } from "copilotz
 import { must, ORG } from "copilotz/plugins/access/contract";
 import type { ModelRef } from "copilotz/plugins/models/contract";
 import type { ModelChoice } from "../collections/choice.ts";
+import { harnessesOf } from "../shared/plans.ts";
 import { orgTiersOf } from "../shared/shown.ts";
 import {
   aboveCap,
@@ -50,17 +55,22 @@ const running = (ctx: Context) => runsOrg(ctx, "do that").then(() => true, () =>
 const choices = (ctx: Context) => ctx.as().db.collection<ModelChoice>("modelChoice");
 const templates = (ctx: Context) => ctx.as().db.collection<Template>("tierTemplate");
 
-/** Sets or clears one level's tier, keeping what else it holds (the org's cap). */
+/** Keeps a level's choice, or deletes it once it holds nothing (no tier, cap or order). */
+async function keep(ctx: Context, had: ModelChoice | null, next: ModelChoice) {
+  if (!next.tier && !next.cap && !next.harnesses?.length) {
+    if (had) await choices(ctx).deleteOne({ _id: next._id });
+    return;
+  }
+  await choices(ctx).replaceOne({ _id: next._id }, next, { upsert: true });
+}
+
+/** Sets or clears one level's tier, keeping what else it holds (the org's cap, a person's order). */
 async function setTier(ctx: Context, id: string, tier: string | null, more: Partial<ModelChoice>) {
   const had = await choices(ctx).findOne({ _id: id });
   const next = { ...had, ...more, _id: id, at: new Date().toISOString() } as ModelChoice;
   if (tier) next.tier = tier;
   else delete next.tier;
-  if (!next.tier && !next.cap) {
-    if (had) await choices(ctx).deleteOne({ _id: id });
-    return;
-  }
-  await choices(ctx).replaceOne({ _id: id }, next, { upsert: true });
+  await keep(ctx, had, next);
 }
 
 export const chooseAction = defineAction({
@@ -133,9 +143,36 @@ export const capAction = defineAction({
     const next = { ...had, _id: ORG_CHOICE, at: new Date().toISOString() } as ModelChoice;
     if (input.tier) next.cap = input.tier;
     else delete next.cap;
-    if (!next.tier && !next.cap) await choices(ctx).deleteOne({ _id: ORG_CHOICE });
-    else await choices(ctx).replaceOne({ _id: ORG_CHOICE }, next, { upsert: true });
+    await keep(ctx, had, next);
     return { cap: input.tier };
+  },
+});
+
+export const harnessesAction = defineAction({
+  description: "Sets the order your plans run your agents' models in",
+  input: {
+    type: "object",
+    properties: {
+      /** Plans by provider name, first first; null: the app's order. */
+      harnesses: { type: ["array", "null"], items: { type: "string" }, maxItems: 32 },
+    },
+    required: ["harnesses"],
+    additionalProperties: false,
+  },
+  allow: inPerson,
+  run: async (ctx, input) => {
+    const plans = harnessesOf(ctx);
+    const order = [...new Set(input.harnesses ?? [])];
+    const unknown = order.find((name) => !plans[name]);
+    if (unknown) throw invalid(`There's no plan "${unknown}".`);
+    const person = ctx.actor!.id;
+    const id = personChoice(person);
+    const had = await choices(ctx).findOne({ _id: id });
+    const next = { ...had, _id: id, person, at: new Date().toISOString() } as ModelChoice;
+    if (order.length) next.harnesses = order;
+    else delete next.harnesses;
+    await keep(ctx, had, next);
+    return { harnesses: order.length ? order : null };
   },
 });
 

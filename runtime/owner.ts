@@ -9,6 +9,7 @@ import { plan } from "./aggregate.ts";
 import { type Metrics, noMetrics } from "./metrics.ts";
 import { type Clock, type Scheduled, systemClock, TIMERS } from "./schedules.ts";
 import { createTimers } from "./timers.ts";
+import { actionInput } from "./action-input.ts";
 import { allows, callIdOf, inScope } from "./actor.ts";
 import { createApi } from "./api.ts";
 import type { IndexSpec, ScalarType } from "./store.ts";
@@ -39,7 +40,7 @@ import {
   type ObserveOptions,
 } from "./observe.ts";
 import { createKept } from "./kept.ts";
-import { reading, startup } from "./reads.ts";
+import { queryAllowed, reading, startup } from "./reads.ts";
 import {
   BROWSER,
   type BrowserLimits,
@@ -937,41 +938,43 @@ export async function createOwner(
       { ...(options.actor ? { actor: options.actor } : {}), foreign: true },
     );
   };
+  const callerReads = (actor?: Actor, track?: (read: Op | Dep) => void, view?: string) => {
+    // An actor's Views see what they reach, and what the rules read to
+    // know it (memberships) is what they read too, kept or not: they follow its changes.
+    const rules = actor && track ? ruling(track) : ruleReads;
+    // Reads as `who`, within their reach; `hide`: without private fields.
+    const runFor = (who: Actor | undefined, hide: boolean) => async (op: Op) => {
+      known(op);
+      track?.(op);
+      const [read] = (await guard([op as ReadOp], who, rules)).ops;
+      const value = await answer(store, read as ReadOp);
+      return hide ? hidden(read as ReadOp, value) : value;
+    };
+    // An unrecorded Action the View calls may act as someone else, as from an Action: the
+    // system (or a grant) reads private fields there, as Actions do.
+    const runAs = (who: Actor | undefined) => runFor(who, !!who && who.kind !== "system");
+    return reading(
+      registry,
+      runFor(actor, !!actor),
+      (collection, doc) => {
+        // What a read used (an embedding's tokens): recorded on its own.
+        const _id = typeof doc._id === "string" ? doc._id : crypto.randomUUID();
+        const op: StoreOp = { op: "insert", collection, docs: [{ ...doc, _id }] };
+        known(op);
+        void writeEach([op], { foreign: true }).catch(() => {});
+        return _id;
+      },
+      metrics,
+      outside,
+      actor,
+      undefined,
+      runAs,
+      view === READ_VIEW,
+    );
+  };
   const observers = createObservers({
     views: registry.views,
-    reads: (track, actor) => {
-      // An actor's Views see what they reach, and what the rules read to
-      // know it (memberships) is what they read too, kept or not: they follow its changes.
-      const rules = actor ? ruling(track) : ruleReads;
-      // Reads as `who`, within their reach; `hide`: without private fields.
-      const runFor = (who: Actor | undefined, hide: boolean) => async (op: Op) => {
-        known(op);
-        track(op);
-        const [read] = (await guard([op as ReadOp], who, rules)).ops;
-        const value = await answer(store, read as ReadOp);
-        return hide ? hidden(read as ReadOp, value) : value;
-      };
-      // An unrecorded Action the View calls may act as someone else, as from an Action: the
-      // system (or a grant) reads private fields there, as Actions do.
-      const runAs = (who: Actor | undefined) => runFor(who, !!who && who.kind !== "system");
-      return reading(
-        registry,
-        runFor(actor, !!actor),
-        (collection, doc) => {
-          // What a read used (an embedding's tokens): recorded on its own.
-          const _id = typeof doc._id === "string" ? doc._id : crypto.randomUUID();
-          const op: StoreOp = { op: "insert", collection, docs: [{ ...doc, _id }] };
-          known(op);
-          void writeEach([op], { foreign: true }).catch(() => {});
-          return _id;
-        },
-        metrics,
-        outside,
-        actor,
-        undefined,
-        runAs,
-      );
-    },
+    reads: (track, actor, view) => callerReads(actor, track, view),
     call: (action, input, actor) => api.call(action, input, actor ? { actor } : {}),
     emit: (type, data, actor) => emit(type, data, actor ? { actor } : {}),
     // A handler's write is its viewer's own, as REST and the socket write.
@@ -1195,8 +1198,7 @@ export async function createOwner(
   ) => {
     if (!actor || actor.kind === "system") return true;
     const def = registry.collections[collection]?.queries?.[query];
-    return typeof def === "object" && allows(def.allow, actor, params) &&
-      inScope(actor, "query", `${collection}.${query}`);
+    return queryAllowed(def, `${collection}.${query}`, params, actor, callerReads);
   };
   // Queries' `input`, compiled once each.
   const paramChecks = new Map<string, (value: unknown) => void>();
@@ -1607,7 +1609,14 @@ export async function createOwner(
       if (elevate && action) {
         // Whoever went beyond themselves: the code's own actor, whatever job it runs in.
         const by = request.actor.via as Actor;
-        if (!await elevate(by, registry.actions[action]?.allow, ruleReads)) {
+        const allow = registry.actions[action]?.allow;
+        if (
+          !await elevate(
+            by,
+            allow && ((who, input) => allow(who, input, callerReads(who))),
+            ruleReads,
+          )
+        ) {
           throw forbidden(`"${action}" goes beyond what everyone in this conversation may see`);
         }
       }
@@ -1649,7 +1658,9 @@ export async function createOwner(
       if (endedBy.get(job)?.has(request.tx)) throw invalid("The transaction is closed.");
       transaction = hold(request.tx, job);
     }
-    return transaction.send({ ...request, ops, keep, saw });
+    const value = await transaction.send({ ...request, ops, keep, saw });
+    const last = ops.at(-1);
+    return request.outside && last && isRead(last) ? hidden(last, value) : value;
   };
 
   // Workers of plugins' kinds (computers…): admitted by their kind's Action, then found by id.
@@ -2368,27 +2379,25 @@ export async function createOwner(
         return { output: handle.output, done: handle.completed.then(() => {}) };
       },
     },
-    call(action, input, options = {}) {
+    async call(action, input, options = {}) {
       const def = registry.actions[action];
-      if (!def) return Promise.reject(unknown("action", action, Object.keys(registry.actions)));
+      if (!def) throw unknown("action", action, Object.keys(registry.actions));
       const { actor } = options;
       // An actor calls only what lets them (an agent, for whom it works for too), and what their
       // scope lists (a key's).
-      if (actor && actor.kind !== "system" && (!def.allow || !allows(def.allow, actor, input))) {
-        return Promise.reject(forbidden(`${actor.kind} ${actor.id} may not call "${action}".`));
+      input = actionInput(def, input);
+      if (
+        actor && actor.kind !== "system" &&
+        (!def.allow || !await allows(def.allow, actor, input, callerReads))
+      ) {
+        throw forbidden(`${actor.kind} ${actor.id} may not call "${action}".`);
       }
       if (actor && actor.kind !== "system" && !inScope(actor, "call", action)) {
-        return Promise.reject(
-          forbidden(`${actor.kind} ${actor.id} may not call "${action}": not in its scope.`),
-        );
+        throw forbidden(`${actor.kind} ${actor.id} may not call "${action}": not in its scope.`);
       }
       const given = json(input);
       // What an Action is given goes on record as it is: it may hold no `$blob` key.
-      try {
-        refuseBlobKeys(given);
-      } catch (error) {
-        return Promise.reject(error);
-      }
+      refuseBlobKeys(given);
       const id = options.id ?? crypto.randomUUID();
       return begin(action, given, id, options.id !== undefined, undefined, actor) as never;
     },
@@ -2421,7 +2430,7 @@ export async function createOwner(
       }
       const { actor } = options;
       // An actor runs only what lets them, with params its `input` takes.
-      if (actor && !askable(actor, collection, query, params)) {
+      if (actor && !await askable(actor, collection, query, params)) {
         throw forbidden(`${actor.kind} ${actor.id} may not run "${name}".`);
       }
       if (actor && actor.kind !== "system") paramsCheck(collection, query)?.(json(params ?? {}));

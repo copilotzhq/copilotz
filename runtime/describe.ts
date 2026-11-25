@@ -32,6 +32,7 @@
 import { allows } from "./actor.ts";
 import type {
   ActionDef,
+  AllowContext,
   CollectionDef,
   CollectionPatch,
   EventDef,
@@ -162,6 +163,10 @@ export type ActionDeclaration = {
   private: string[];
   /** It does only what commits with a transaction: another's `tx.call` runs it there. */
   atomic?: true;
+  /** Each call opens a transaction or joins the caller's. */
+  transaction?: true;
+  /** The named grant its code runs as once admitted. */
+  as?: string;
   /** No `allow`: plugin code, schedules and the system call it, nobody outside. */
   internal?: true;
   callers?: Callers;
@@ -461,17 +466,31 @@ function watched(value: unknown): { value: unknown; read: () => boolean } {
 
 type Allow = (actor: Actor, input: unknown) => boolean;
 
-/** Whether `allow` lets `actor` in, as the runtime asks it: an agent, and whom it works for. */
-const admits = (allow: Allow, actor: Actor, input: unknown): boolean => allows(allow, actor, input);
-
 /** Asks `allow` about each made-up caller, with `input`: whom it lets in. */
 // deno-lint-ignore no-explicit-any
-export function probe(allow: (actor: Actor, input: any) => unknown, input: unknown = {}): Callers {
+export function probe(
+  allow: (actor: Actor, input: any, ctx: AllowContext) => unknown,
+  input: unknown = {},
+): Callers {
   const callers = {} as Callers;
   for (const [kind, actor] of Object.entries(PROBES) as [CallerKind, Actor][]) {
     const given = watched(structuredClone(input));
     try {
-      const yes = admits((a, i) => !!allow(a, i), structuredClone(actor), given.value);
+      const yes = allows(
+        (a, i, ctx) => {
+          const answer = allow(a, i, ctx);
+          if (answer instanceof Promise) {
+            void answer.catch(() => {});
+            throw new Error("Admission depends on the running app");
+          }
+          return !!answer;
+        },
+        structuredClone(actor),
+        given.value,
+        () => {
+          throw new Error("A declaration has no database");
+        },
+      );
       callers[kind] = given.read() ? "some" : yes ? "yes" : "no";
     } catch {
       callers[kind] = "some";
@@ -509,7 +528,7 @@ export function helperOf(allow: unknown): Helper | undefined {
 /** Who outside an `allow` lets in: nobody (internal) without one; `anyone` when it says yes to all. */
 const accessOf = (
   // deno-lint-ignore no-explicit-any
-  allow: ((actor: Actor, input: any) => unknown) | undefined,
+  allow: ((actor: Actor, input: any, ctx: AllowContext) => unknown) | undefined,
   input: unknown,
 ): { internal?: true; callers?: Callers; helper?: Helper; note?: string } => {
   if (typeof allow !== "function") return { internal: true };
@@ -599,7 +618,7 @@ function keepsOf(plugin: Plugin, shared: Set<string>) {
         name: query,
         ...(typeof q === "object" && q.description ? { summary: words(q.description) } : {}),
         ...(typeof q === "object" && q.input ? { input: json(q.input) as JSONSchema } : {}),
-        ...(typeof q === "function" ? { internal: true as const } : accessOf(q.allow, {})),
+        ...accessOf((typeof q === "object" ? q.allow : undefined) ?? plugin.defaults?.allow, {}),
       })).sort(byName),
     });
   }
@@ -639,8 +658,10 @@ function actionsOf(plugin: Plugin, tools: Map<string, string>): ActionDeclaratio
     ...(def.input ? { input: json(def.input) } : {}),
     recorded: def.record !== false,
     private: sorted(def.private ?? []),
-    ...(def.atomic ? { atomic: true as const } : {}),
-    ...accessOf(def.allow, minimalOf(def.input) ?? {}),
+    ...(def.atomic || def.transaction ? { atomic: true as const } : {}),
+    ...(def.transaction ? { transaction: true as const } : {}),
+    ...(def.as ? { as: def.as } : {}),
+    ...accessOf(def.allow ?? plugin.defaults?.allow, minimalOf(def.input) ?? {}),
     ...(tools.has(name) ? { tool: tools.get(name) } : {}),
   })).sort(byName);
 }

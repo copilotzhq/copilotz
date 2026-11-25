@@ -25,7 +25,7 @@ import type {
 } from "./define.ts";
 import type { ScheduleDef } from "./schedules.ts";
 import type { Actor } from "./store.ts";
-import { allows } from "./actor.ts";
+import { allows, grant } from "./actor.ts";
 
 /** Everything crossing the runtime boundary is JSON: undefined fields disappear. */
 export const json = <T>(value: T): T =>
@@ -301,7 +301,14 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
   for (const plugin of plugins) {
     for (const [name, def] of Object.entries(plugin.collections ?? {})) {
       if ("schema" in def) {
-        into(registry.collections, { [name]: def }, "collection");
+        const allow = plugin.defaults?.allow;
+        const queries = allow && def.queries && Object.fromEntries(
+          Object.entries(def.queries).map(([key, q]) => [
+            key,
+            typeof q === "function" ? { allow, run: q } : { ...q, allow: q.allow ?? allow },
+          ]),
+        );
+        into(registry.collections, { [name]: queries ? { ...def, queries } : def }, "collection");
         declaredBy.set(name, plugin);
         continue;
       }
@@ -315,7 +322,13 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
         indexes: [...declared.indexes ?? [], ...def.indexes],
       };
     }
-    into(registry.actions, plugin.actions, "action");
+    for (const [name, def] of Object.entries(plugin.actions ?? {})) {
+      if (def.as !== undefined && (typeof def.as !== "string" || !def.as.trim())) {
+        throw invalid(`Action "${name}" needs a named grant in as`);
+      }
+      const allow = def.allow ?? plugin.defaults?.allow;
+      into(registry.actions, { [name]: allow === def.allow ? def : { ...def, allow } }, "action");
+    }
     into(registry.events, plugin.events, "event");
     into(registry.processors, plugin.processors, "processor");
     replace(registry.views, plugin.views ?? {});
@@ -460,7 +473,14 @@ export async function readCall<R>(
   }
   // A read for someone calls what lets them, as any code acting for them does.
   const { actor } = reads;
-  if (def.allow && actor && actor.kind !== "system" && !allows(def.allow, actor, normalized)) {
+  if (
+    def.allow && actor && actor.kind !== "system" &&
+    !await allows(def.allow, actor, normalized, (who) => {
+      if (who === actor) return reads;
+      if (!actingAs) throw invalid("This read can't check another actor's permission");
+      return actingAs(who);
+    })
+  ) {
     throw Object.assign(new Error(`${actor.kind} ${actor.id} may not call "${name}".`), {
       code: "forbidden",
     });
@@ -510,7 +530,9 @@ export async function readCall<R>(
     const whole = { ...ctx, as, branch: () => whole } as Context;
     return whole;
   };
-  return await def.run(contextOf(reads, call), normalized) as R;
+  if (def.transaction) throw invalid(`"${name}" needs a transaction: a read can't start one`);
+  const ctx = contextOf(reads, call);
+  return await def.run(def.as ? ctx.as(grant(def.as)) : ctx, normalized) as R;
 }
 
 /**

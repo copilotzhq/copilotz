@@ -25,7 +25,8 @@ import { refuseBlobKeys } from "./blobs.ts";
 import { querying as queryingOver, reading as readingOver, type RunAs } from "./reads.ts";
 import { type Metrics, noMetrics } from "./metrics.ts";
 import type { Actor, Doc, Edge, Event } from "./store.ts";
-import { acting, allows, whereOf } from "./actor.ts";
+import { actionInput } from "./action-input.ts";
+import { acting, allows, grant, whereOf } from "./actor.ts";
 import { forbidden } from "./errors.ts";
 import {
   decode,
@@ -71,10 +72,13 @@ type Reach = {
 };
 
 /** For whom ops in a held transaction go: what their writes answer to, as whom, in whose code. */
-type Who = { cause?: string; actor?: Actor; action?: string };
+type Who = { cause?: string; actor?: Actor; action?: string; outside?: true };
 
 /** An op waiting to go in a held transaction, and for whom. */
 type Sent = { op: Op; who: Who };
+
+/** The owner's id and retry information when it dispatches a call. */
+type Attempt = { id: string; attempt: number; after?: "failed" | "lost"; scheduled?: Scheduled };
 
 /** An atomic Action asked for in a transaction, checked: its declaration and its input. */
 type Asked = { name: string; def: ActionDef; input: unknown };
@@ -96,7 +100,7 @@ type Held = {
 /** Whether ops for `a` and `b` may go in one request. */
 const alike = (a: Who, b: Who) =>
   a === b ||
-  (a.cause === b.cause && a.action === b.action &&
+  (a.cause === b.cause && a.action === b.action && a.outside === b.outside &&
     canonical(a.actor ?? null) === canonical(b.actor ?? null));
 
 /** Ops in order, in runs of the same `Who`: a request each. */
@@ -259,7 +263,13 @@ export function createExecutor(
         const runs = byWho(rest);
         if (begun || runs.length > 1) {
           begun = true;
-          await send(rest, "commit");
+          try {
+            await send(rest, "commit");
+          } catch (error) {
+            // A later run may be refused before reaching the owner-held transaction.
+            await job.send({ tx: id, ops: [], end: "abort", ...opener }).catch(() => {});
+            throw error;
+          }
         } else if (runs.length) await job.send({ ops: runs[0].ops, ...runs[0].who });
       },
       abort,
@@ -307,7 +317,7 @@ export function createExecutor(
         let asked: Asked;
         try {
           held.ensure();
-          asked = atomicOf(action, input, who.actor);
+          asked = atomicOf(action, input);
         } catch (error) {
           return Promise.reject(error);
         }
@@ -320,25 +330,21 @@ export function createExecutor(
   };
 
   /**
-   * An atomic Action a transaction may call, checked before anything of it
-   * runs, as `ctx.call` checks: declared, atomic, its input, and its `allow`
-   * for `actor`. A refusal here ends nothing: none of the Action ran.
+   * An atomic Action a transaction may call, checked before anything of it runs.
+   * Its allow is checked on its turn, over reads in the transaction.
    */
-  const atomicOf = (name: string, input: unknown, actor: Actor | undefined): Asked => {
+  const atomicOf = (name: string, input: unknown): Asked => {
     const def = registry.actions[name];
     if (!def) throw unknown("action", name, Object.keys(registry.actions));
-    if (!def.atomic) {
+    if (!def.atomic && !def.transaction) {
       throw invalid(
-        `"${name}" isn't atomic: a transaction calls only Actions declared \`atomic: true\`. ` +
+        `"${name}" isn't atomic: a transaction calls only Actions declared \`atomic: true\` or \`transaction: true\`. ` +
           "Call it once the transaction has committed, or have it hear an event the transaction emits.",
       );
     }
-    const normalized = json(input);
+    const normalized = json(actionInput(def, input));
     inputs[name]?.(normalized);
     refuseBlobKeys(normalized);
-    if (def.allow && actor && actor.kind !== "system" && !allows(def.allow, actor, normalized)) {
-      throw forbidden(`${actor.kind} ${actor.id} may not call "${name}".`);
-    }
     return { name, def, input: normalized };
   };
 
@@ -357,23 +363,45 @@ export function createExecutor(
     who: Who,
     numbering: string | undefined,
     position: number,
+    own?: { given?: Attempt },
   ): Promise<R> => {
     const { actor } = who;
     // Closed before its turn came (a call before it failed): it never ran.
     held.ensure();
+    if (
+      def.allow && actor && actor.kind !== "system" &&
+      !await allows(
+        def.allow,
+        actor,
+        input,
+        (as) => reading((op) => held.run(op, { ...who, actor: as, outside: true }), job.record, as),
+      )
+    ) {
+      throw forbidden(`${actor.kind} ${actor.id} may not call "${name}".`);
+    }
+    const run = (its: Who, count?: string) => {
+      const ctx = joined(job, held, { ...its, action: name }, count, own?.given?.scheduled);
+      return def.run(def.as ? ctx.as(grant(def.as)) : ctx, input) as R;
+    };
     if (def.record === false) {
       const its: Who = { ...who, action: name };
-      return await held.join(async () =>
-        await def.run(joined(job, held, its, who.cause), input) as R
-      );
+      return await held.join(async () => {
+        const result = await run(its, who.cause);
+        if (own) await held.commit();
+        return result;
+      });
     }
     const inputHash = await fingerprint(name, input);
-    const id = numbering ? `${numbering}.${position}.${inputHash}` : crypto.randomUUID();
-    let attempt = 1;
-    let after: "failed" | "lost" | undefined;
-    if (who.cause && job.retry) {
+    const id = own?.given?.id ??
+      (numbering ? `${numbering}.${position}.${inputHash}` : crypto.randomUUID());
+    let attempt = own?.given?.attempt ?? 1;
+    let after = own?.given?.after;
+    if (!own?.given && who.cause && job.retry) {
       const prior = await held.run({ op: "outcome", call: id }, who) as Outcome;
-      if (prior.completed) return prior.result as R;
+      if (prior.completed) {
+        if (own) await held.commit();
+        return prior.result as R;
+      }
       attempt = prior.attempts + 1;
       if (prior.attempts) after = prior.lost ? "lost" : "failed";
     }
@@ -411,7 +439,7 @@ export function createExecutor(
     job.frame("action", { type: "started", id, action: name, attempt });
     try {
       for (const mark of marks) held.queue(mark, its);
-      const result = await def.run(joined(job, held, its, id), input) as R;
+      const result = await run(its, id);
       const whole = json(result) ?? null;
       refuseBlobKeys(whole);
       const logged = unprivate(whole, hidden);
@@ -438,6 +466,7 @@ export function createExecutor(
           ifAbsent: true,
         }, its);
       }
+      if (own) await held.commit();
       return result;
     } catch (error) {
       await held.abort();
@@ -462,8 +491,23 @@ export function createExecutor(
    * Actions, in it too. What can't be rolled back, or waits on the world,
    * throws: streams, `fetch`, workers, cancelling, ending browsers.
    */
-  const joined = (job: Reach, held: Held, who: Who, numbering: string | undefined): Context => {
+  const joined = (
+    job: Reach,
+    held: Held,
+    who: Who,
+    numbering: string | undefined,
+    scheduled?: Scheduled,
+  ): Context => {
     const { actor } = who;
+    const record: Context["record"] = (name, doc) => {
+      if (!records[name]) throw invalid(`"${name}" is not a records collection`);
+      const { _id, ...fields } = json(doc);
+      records[name](fields);
+      const id = typeof _id === "string" ? _id : crypto.randomUUID();
+      held.queue({ op: "insert", collection: name, docs: [{ ...fields, _id: id }] }, who);
+      return id;
+    };
+    job = { ...job, record };
     const tx = scoped(job, held, who, numbering);
     const run: Run = (op, options) => held.run(op, who, options);
     // Reads as someone else, in the transaction, for an unrecorded Action a read calls (`ctx.as`).
@@ -481,12 +525,13 @@ export function createExecutor(
       transaction: (work) => held.join(() => work(tx)),
       stream: refused("ctx.stream"),
       call: (action, input) => tx.call(action, input),
-      branch: (key) => joined(job, held, who, `${numbering ?? crypto.randomUUID()}/${key}`),
+      branch: (key) =>
+        joined(job, held, who, `${numbering ?? crypto.randomUUID()}/${key}`, scheduled),
       ...(actor ? { actor } : {}),
       ...(where !== undefined ? { in: where } : {}),
       as: (other) => {
         const as = acting(actor, other);
-        return joined(job, held, { ...who, ...(as ? { actor: as } : {}) }, numbering);
+        return joined(job, held, { ...who, ...(as ? { actor: as } : {}) }, numbering, scheduled);
       },
       schedule: async (action, input, when) => tx.schedule(action, input, when),
       unschedule: async (timer) => Number(await run({ op: "unschedule", timer })) > 0,
@@ -501,6 +546,7 @@ export function createExecutor(
       adapters: registry.adapters,
       describe: () => described(registry),
       workers: { dispatch: refused("ctx.workers"), call: refused("ctx.workers") },
+      ...(scheduled ? { scheduled } : {}),
       retry: job.retry,
       signal: job.signal,
     };
@@ -628,7 +674,7 @@ export function createExecutor(
     when: ScheduleOptions,
   ): Extract<TimerOp, { op: "schedule" }> => {
     if (!registry.actions[action]) throw unknown("action", action, Object.keys(registry.actions));
-    const normalized = json(input);
+    const normalized = json(actionInput(registry.actions[action], input));
     inputs[action]?.(normalized);
     const { id, ...rest } = json(when ?? {}) as ScheduleOptions;
     const timer = id ?? (cause ? `${cause}:timer.${job.next(`${cause}:timer`)}` : undefined);
@@ -654,36 +700,59 @@ export function createExecutor(
     name: string,
     input?: unknown,
     parent?: string,
-    given?: { id: string; attempt: number; after?: "failed" | "lost"; scheduled?: Scheduled },
+    given?: Attempt,
     numbering = parent,
     actor?: Actor,
   ): Promise<R> => {
     const action = registry.actions[name];
     if (!action) throw unknown("action", name, Object.keys(registry.actions));
-    const normalized = json(input);
+    const normalized = json(actionInput(action, input));
     inputs[name]?.(normalized);
     // An Action's input may hold no `$blob` key (see blobs.ts), as the owner checks outside calls'.
     refuseBlobKeys(normalized);
     // Code acting for someone calls what lets them, as they would from outside (an agent, for
     // whom it works for too); what has no `allow` is internal, code's to call. Going on where
     // they couldn't is a grant of the system's (`ctx.as`), on record as one.
+    // Take its place before admission reads: calls made together still number in call order.
+    const position = !given && numbering && action.record !== false ? job.next(numbering) : 0;
     if (
-      action.allow && actor && actor.kind !== "system" && !allows(action.allow, actor, normalized)
+      !action.transaction && action.allow && actor && actor.kind !== "system" &&
+      !await allows(
+        action.allow,
+        actor,
+        normalized,
+        (as) => reading((op) => job.send({ ops: [op], actor: as, outside: true }), job.record, as),
+      )
     ) {
       throw forbidden(`${actor.kind} ${actor.id} may not call "${name}".`);
     }
+    if (action.transaction) {
+      const who: Who = { cause: parent, actor };
+      const held = holding(job, who);
+      try {
+        return await atomic(
+          job,
+          held,
+          { name, def: action, input: normalized },
+          who,
+          numbering,
+          position,
+          { given },
+        );
+      } catch (error) {
+        await held.abort();
+        throw error;
+      }
+    }
     if (action.record === false) {
-      return await action.run(
-        context(job, parent, undefined, given?.scheduled, parent, actor, name),
-        normalized,
-      ) as R;
+      const ctx = context(job, parent, undefined, given?.scheduled, parent, actor, name);
+      return await action.run(action.as ? ctx.as(grant(action.as)) : ctx, normalized) as R;
     }
 
     // A nested call's id comes from its cause, its place among the calls made
     // under it (taken before any await, so parallel calls number stably) and
     // what it does: a retry finds it again, and changed code makes a new call.
     // It hashes the whole input, private fields too, though the log never holds them.
-    const position = !given && numbering ? job.next(numbering) : 0;
     const inputHash = await fingerprint(name, normalized);
     const hidden = action.private ?? [];
     let { id, attempt, after } = given ?? {
@@ -767,10 +836,13 @@ export function createExecutor(
     let result: R;
     let recorded: unknown;
     try {
-      result = await action.run(
-        context(reach, id, undefined, given?.scheduled, id, actor),
-        normalized,
-      ) as R;
+      const ctx = context(reach, id, undefined, given?.scheduled, id, actor, name);
+      // The call starts as its caller even when its first write is made as the grant.
+      if (action.as) {
+        await job.send({ ops: marks, cause: id, actor });
+        pending = false;
+      }
+      result = await action.run(action.as ? ctx.as(grant(action.as)) : ctx, normalized) as R;
       // What it answers goes on record: one the owner would refuse fails the call, on record.
       recorded = json(result) ?? null;
       refuseBlobKeys(recorded);

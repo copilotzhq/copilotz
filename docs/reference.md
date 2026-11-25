@@ -169,7 +169,10 @@ From `copilotz`:
 
 ## Who may call: `allow`
 
-An Action's `allow(actor, input)` says who may call it. The runtime asks it wherever an actor calls.
+An Action's `allow(actor, input, ctx)` says who may call it. It may return a boolean or a promise of
+one. The runtime asks it wherever an actor calls. `ctx.db` reads as the caller, before any grant.
+When checking an agent and its principal, each check reads as the actor being checked, in the
+caller's place. The table uses the Action's own rule or the default its plugin declares.
 
 | Where the call comes from                                                         | `allow` asked | Without an `allow`           |
 | --------------------------------------------------------------------------------- | ------------- | ---------------------------- |
@@ -261,7 +264,8 @@ run: async (input, ctx) => await ctx.as(grant("availability")).call("slots.all",
 ```
 
 Queries and events have an `allow` too, asked only from outside. A query declared as a bare function
-is the system's. No actor emits an event without `allow` from outside, and a key emits none.
+uses its plugin's default, or is the system's when there is none. No actor emits an event without
+`allow` from outside, and a key emits none.
 
 ## A plugin
 
@@ -272,6 +276,7 @@ A plugin is a plain object. `definePlugin` only types it.
 | `name`        | its name                                                                                     |
 | `requires`    | the plugins it builds on, by name: the runtime doesn't start without them                    |
 | `collections` | its collections, and indexes it adds to another's (`{ usage: { indexes: [["tags.app"]] } }`) |
+| `defaults`    | `{ allow }` supplies the rule for this plugin's Actions and named queries that omit one      |
 | `actions`     | what can be done                                                                             |
 | `events`      | the events it emits, beyond its collections' changes and its Actions' lifecycle              |
 | `processors`  | what happens when events happen                                                              |
@@ -300,7 +305,7 @@ types its documents and queries from the schema.
 | Field     | What it does                                                                                |
 | --------- | ------------------------------------------------------------------------------------------- |
 | `schema`  | the JSON Schema every write keeps to: inserts, replaces, and what updates set and leave     |
-| `queries` | named reads: a function, or `{ allow, description?, input?, run }` for actors from outside  |
+| `queries` | named reads: a function, or `{ allow?, description?, input?, run }` for actors from outside |
 | `vectors` | fields holding embeddings, kept as the store's vectors and searched with `nearest`          |
 | `indexes` | lists of scalar fields to find by (`[["thread", "at"]]`), made as the store opens           |
 | `private` | fields only trusted code reads: an actor's queries and Views get the documents without them |
@@ -366,20 +371,129 @@ write's statement and params, so a secret is written through an Action, never th
 
 What can be done, by name. `defineAction` types `run`'s input from the schema.
 
-| Field         | What it does                                                                                     |
-| ------------- | ------------------------------------------------------------------------------------------------ |
-| `input`       | the JSON Schema a call's input must match                                                        |
-| `allow`       | who may call it (see [Who may call](#who-may-call-allow)); none: it's internal                   |
-| `run`         | `(ctx, input) => result`: what it does                                                           |
-| `description` | what it does, for people and for tools that list Actions                                         |
-| `record`      | `false`: unrecorded. It runs inline in its caller's job, with no events and no commit of its own |
-| `private`     | fields its calls are recorded without, as dot paths, in its input and its result                 |
-| `atomic`      | `true`: it does only what commits with a transaction, so another's `tx.call` runs it there       |
+| Field         | What it does                                                                                                          |
+| ------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `input`       | JSON Schema, inferred in `run` and `allow`. Omit it for an Action taking no parameters                                |
+| `allow`       | who may call it (see [Who may call](#who-may-call-allow)); falls back to the plugin's `defaults.allow`, then internal |
+| `run`         | `(ctx, input) => result`: what it does                                                                                |
+| `description` | what it does, for people and for tools that list Actions                                                              |
+| `record`      | `false`: unrecorded. It runs inline in its caller's job, with no events and no commit of its own                      |
+| `private`     | fields its calls are recorded without, as dot paths, in its input and its result                                      |
+| `atomic`      | `true`: it does only what commits with a transaction, so another's `tx.call` runs it there                            |
+| `as`          | a named system grant for `run`, e.g. `"inventory-adjust"`                                                             |
+| `transaction` | `true` runs the whole Action in one transaction and allows `tx.call` to join it                                       |
 
 Every recorded call is on the record (`action.started`, then `action.completed` or `action.failed`),
 retryable by id, and everything it causes is its caller's, where its caller is. Queries, Views and
 startup checks may call unrecorded Actions, read-only. One that acts as someone else (`ctx.as`)
 reads as them there too, as when an Action calls it; a startup check, which reads nothing, refuses.
+
+#### Actions with no parameters
+
+Omit `input` to accept either `runtime.call("order.expire")` or `runtime.call("order.expire", {})`.
+Extra fields, arrays and `null` fail the input check. Tools see a closed, empty object schema.
+
+```ts
+const expire = defineAction({
+  run: (ctx) =>
+    ctx.db.collection("order").updateMany(
+      { status: "draft", expires: { $lt: new Date().toISOString() } },
+      { $set: { status: "expired" } },
+    ),
+});
+```
+
+#### One permission check for Actions and queries
+
+A plugin can set `defaults: { allow: people }` in `definePlugin`, or in the default export of its
+`plugin.ts`. This applies to its own Actions and named queries, including bare query functions. An
+explicit `allow` replaces the default. Plugin code calling a collection's query directly keeps the
+existing query rules. A query's `allow` controls callers from outside.
+
+For inventory staff, put the check in the plugin's `lib/`. Each permission document names the
+person, module and space. Its collection's guard controls who can read or change it.
+
+```ts
+import { type Actor, type AllowContext, people, personOf } from "copilotz";
+
+export const canUse = (module: string) => async (actor: Actor, _: unknown, ctx: AllowContext) =>
+  people(actor) && !!ctx.in && !!await ctx.db.collection("permission").findOne({
+    person: personOf(actor),
+    module,
+    in: ctx.in,
+  });
+```
+
+#### A grant and a transaction for the whole Action
+
+Consider issuing one unit of a product. With an explicit check, grant and transaction the Action
+reads like this (`input` is the schema shown below).
+
+```ts
+const issue = defineAction({
+  input,
+  allow: people,
+  run: async (ctx, { product }) => {
+    if (ctx.actor && !await canUse("inventory")(ctx.actor, {}, ctx)) {
+      throw forbidden("Inventory access required");
+    }
+    return ctx.as(grant("inventory-adjust")).transaction(async (tx) => {
+      const { matchedCount } = await tx.db.collection("product").updateOne(
+        { _id: product, in: ctx.in, stock: { $gte: 1 } },
+        { $inc: { stock: -1 } },
+      );
+      if (!matchedCount) throw failure("invalid", "No stock here.", { public: true });
+      await tx.db.collection("movement").insertOne({ product, quantity: -1, in: ctx.in });
+    });
+  },
+});
+```
+
+With the same schema and stock rule, the plugin can share its admission check. TypeScript infers
+`product` as a string. For a schema kept in its own variable, use `as const` to keep its literals.
+
+```ts
+import { defineAction, definePlugin, failure } from "copilotz";
+import { canUse } from "./lib/can-use.ts";
+
+const input = {
+  type: "object",
+  properties: { product: { type: "string" } },
+  required: ["product"],
+  additionalProperties: false,
+} as const;
+
+const issue = defineAction({
+  input,
+  as: "inventory-adjust",
+  transaction: true,
+  run: async (ctx, { product }) => {
+    const { matchedCount } = await ctx.db.collection("product").updateOne(
+      { _id: product, in: ctx.in, stock: { $gte: 1 } },
+      { $inc: { stock: -1 } },
+    );
+    if (!matchedCount) throw failure("invalid", "No stock here.", { public: true });
+    await ctx.db.collection("movement").insertOne({ product, quantity: -1, in: ctx.in });
+  },
+});
+
+export const inventory = definePlugin({
+  name: "inventory",
+  defaults: { allow: canUse("inventory") },
+  actions: { "stock.issue": issue },
+});
+```
+
+The literal in `as` declares the grant, just as `grant("inventory-adjust")` names it in code. The
+Action's lifecycle events name the caller. Its writes name the system grant, with the caller in
+`via`, the place in `in`, and the Action's call id as their cause.
+
+`transaction: true` opens a transaction on a direct call and joins an existing one through
+`tx.call`. A throw rolls back the writes. A recorded failure still has its own failure record.
+Nested `ctx.transaction` joins it. Inside it, `ctx.call` can call Actions declaring either
+`transaction: true` or `atomic: true`. Streams, fetches and worker calls are refused there. Use
+`atomic: true` alone to let an Action join a caller's transaction while keeping ordinary calls as
+they were. A read-only query or View can't start a transactional Action.
 
 ### Processors
 

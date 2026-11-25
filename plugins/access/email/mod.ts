@@ -77,6 +77,7 @@ import { forgotAction, resetAction } from "./actions/reset.ts";
 import { sendAction } from "./actions/send.ts";
 import { signInAction } from "./actions/sign-in.ts";
 import { signUpAction, verifyAction } from "./actions/sign-up.ts";
+import { captureEmail } from "./adapters/capture.ts";
 import { consoleEmail } from "./adapters/console.ts";
 import { resend } from "./adapters/resend.ts";
 import { sendmail } from "./adapters/sendmail.ts";
@@ -100,6 +101,7 @@ import { allowed } from "./shared/addresses.ts";
 import type { EmailSettings, EmailSignInSettings } from "./contract.ts";
 
 export * from "./contract.ts";
+export { type CapturedMail, captureEmail } from "./adapters/capture.ts";
 export { mime, quotedPrintable, typeOf } from "./shared/mime.ts";
 export { passwordSignIn } from "./password.ts";
 export { hashPassword, verifyPassword } from "./shared/password.ts";
@@ -119,7 +121,18 @@ const publicOrigin = (resources: Record<string, unknown>): string | undefined =>
 export const email: Plugin = definePlugin({
   name: "email",
   actions: { "email.send": sendAction },
-  adapters: { email: { resend, smtp, sendmail, console: consoleEmail } },
+  adapters: {
+    email: {
+      resend,
+      smtp,
+      sendmail,
+      console: consoleEmail,
+      // Each executor gets its own mailbox when its registry is assembled.
+      get capture() {
+        return captureEmail();
+      },
+    },
+  },
   check(merged) {
     const settings = merged.resources.email as Partial<EmailSettings> | undefined;
     const adapters = Object.keys(merged.adapters.email ?? {});

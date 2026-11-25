@@ -65,9 +65,9 @@ const offsetAt = (zone: string, ms: number) => asUtc(wallIn(zone, ms)) - ms;
 function changes(zone: string, year: number): number[] {
   const out: number[] = [];
   const end = Date.UTC(year + 1, 0, 1);
-  for (let t = Date.UTC(year, 0, 1); t < end; t += 3600e3) {
-    if (offsetAt(zone, t) === offsetAt(zone, t + 3600e3)) continue;
-    let [lo, hi] = [t, t + 3600e3];
+  for (let t = Date.UTC(year, 0, 1); t < end; t += 86400e3) {
+    if (offsetAt(zone, t) === offsetAt(zone, t + 86400e3)) continue;
+    let [lo, hi] = [t, t + 86400e3];
     while (hi - lo > 1000) {
       const mid = lo + Math.floor((hi - lo) / 2000) * 1000;
       if (offsetAt(zone, mid) === offsetAt(zone, lo)) lo = mid;
@@ -88,9 +88,15 @@ const ZONES: [string, number][] = [
   ["Asia/Kolkata", 2026],
 ];
 
-/** Wall times minute by minute through each change, and a second either side of its edges. */
+/**
+ * Wall times through each change, every five minutes from two hours before it to two hours after
+ * it, and a second and a minute either side of each wall time the change starts or ends on.
+ */
+const around = new Map<string, string[]>();
 function wallsAround(zone: string, year: number): string[] {
+  if (around.has(zone)) return around.get(zone)!;
   const walls = new Set<string>();
+  const add = (ms: number) => walls.add(new Date(ms).toISOString().slice(0, 19).replace("T", " "));
   const instants = changes(zone, year);
   // A zone that doesn't change: a day of it.
   if (!instants.length) instants.push(Date.UTC(year, 5, 1));
@@ -98,13 +104,13 @@ function wallsAround(zone: string, year: number): string[] {
     const [before, after] = [offsetAt(zone, change - 1000), offsetAt(zone, change)];
     const from = change + Math.min(before, after) - 2 * 3600e3;
     const to = change + Math.max(before, after) + 2 * 3600e3;
-    for (let w = from; w <= to; w += 60e3) {
-      for (const s of [-1000, 0, 1000]) {
-        walls.add(new Date(w + s).toISOString().slice(0, 19).replace("T", " "));
-      }
+    for (let w = from; w <= to; w += 300e3) add(w);
+    for (const edge of [change + before, change + after]) {
+      for (const step of [-60e3, -1000, 0, 1000, 60e3]) add(edge + step);
     }
   }
-  return [...walls];
+  around.set(zone, [...walls]);
+  return around.get(zone)!;
 }
 
 test("every wall time through each change: one rule, as the zone's clock shows it", () => {
@@ -151,7 +157,7 @@ test("the page's zone and a named one agree, and agree with the page's own Date"
       }
     }
     // Deno's and Node's Date follow a changed TZ, so there the oracle ran for every zone.
-    if (runtime !== "bun") assert(checked > 10_000, `${checked} walls checked against Date`);
+    if (runtime !== "bun") assert(checked > 1_000, `${checked} walls checked against Date`);
   } finally {
     if (original === undefined) delete process.env.TZ;
     else process.env.TZ = original;

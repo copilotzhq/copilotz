@@ -16,6 +16,14 @@ test("a kept end pasted with a year-day-month format is its own day, not another
   assertMatch(setAside ?? "", /2026-11-02 14:30:05/);
   assertEquals(readEnd("2026-11-02 09:00:07", pattern, "en-US"), "2026-11-02 09:00:07");
   assertEquals(readEnd("2026-11-02T09:00:07", pattern, "en-US"), "2026-11-02 09:00:07");
+  // Given such a pattern anyway, text its two readers read as two ends is refused.
+  assertEquals(readEnd("2026-11-02 09:00:07", "yyyy-dd-MM HH:mm:ss", "en-US"), undefined);
+  // Text only one reads (month 20) is that one's.
+  assertEquals(
+    readEnd("2026-11-20 09:00:07", "yyyy-dd-MM HH:mm:ss", "en-US"),
+    "2026-11-20 09:00:07",
+  );
+  assertEquals(readEnd("2026-11-02 09:00", "yyyy-MM-dd HH:mm:ss", "en-US"), "2026-11-02 09:00:00");
   // A format that reads the kept form as the same end keeps it.
   assertEquals(rangeSecondsPattern("yyyy-MM-dd HH:mm:ss", "en-US").setAside, undefined);
   assertEquals(rangeSecondsPattern("yyyy-MM-dd'T'HH:mm:ss", "en-US").setAside, undefined);

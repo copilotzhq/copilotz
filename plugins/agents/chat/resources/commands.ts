@@ -8,19 +8,21 @@
  * `/move` says first who'll see the conversation there and what it drew on,
  * and moves it with `yes`; `/notes` opens a chat's staff notes, and back.
  * `/archive` puts a conversation away, for everyone who sees it (`/threads
- * archived` lists those), and `/restore` brings it back.
+ * archived` lists those, with their notes), checking what the screen or the
+ * last list showed of it, and `/restore` brings it back.
  * Where you are is your shell state: the open conversation is `open`, kind
  * `thread`, and the screen shows it through chat's `thread` View.
  */
 import { command, type Commands, dim, type Terminal } from "../../../../hosts/terminal/mod.ts";
 import type { Approval } from "../collections/approval.ts";
 import type { Message } from "../collections/message.ts";
-import type { Moving } from "../collections/thread.ts";
+import type { Moving, Thread } from "../collections/thread.ts";
 import type { Agent, Prompt } from "../shared/types.ts";
 import { ANSWERED, asker, sentence } from "../views/asked.ts";
 import { howTo } from "../views/terminal/asks.ts";
 import type { Listed } from "../views/terminal/threads.ts";
 import { movingWords } from "../views/terminal/moving.ts";
+import { seenOf } from "../views/seen.ts";
 
 /** The open conversation, if one is. */
 const thread = async (term: Terminal) => {
@@ -47,6 +49,25 @@ async function named(term: Terminal, rest: string): Promise<string | undefined> 
   return [...all, ...archived].find((t) => t._id.startsWith(given))?._id;
 }
 
+/** What each session's last `/threads` showed of each conversation it listed: its latest, or none. */
+const listedBy = new WeakMap<Terminal, Map<string, string | null>>();
+
+/**
+ * What the terminal showed last of the conversation `rest` names, for
+ * archiving it (`latest`): the open one's newest shared message on screen
+ * (none, null); one picked from this session's last list, what the list
+ * showed of it; one named by id, or listed before this session, unknown
+ * (undefined: archived as it is).
+ */
+async function shownOf(term: Terminal, rest: string, id: string) {
+  const given = rest.trim();
+  if (!given) {
+    const said = await term.runtime.query<Message[]>("message.conversation", { thread: id });
+    return said.filter((m) => !m.private).at(-1)?._id ?? null;
+  }
+  return listedBy.get(term)?.get(id);
+}
+
 /** Archives the conversation `rest` names, or restores it (`chat.archive`). */
 async function archiving(term: Terminal, rest: string, archived: boolean) {
   const id = await named(term, rest);
@@ -55,9 +76,11 @@ async function archiving(term: Terminal, rest: string, archived: boolean) {
       dim(rest.trim() ? "No such conversation; /threads lists them." : "No conversation yet."),
     );
   }
+  const latest = archived ? await shownOf(term, rest, id) : undefined;
   const { thread: chat } = await term.runtime.call<{ thread: string }>("chat.archive", {
     thread: id,
     archived,
+    ...(latest !== undefined ? { latest } : {}),
   });
   await term.print(
     dim(
@@ -256,11 +279,17 @@ export const commands: Commands = {
     usage: "[archived]",
     async run(rest, term) {
       const archived = rest.trim() === "archived";
-      const threads = await term.runtime.query<Listed[]>(
+      const threads = await term.runtime.query<(Listed & Pick<Thread, "about" | "latest">)[]>(
         "thread.recent",
         archived ? { archived: true } : {},
       );
       await term.set({ listed: threads.map((t) => t._id) });
+      // What it shows of each, for archiving one by its number: a notes row, beside its chat's.
+      const rows = new Map(threads.map((t) => [t._id, t]));
+      listedBy.set(
+        term,
+        new Map(threads.map((t) => [t._id, seenOf(t, t.about ? rows.get(t.about) : undefined)])),
+      );
       if (!threads.length) {
         return await term.print(
           dim(

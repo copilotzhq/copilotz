@@ -1,3 +1,24 @@
+## 1.0.0-rc.67 — 2026-11-26
+
+A fix to rc.66's plans first: a turn whose first plan failed ran on the app's API, though another of
+the person's plans could answer.
+
+**Fixed:**
+
+- **A turn's next plan runs, instead of getting the first one's failure.** A plan's prompt had the
+  same id for every plan and model in a turn, and the computer, which keeps its prompts by id for
+  all its plans, handed each next plan the first one's answer: its failure, in a fraction of a
+  second. A model one plan didn't run (Antigravity, asked for Gemini 4 Neon) then skipped every plan
+  after it, to the API, at the app's cost. A prompt's id now names its plan's engine and its model
+  too, so each plan in the turn is asked; a step tried again keeps its id.
+
+**Known limits:**
+
+- **Antigravity runs no model by its API name yet.** It names its models its own way, with the
+  effort in the name (`gemini-4-hydrogen-high`), and rc.66 asks it by Google's. Each turn asks it
+  first among Google's models, it says it doesn't run that one, and the next plan or API answers.
+  rc.68 asks each plan which models it runs.
+
 ## 1.0.0-rc.66 — 2026-11-26
 
 Agents run on the plans people already pay for, before the app's API. For each model a tier names, a

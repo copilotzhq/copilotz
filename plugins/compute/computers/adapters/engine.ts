@@ -61,10 +61,21 @@ type Plan = { ask: Ask; given: number; hash: string; left?: { computer: string; 
 
 /**
  * A prompt's id: the same for a step tried again (the same turn, the same
- * conversation, what it's given), and no other conversation's.
+ * conversation, what it's given, the same plan and model), and no other
+ * conversation's. A turn's next plan or model is another prompt: the
+ * computer keeps its prompts by id, for every plan, and would hand the next
+ * one the first's answer (its failure).
  */
 const idOf = async (request: LlmRequest, of: string) =>
-  (await sha256(`${request.tags?.thread ?? ""}:${request.tags?.turn ?? ""}:${of}`)).slice(0, 32);
+  (await sha256(
+    [
+      request.tags?.thread ?? "",
+      request.tags?.turn ?? "",
+      request.options?.engine ?? "",
+      request.connection.model,
+      of,
+    ].join(":"),
+  )).slice(0, 32);
 
 const encoder = new TextEncoder();
 

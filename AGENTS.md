@@ -4,7 +4,7 @@ A guide for coding agents (Claude Code, Codex, Cursor, Gemini) building an app w
 it whole before you write code. The last section is for work on Copilotz itself.
 
 It ships in the package (`node_modules/copilotz/AGENTS.md`, and `@copilotz/copilotz` on JSR) and
-goes with `copilotz@1.0.0-rc.66`. The [reading list](llms.txt) links to every docs page in the
+goes with `copilotz@1.0.0-rc.67`. The [reading list](llms.txt) links to every docs page in the
 installed package. The same pages are online at https://copilotz.com/llms.txt. When you're unsure of
 a name, fetch its page or read the package's types (`node_modules/copilotz/**/*.d.ts`). Don't guess.
 
@@ -231,7 +231,7 @@ Plugins reach each other only through the runtime, by name. One that builds on a
 Start on Node 24 or newer:
 
 ```sh
-npx copilotz@1.0.0-rc.66 init orders
+npx copilotz@1.0.0-rc.67 init orders
 cd orders
 npm run check
 npm run dev
@@ -250,7 +250,7 @@ for fields such as `requires`, `defaults` and `guard`, `lib/web/` for React comp
 names in `copilotz-env.d.ts`. Commit that declaration and ignore `.copilotz/build/`. The server
 imports `#copilotz/plugins/<name>/mod.ts`, the browser `web.ts` and the terminal `terminal.ts` from
 the same folder. The starter's dev script watches declarations and the server. On Deno, the compiler
-entry is `deno run -A jsr:@copilotz/copilotz@1.0.0-rc.66/gen`.
+entry is `deno run -A jsr:@copilotz/copilotz@1.0.0-rc.67/gen`.
 
 Existing plugins with a hand-written `mod.ts` keep their own assembly and explicit schemas. List
 them alongside generated plugins in `app.ts`. [The compiler](docs/guides/the-compiler.md).
@@ -261,7 +261,7 @@ line `@AGENTS.md` (Claude Code reads `CLAUDE.md`, and follows the import). Keep 
 ```markdown
 # AGENTS.md
 
-This app runs on Copilotz (copilotz@1.0.0-rc.66). Read node_modules/copilotz/AGENTS.md first;
+This app runs on Copilotz (copilotz@1.0.0-rc.67). Read node_modules/copilotz/AGENTS.md first;
 node_modules/copilotz/llms.txt lists the installed guides.
 
 - `npm test` runs offline. Run `npm run build` after editing declarations. `npm run check` checks

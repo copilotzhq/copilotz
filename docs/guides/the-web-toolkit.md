@@ -553,7 +553,8 @@ page language's.
   field's `format`, and what's typed is read when it's done: on leaving the field, on Enter, or on
   Apply. Then a day moves the range and the months shown; nothing moves while it's being typed
   (typing `2` on the way to `20` in To doesn't move From to the 2nd). Anything else (not a day, or
-  outside `min` and `max`) stays as typed, marked, and Apply is off until it's put right. Give
+  outside `min` and `max`) stays as typed, marked, and Apply is off until it's put right. A field
+  left empty is its end again, and the text a field shows for its end always reads as that end. Give
   `format` as a pattern where people type: a function can't be read back, so typed text is then read
   as the page language's short date or as `YYYY-MM-DD`. A long range opens on its start's months.
   `presets` is a list, `true` for the standard ones, or `false`; `min` and `max` bound what can be
@@ -628,7 +629,11 @@ from `00:00:00` to `23:59:59`, and shows as pressed only for whole days.
 
 - **From and To** are each one field holding the end's day and time, typed or pasted whole. There
   are no spin fields: the typed field is the end's one editor. Picking days in the months keeps each
-  end's time, and on one day the end never comes before the start.
+  end's time.
+- **What's shown is what's saved.** An end that would come before the start is marked, and Apply is
+  off until it's put right: To typed at a time before From's on From's day, or a To day before
+  From's that moves From's day there (keeping its time) past To. The same goes for one day picked
+  twice when To's time is before From's, and for a value given that ends before it starts.
 - **One pattern** writes the field, the foot, From and To, and reads what's typed, so whatever the
   picker shows reads back as the same end when pasted. The pattern is `format` when it can be read
   back (`patternProblem`). A day's pattern gets the page language's time after it: `dd/MM/yyyy`
@@ -653,6 +658,10 @@ from `00:00:00` to `23:59:59`, and shows as pressed only for whole days.
   and always within the years the toolkit reads, 0000 to 9999; the months show no day past these
   bounds. So a Buddhist year (`2569`) or a Persian one (`1405`), typed out of habit, is refused, not
   saved as a Gregorian year. An app that needs years further away gives `min` or `max`.
+- **Known limits.** `min` and `max` given as times of day (`max="2026-11-16 12:00:00"`) hold for
+  typed ends, but not for picked days or presets: a day picked on the bound's day keeps its end's
+  time (`23:59:59`), and a preset runs to the end of its day. It's the same with `time`. And the
+  months' Next button goes past December 9999 without `max`, where the months can't be drawn.
 - From and To are `date-picker-end-time-width` wide (`15em`).
 
 ```tsx

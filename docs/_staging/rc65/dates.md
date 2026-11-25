@@ -12,7 +12,8 @@ Under `**New:**`:
   pattern, which reads them back: the app's `format` when it can be read back, or else the page
   language's own, with its clock (12-hour in American English) and a four-digit Gregorian year.
   What's typed is read when it's left, on Enter or on Apply, and only then moves an end; text that
-  can't be read keeps Apply off. A typed end stays within `min` and `max`, and within 200 years of
+  can't be read, or a range that would end before it starts, is marked and keeps Apply off, so
+  what's shown is what's saved. A typed end stays within `min` and `max`, and within 200 years of
   `today` (and 0000 to 9999) where they don't bound it, so a Buddhist or Persian year typed out of
   habit is refused.
 - **Typed day-times read back.** `parseDayTime(text, pattern, locale)` reads what `formatPattern`
@@ -32,9 +33,10 @@ Under `**Fixed:**`:
 - **From and To are read when they're done, here since rc.54.** In `DateRangePicker`, each keystroke
   that made a valid day moved the range, and Apply took the moved end: typing `2` on the way to `20`
   in To moved From to the 2nd. From and To are now read only when they're left, on Enter, or on
-  Apply. Text that isn't a day stays as typed, marked, and Apply is off until it's put right. And
-  with a first day picked, To is empty until the second is: where rc.54 couldn't read an end's text
-  back (Arabic's short date, a function `format`), it kept showing the old end.
+  Apply. Text that isn't a day stays as typed, marked, and Apply is off until it's put right; a
+  field left empty is its end again, and a field's own text always reads as its end. And with a
+  first day picked, To is empty until the second is: where rc.54 couldn't read an end's text back
+  (Arabic's short date, a function `format`), it kept showing the old end.
 
 Under `**Docs:**`:
 

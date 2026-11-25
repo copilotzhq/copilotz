@@ -11,6 +11,7 @@
  * ```
  */
 import type { ReactNode } from "react";
+import type { ExportCell, ExportOptions, Sheet } from "./export.ts";
 
 /** A row's identity: what `rowKey` gives, and what ticked rows are. */
 export type Key = string | number;
@@ -73,6 +74,29 @@ export function textOf<R>(column: Column<R>, row: R): string {
   if (column.text) return column.text(row);
   const value = (row as Record<string, unknown>)?.[column.key];
   return value === undefined || value === null ? "" : String(value);
+}
+
+/** Projects the chosen columns, displayed or raw, into a file. Untitled action columns stay on screen. */
+export function tableSheet<R>(
+  columns: Column<R>[],
+  rows: R[],
+  footerRows: Record<string, ExportCell>[] = [],
+  values: ExportOptions["values"] = "display",
+): Sheet<ExportCell> {
+  const fields = columns.filter((column) => column.title !== "");
+  const keys = fields.map((column) => column.key);
+  const cell = (column: Column<R>, row: R): ExportCell => {
+    if (values !== "raw") return textOf(column, row);
+    const raw = (row as Record<string, unknown>)?.[column.key];
+    if (raw === null || typeof raw === "boolean" || typeof raw === "number") return raw;
+    return String(raw ?? "");
+  };
+  return {
+    keys,
+    headers: fields.map((column) => column.title),
+    rows: rows.map((row) => fields.map((column) => cell(column, row))),
+    footerRows: footerRows.map((row) => keys.map((key) => Object.hasOwn(row, key) ? row[key] : "")),
+  };
 }
 
 /** Text as search compares it: lower case, without accents. */

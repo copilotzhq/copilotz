@@ -5,10 +5,20 @@
  * for a computer that's offline wakes it first, and waits for it; every
  * piece of work says it was used, so it stays awake a while. The waking
  * Action answers null for a computer it doesn't keep (a person's own), which
- * stays as it is. Without the resource, nothing changes.
+ * stays as it is. Without the resource, nothing changes. What they cost
+ * (`prices`) and how long a wake takes now (`estimate`) are the app's to
+ * say too: see shared/cost.ts, and the notice a plan's call gives in chat
+ * while it waits.
  *
  * ```ts
- * resources: { computerWake: { wake: "cloud.wake", touch: "cloud.touch" } }
+ * resources: {
+ *   computerWake: {
+ *     wake: "cloud.wake",
+ *     touch: "cloud.touch",
+ *     prices: "cloudComputer.sizes",
+ *     estimate: "cloud.estimate",
+ *   },
+ * }
  * ```
  */
 import { type Context, personOf } from "../../../../runtime/mod.ts";
@@ -20,7 +30,22 @@ export type ComputerWake = {
   touch?: string;
   /** The tool an agent makes one with, for what it's told when its space has no computer. */
   make?: string;
+  /**
+   * A named query (`<collection>.<query>`, `{}` in) saying what the app's
+   * computers cost the person asking: `ComputerPrices`. Without it, no cost
+   * is shown.
+   */
+  prices?: string;
+  /**
+   * An Action saying about how long waking `{ computer }` takes now:
+   * `WakeEstimate`, or null when it can't say. Asked just before a wake, for
+   * the notice in chat; without it, the notice gives no time.
+   */
+  estimate?: string;
 };
+
+/** How long a wake should take now (seconds), and whether that's slower than usual (no machine ready). */
+export type WakeEstimate = { seconds: number; slower?: true };
 
 const hookOf = (ctx: Pick<Context, "resources">) =>
   ctx.resources.computerWake as ComputerWake | undefined;

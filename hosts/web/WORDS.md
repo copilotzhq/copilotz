@@ -295,6 +295,8 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.antigravityPlan` | Google AI plan |
 | `computers.antigravityTitle` | Google AI plan, through Antigravity |
 | `computers.askMeFirst` | Ask me first in {spaces} |
+| `computers.awakeHours` | {hours}h {minutes}m |
+| `computers.awakeMinutes` | {minutes}m |
 | `computers.cancel` | Cancel |
 | `computers.checkAgain` | Check again |
 | `computers.checkedAt` | last checked {time} |
@@ -315,6 +317,11 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.codexTitle` | ChatGPT plan, through Codex |
 | `computers.connectComputer` | Connect a computer |
 | `computers.copyCode` | Copy the code |
+| `computers.costCoversMonth` | one: Your {amount} a month covers about {count} hour of work, after the disk. / other: Your {amount} a month covers about {count} hours of work, after the disk. |
+| `computers.costCoversOnce` | one: Your {amount} covers about {count} hour of work, after this month's disk. / other: Your {amount} covers about {count} hours of work, after this month's disk. |
+| `computers.costHour` | one: About {price} per hour of work, and it sleeps {count} minute after. / other: About {price} per hour of work, and it sleeps {count} minutes after. |
+| `computers.costMonth` | This month: {awake} awake · {price} · disk {disk} |
+| `computers.costMonthNoDisk` | This month: {awake} awake · {price} |
 | `computers.done` | Done |
 | `computers.doneAs` | Signed in as {account} |
 | `computers.doneNext` | Your agents run on it from now on, in every conversation and space here. |
@@ -383,7 +390,9 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `computers.paletteSignIn` | Sign in to your {plan} |
 | `computers.personal` | your Personal space |
 | `computers.plansAbout` | Your agents can run on a plan you already pay for, instead of an API key. Sign in once, through its app on a computer of yours, and it works in every conversation and space here. |
-| `computers.plansPrivate` | Nothing is charged here for those calls. The sign-in stays on your computer: this app never sees it. |
+| `computers.plansCloud` | A cloud computer you use for it is charged while it's awake. |
+| `computers.plansPaid` | Your plan pays for the AI. |
+| `computers.plansPrivate` | The sign-in stays on your computer: this app never sees it. |
 | `computers.plansTitle` | Plans on your computers |
 | `computers.replace` | Replace |
 | `computers.replaceAll` | one: Do the same for the other file that's already there / other: Do the same for the other {count} files that are already there |

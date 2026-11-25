@@ -88,7 +88,8 @@ export type { Desk } from "./collections/desk.ts";
 export type { EnvVar } from "./collections/env-var.ts";
 export type { Preview } from "./collections/preview.ts";
 export type { ComputersSettings } from "./shared/settings.ts";
-export type { ComputerWake } from "./shared/wake.ts";
+export type { ComputerWake, WakeEstimate } from "./shared/wake.ts";
+export type { ComputerCost, ComputerPrices } from "./shared/cost.ts";
 /** Asks and yeses computers kept before chat kept every ask, kept as chat keeps them now. */
 export { upgradeAsks, type Upgraded } from "./shared/upgrade.ts";
 

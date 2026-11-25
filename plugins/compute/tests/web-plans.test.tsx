@@ -45,7 +45,11 @@ import { computersWeb } from "../computers/web.tsx";
 import { test } from "../../../testing/mod.ts";
 
 /** A View's context over fixed reads, by `<collection>.<query>` (and a desk's by its computer). */
-function ctxOf(reads: Record<string, unknown>, query: Record<string, string> = {}) {
+function ctxOf(
+  reads: Record<string, unknown>,
+  query: Record<string, string> = {},
+  resources: Record<string, unknown> = {},
+) {
   return {
     db: {
       collection: (name: string) => ({
@@ -56,7 +60,7 @@ function ctxOf(reads: Record<string, unknown>, query: Record<string, string> = {
         }),
       }),
     },
-    resources: {},
+    resources,
     name: "test",
     viewer: { name: "ana" },
     hints: { query, mode: "full" },
@@ -178,6 +182,24 @@ test("a card per plan, each computer as it stands: signed in as whom, installed,
   assertEquals((shown.match(/Sign in(?! again| on| as)/g) ?? []).length, 2);
   assertStringIncludes(shown, "Check again");
   assertStringIncludes(shown, "Connect a computer");
+});
+
+test("what pays: their plan for the AI; a cloud computer, where the app has them, while it's awake", () => {
+  assertStringIncludes(
+    text(draw(plansView({}, ctxOf(READS)))),
+    "Your plan pays for the AI. The sign-in stays on your computer: this app never sees it.",
+  );
+  const cloud = { cloud: { title: "Cloud computer", mine: "cloudComputer.mine", view: "x" } };
+  assertStringIncludes(
+    text(draw(plansView(
+      {},
+      ctxOf({ ...READS, "cloudComputer.mine": [] }, {}, {
+        computerKinds: cloud,
+      }),
+    ))),
+    "Your plan pays for the AI. A cloud computer you use for it is charged while it's awake. " +
+      "The sign-in stays on your computer",
+  );
 });
 
 test("loading, it says nothing yet", () => {

@@ -263,7 +263,11 @@ function Plans(
         : <NoComputer connect={connect} />}
       <p className="plans-foot">
         <Icon name="lock" size={14} />
-        <span>{say("plansPrivate")}</span>
+        <span>
+          {/* What pays: their plan; a computer the app keeps for it, while it's awake. */}
+          {[say("plansPaid"), ...(kinds.length ? [say("plansCloud")] : []), say("plansPrivate")]
+            .join(" ")}
+        </span>
       </p>
       {signingPlan
         ? (

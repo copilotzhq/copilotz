@@ -1,15 +1,13 @@
 /**
  * A form's submit with parts: each part's handler in the order it joined,
  * values handed up to the form's own, and a part that stops it (`false`, or
- * a throw with words to say) stopping what comes after. A failure about one
- * field says which, and goes under the field that holds it.
+ * a throw with words to say) stopping what comes after.
  */
 import { assertEquals } from "@std/assert";
-import { Window } from "happy-dom";
 import { test } from "../../../testing/mod.ts";
-import { fieldFor, fieldOf, submitAll, wordsOf } from "../toolkit/form-submit.ts";
+import { submitAll, wordsOf } from "../toolkit/form-submit.ts";
 
-const form = new Window().document.createElement("form") as unknown as HTMLFormElement;
+const form = {} as HTMLFormElement;
 
 test("every part, in order, then the form's own with what they handed up", async () => {
   const ran: string[] = [];
@@ -28,30 +26,6 @@ test("every part, in order, then the form's own with what they handed up", async
   });
   assertEquals(ran, ["tab", "packages", "own packages,points"]);
   assertEquals(done, { ok: true, values: { packages: [{ name: "Gold" }], points: 10 } });
-});
-
-test("later parts see edits made during a wait and a cleared single-select stays empty", async () => {
-  const live = form.ownerDocument.createElement("form");
-  live.innerHTML = '<input value="first"><select><option>S</option><option>L</option></select>';
-  const wait = Promise.withResolvers<void>();
-  const save = submitAll(live, [
-    async (form, signal) => {
-      await wait.promise;
-      if (signal.aborted) return;
-      form.querySelector("select")!.selectedIndex = -1;
-    },
-    (form) => ({
-      text: form.querySelector("input")!.value,
-      size: form.querySelector("select")!.value,
-    }),
-  ], (values, form) => {
-    assertEquals(form === live, true);
-    assertEquals(form.querySelector("select")!.selectedIndex, -1);
-    assertEquals(values, { text: "new", size: "" });
-  });
-  live.querySelector("input")!.value = "new";
-  wait.resolve();
-  assertEquals(await save, { ok: true, values: { text: "new", size: "" } });
 });
 
 test("a part that says no stops the save: false says nothing, a throw fails, with its words", async () => {
@@ -86,33 +60,4 @@ test("a failure's words: a message, a string, or none", () => {
   assertEquals(wordsOf({ message: "From a failure" }), "From a failure");
   assertEquals(wordsOf(42), undefined);
   assertEquals(wordsOf(new Error("")), undefined);
-});
-
-test("a failure about one field says which: a schema's refusal, or an Action's with a detail", async () => {
-  // As a save the schema refuses rejects in the browser: its words, and the field in `detail`.
-  const refused = Object.assign(new Error("customer: must match pattern (#/email)"), {
-    code: "invalid",
-    detail: { field: "email" },
-  });
-  assertEquals(await submitAll(form, [], () => Promise.reject(refused)), {
-    ok: false,
-    failed: true,
-    error: "customer: must match pattern (#/email)",
-    field: "email",
-  });
-  assertEquals(fieldOf({ detail: { field: "lines.0.quantity" } }), "lines.0.quantity");
-  assertEquals(fieldOf({ detail: { field: "" } }), undefined);
-  assertEquals(fieldOf(new Error("No")), undefined);
-  assertEquals(fieldOf(null), undefined);
-});
-
-test("a refusal goes under the field that holds it: itself, or the nearest it's part of", () => {
-  const shown = ["name", "lines", "address", "address.city"];
-  assertEquals(fieldFor("name", shown), "name");
-  assertEquals(fieldFor("lines.0.quantity", shown), "lines");
-  assertEquals(fieldFor("address.city", shown), "address.city");
-  assertEquals(fieldFor("address.street", shown), "address");
-  // None shows it (nor a field whose name only starts the same): the form says it at its top.
-  assertEquals(fieldFor("names", shown), undefined);
-  assertEquals(fieldFor("price", []), undefined);
 });

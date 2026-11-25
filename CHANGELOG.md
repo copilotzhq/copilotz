@@ -2,8 +2,7 @@
 
 Start a business app with `copilotz init`. Give each declaration a file and write its types once.
 The compiler assembles the plugin and checks the names the app uses. The web toolkit now covers
-record dialogs, date ranges to the second, table exports, printed invoices and barcode labels. The
-guides ship with the runtime.
+table exports, printed invoices and barcode labels. The guides ship with the runtime.
 
 **Breaking:**
 
@@ -27,14 +26,6 @@ guides ship with the runtime.
   declared grant (`as`) takes effect. `transaction: true` opens or joins a transaction and rolls
   back the writes together on failure. An Action with no parameters can omit `input`. An explicit
   schema types both `run` and `allow`.
-- **Record dialogs and confirmations.** `EntityDialog` takes a record and fields, shows a save's
-  refusal under the field it names, and closes after the save succeeds. `ConfirmDialog` and
-  `confirm()` ask before a delete, focus Cancel for a destructive action and keep a failed
-  confirmation open. `Dialog` takes `busy` and `role="alertdialog"`. The toolkit's new words ship in
-  English and Brazilian Portuguese.
-- **Dates to the second.** `DateRangePicker` accepts `seconds` and a day-time pattern.
-  `parseDayTime` reads typed dates and times in the app's pattern and locale. `dateOfDayTime`
-  converts that value to a moment in the chosen time zone.
 - **Table files and printed documents.** Give `DataTable` a custom `formats` record, or share it
   with `TableExportFormats`. Export visible columns with totals, raw or displayed values, a CSV
   dialect or a SQL table name. The toolbar accepts the screen's controls and can show a lone page
@@ -52,35 +43,9 @@ guides ship with the runtime.
 - The final record flush attempts each identity's appends in order and reports the first refusal.
 - Dot-path updates resolve a field's `$ref` in its original schema resource, including embedded
   collection schemas generated from TypeScript.
-- A `Form` shows a server refusal under the named `Field`, including a nested field's parent. A
-  field's `name` reaches a control drawn as a function.
-- Date-only patterns read exactly two digits for `yy`, including in `yyMMdd`. Day-time patterns also
-  accept four digits for a separate `yy` field. Quoted punctuation and spaces match as written.
-  Locale-generated separators allow flexible spacing and an optional comma. As in rc.63, `MMM` and
-  `MMMM` accept month names made of letters with an optional trailing dot. Names containing digits
-  are rejected even with separators. Numeric fields accept locale digits when the date has a single
-  valid reading.
 - JSON records keep sparse cells as `""` and explicit `null` as `null`. Table-shaped JSON with raw
   values preserves each cell's type.
-- As in rc.63, a `Form` uses the current handler when each part runs and the current submit callback
-  when the parts finish. `EntityDialog` then reads the draft and the live form's enabled named
-  controls. Previously populated fields cleared to `undefined` are passed to the save as `unset`.
-- `EntityDialog` stays busy from its first part through the save. Cancel and Escape wait. Closing
-  the dialog or switching records aborts the attempt and clears its draft and field errors. The
-  record is identified by `values._id` or, without an id, by the `values` object itself.
-- A `Form` that unmounts or is hidden by React `Activity` during a save calls
-  `onSubmittingChange(false, form)` once. Showing it again allows a new submission. Each attempt's
-  parts receive the live form and its `AbortSignal`. After each `await`, a part should check
-  `signal.aborted` before touching the form.
-- An unanswered `confirm()` resolves `false` when the last `<Toasts />` leaves, instead of showing
-  later with an old callback. Closing and reopening a controlled `ConfirmDialog` starts a new
-  question. Only its own confirmation can close it.
-- The From and To inputs of a timed `DateRangePicker` read dates. The time comes from each end's
-  time fields. The separate `parseDayTime` helper reads locale digits and returns `undefined` for
-  ambiguous day-times and unsupported calendars. `dateOfDayTime` resolves a skipped time forward and
-  a repeated one to its earlier instant, in the browser's zone and a named one alike.
-- Date patterns read short months such as `nov.` in French and Portuguese. Digits in quoted text
-  stay as written when the parser reads the surrounding date and time.
+- XLSX exports with `values: "raw"` keep numeric-looking strings as text, preserving their digits.
 - `tableSheet` accepts inline `DataTable` columns with `align` and `render` and infers the row type.
 - PDF column widths and alignments follow the visible columns. A minimal-quoted CSV keeps a row with
   one empty field (`""`). `copilotz/web/export`'s types need no React.

@@ -74,27 +74,6 @@ It runs on Node 24+, Deno 2.9+ and Bun.
 
 **Screens and dates**
 
-- Ask before deleting, or before any action → `ConfirmDialog`, `confirm()` →
-  [Confirming an action](docs/guides/the-web-toolkit.md#confirming-an-action).
-- Delete a row from a list, asking first → `confirm({ danger, onConfirm })` →
-  [Deleting, after asking](docs/guides/a-business-apps-screens.md#deleting-after-asking).
-- Add/edit a record in a dialog with field errors → `EntityDialog` →
-  [A record in a dialog](docs/guides/the-web-toolkit.md#a-record-in-a-dialog).
-- A record's form as data (text, number, select, checkbox, date, date-time) → `EntityDialog`
-  `fields` (`EntityField`) →
-  [A record in a dialog](docs/guides/the-web-toolkit.md#a-record-in-a-dialog).
-- Show a save's refusal (schema or Action) under its field → `Field` `name`, `Form` `errors` →
-  [Forms](docs/guides/the-web-toolkit.md#forms).
-- Keep a dialog open while its save runs → `Dialog` `busy` →
-  [Forms](docs/guides/the-web-toolkit.md#forms).
-- A date range to the second → `DateRangePicker` `seconds` →
-  [Date ranges with seconds](docs/guides/the-web-toolkit.md#date-ranges-with-seconds).
-- Read a typed date alone (`31/02/2026` is refused) → `parsePattern(text, pattern)` →
-  [Reading typed dates and times](docs/guides/the-web-toolkit.md#reading-typed-dates-and-times).
-- Read typed date-time text (day/month order, 12 h or 24 h, seconds) → `parseDayTime` →
-  [Reading typed dates and times](docs/guides/the-web-toolkit.md#reading-typed-dates-and-times).
-- A day-time as a `Date` or an ISO timestamp, in the app's time zone → `dateOfDayTime` →
-  [Reading typed dates and times](docs/guides/the-web-toolkit.md#reading-typed-dates-and-times).
 - UI components several screens or plugins share → `lib/web/` (the plugin's, or the app's) →
   [Shared UI: an app's own components](docs/guides/a-business-apps-screens.md#shared-ui-an-apps-own-components).
 - Build a form with labelled inputs → `Form`, `Field`, `Input` →
@@ -696,11 +675,10 @@ Read both before the first screen.
   `<LazyView kind="panel:…" item={…} />` shows a View on demand.
 - **Validation errors come from where the write is checked.** The browser's `required` and `type`
   help first. A save the schema refuses rejects with a public `invalid` that names its field
-  (`detail: { field: "price" }`), and a `Form` whose `onSubmit` throws puts it under the `Field` of
-  that `name`, in the words its `errors` gives by field. `EntityDialog` does this for its form. An
-  Action's own rule throws `failure("invalid", "Give the name.", { public: true })`, with
-  `detail: { field }` when it's about one field (`Object.assign(failure(…), { detail })`), and the
-  form shows it at its top or by its field. An Action's `input` schema's messages are for
+  (`detail: { field: "price" }`), and the form can catch it and pass a message to that `Field`'s
+  `error`. An Action's own rule throws `failure("invalid", "Give the name.", { public: true })`,
+  with `detail: { field }` when it's about one field (`Object.assign(failure(…), { detail })`), and
+  the form shows it at its top or by its field. An Action's `input` schema's messages are for
   developers, so a form says each field's refusal its own way (`{ name: "Give the name." }`, by
   `detail.field`), and the schema's text where it has none. A record whose fields the server sets
   (who made it, when, a number in a sequence) keeps an Action: a browser's View doesn't know who's
@@ -731,11 +709,9 @@ The pieces, by job:
   `ListGroup`, `Tabs`, `Divider`, `Spacer`, `Heading`, `Text`.
 - **Fields:** `Form`, `Field`, `Input`, `Textarea`, `Select`, `Checkbox`, `Radio`, `Switch`,
   `Picker`, `MultiPicker`, `Autocomplete`, `TagsInput`, `FileInput`, `RowsEditor`, `DatePicker`,
-  `DateRangePicker`, `DateTimePicker`, `TimeFields`, `parseDayTime` and `dateOfDayTime`.
+  `DateRangePicker`, `DateTimePicker`, `TimeFields`.
 - **Actions and overlays:** `Button`, `IconButton`, `Menu`, `Popover`, `Dialog`, `Drawer`,
   `Tooltip`, `toast` and `Toasts`.
-- **Dialogs:** `ConfirmDialog` and `confirm()` ask before an action. `EntityDialog` adds or edits a
-  record.
 - **Data:** `DataTable` (with `tableAddress`, `tableQuery`), `Pagination`, `DetailList`, `Badge`,
   `Chip`, `Avatar`, `Notice`, `EmptyState`, `Skeleton`, `Spinner`, `Kbd`.
 - **An app's own frame:** `AppBar`, `TopBar`, `TileGrid`, `LiveClock`, `Logo`, `Icon` (`drawing`: an
@@ -765,28 +741,16 @@ The pieces, by job:
   [Images and barcodes in a document](docs/guides/the-web-toolkit.md#images-and-barcodes-in-a-document).
 - **A create or edit form in a dialog:** the screen shows
   `ctx.show("dialog:customer", { _id, back })` when its address names one (`/customers/new`,
-  `/customers/<id>`). The dialog's View reads the record and returns an `EntityDialog`: `title`,
-  `values` (the record, or a new one's defaults), `fields` as data
-  (`{ name, label, type, required }`, `type` one of `text`, `email`, `number`, `textarea`, `select`,
-  `checkbox`, `date`, `datetime`…) or `Field`s with a `name` as children, `errors` (people's words
-  by field), `onSubmit` (`insertOne(record)`, or `updateOne({ _id }, record)`; an Action with
-  `ctx.call`), `toast` and `onClose={() => go(back)}`. It keeps what's typed, says a needed field
-  left empty, shows a refusal under its field, and closes once the save answered.
-- **A delete that asks first:**
-  `confirm({ title, message, danger: true, toast, onConfirm: () =>
-  ctx.db.collection("customer").deleteOne({ _id }) })`
-  from a row's button or a table's `actions`: it shows where `<Toasts />` is, and resolves `true` or
-  `false`. As a `dialog:` View at an address, return a `ConfirmDialog` with the same props and
-  `onClose`. While `onConfirm` runs it's busy; a failure stays in it, with its words.
+  `/customers/<id>`). The dialog's View reads the record and returns a component: a `Dialog`
+  (`placement="top"`) around a `Form` of `Field layout="row"`s, Save in its footer submitting the
+  form by its id (`form="customer"`). `onSubmit` writes the record (`insertOne` for a new one,
+  `updateOne({ _id }, fields)` for an edit), then `toast()` and `go(back)`.
 - **Date, date-time and date-range fields:** days are `YYYY-MM-DD` and times `YYYY-MM-DD HH:mm` or
   `HH:mm:ss`, the app's clock time with no zone, never ISO timestamps. `todayIn(timeZone)` and
   `nowIn(timeZone)` in the app's zone, `format` patterns from its settings. `DatePicker`;
   `DateTimePicker` keeps a value's seconds until its time changes (`seconds` shows them);
   `DateRangePicker` has `presets` (or `rangePresets(…)`), typed From and To, and `time` for ends
-  with a time of day. `DateRangePicker` `seconds` takes the ends to the second (`00:00:00` to
-  `23:59:59` for a preset), and its `format` may be the app's day-time pattern.
-  `parseDayTime(text, pattern)` reads typed day-time text back (`undefined` when it isn't one);
-  `dateOfDayTime(value, timeZone)` is its moment, as a `Date`.
+  with a time of day.
 - **A sign-in page:** Copilotz's own, with `passwordSignIn` (staff with usernames) or `emailSignIn`:
   the theme gives its look (`themeOf([look])` on the server), the `signInPage` resource its words
   and pitch. Accounts come from an Action of the app's that calls `password.set`. Don't write a
@@ -812,11 +776,10 @@ The pieces, by job:
 
 - Stylesheets of the app's own, inline styles for looks, or overrides of `.copilotz-*`, instead of
   the toolkit and the theme; components several screens share copied into each, instead of one in
-  `lib/`; a confirm, delete or record dialog written again for each screen, instead of `confirm()`,
-  `ConfirmDialog` and `EntityDialog`. Hand-made `<table>`s of fields (use `DataTable` with fields in
-  cells, or `RowsEditor`), a hidden `<input type="file">` behind buttons (`FileInput`), the
-  browser's `datetime-local` (`DateTimePicker`), a `document` key listener (`useShortcuts`), a form
-  part listening for the DOM's `submit` (`Form` and `useFormSubmit`).
+  `lib/`. Hand-made `<table>`s of fields (use `DataTable` with fields in cells, or `RowsEditor`), a
+  hidden `<input type="file">` behind buttons (`FileInput`), the browser's `datetime-local`
+  (`DateTimePicker`), a `document` key listener (`useShortcuts`), a form part listening for the
+  DOM's `submit` (`Form` and `useFormSubmit`).
 - One big `web.tsx`; a View that holds state or hooks; a screen fetching `/api/queries/…` from an
   effect instead of reading `ctx.db` in the View; a browser View's `find` on a collection no rule
   speaks for, instead of a named query; `ctx.show` in a row's `render`.
@@ -837,8 +800,7 @@ The pieces, by job:
   shares of the whole row: `"33.33%"` and `"66.67%"` fill it.
 - A workaround copied from an older release: rc.54 has `Screen`, typed range ends, seconds, `hidden`
   on layout pieces, fields that fit table cells, `detailOpen`, `Toolbar grow`, a file field's own
-  words and picture previews. rc.64 has `ConfirmDialog` and `confirm()`, `EntityDialog`, a refusal
-  under its `Field` (`name`), date ranges to the second and `parseDayTime`.
+  words and picture previews.
 
 ## Recipes
 

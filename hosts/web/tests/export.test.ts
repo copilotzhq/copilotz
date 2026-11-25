@@ -98,6 +98,29 @@ test("xlsx: an Office workbook whose sheet has numbers as numbers, text escaped,
   assert(!xml.includes("<f>"), "no formulas");
 });
 
+test("raw XLSX keeps decimal strings distinct and writes numbers as numeric cells", () => {
+  const first = "123456789012345.671";
+  const second = "123456789012345.672";
+  const sheet = tableSheet(
+    [{ key: "value", title: "Value" }],
+    [{ value: first }, { value: second }, { value: 12.5 }],
+    [{ value: "12.50" }],
+    "raw",
+  );
+  const { content } = exportFile("xlsx", sheet, "values", { values: "raw" });
+  assert(content instanceof Uint8Array);
+  const entry = unzip(content).find((e) => e.name === "xl/worksheets/sheet1.xml");
+  assert(entry);
+  const xml = new TextDecoder().decode(entry.data);
+  for (const [ref, value] of [["A2", first], ["A3", second], ["A5", "12.50"]]) {
+    assertStringIncludes(
+      xml,
+      `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${value}</t></is></c>`,
+    );
+  }
+  assertStringIncludes(xml, '<c r="A4"><v>12.5</v></c>');
+});
+
 test("CSV quotes every cell and guards formulas, but not plain numbers", () => {
   assertEquals(guard("=1+1"), "'=1+1");
   assertEquals(guard("-12.5"), "-12.5");

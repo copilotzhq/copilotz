@@ -56,18 +56,8 @@ for (const [locale, month] of [["zh-CN", "11月"], ["ko-KR", "11월"], ["ja-JP",
   });
 }
 
-test("locale digits in numeric date fields need a single valid reading", () => {
+test("rc.63 numeric date fields require ASCII digits even in a locale with Arabic digits", () => {
   const locale = "ar-EG-u-nu-arab";
-  // rc.63 only read ASCII numeric fields. rc.64 also reads locale digits when the date is unique.
-  for (
-    const [pattern, input, expected] of [
-      ["dd/MM/yyyy", "٠٢/١١/٢٠٢٦", "2026-11-02"],
-      ["yyyyMMdd", "٢٠٢٦١١٠٢", "2026-11-02"],
-      ["yyyy/MMd", "٢٠٢٦/١١٢", undefined], // November 2 or January 12
-      ["yyyy/dMM", "٢٠٢٦/٢١١", undefined], // November 2 or January 21
-      ["yyyy/MMd", "٢٠٢٦/٢٢٨", "2026-02-28"], // Only February 28 is a date.
-    ] as const
-  ) {
-    assertEquals(parsePattern(input, pattern, locale), expected, pattern + " reading " + input);
-  }
+  assertEquals(parsePattern("02/11/2026", "dd/MM/yyyy", locale), "2026-11-02");
+  assertEquals(parsePattern("٠٢/١١/٢٠٢٦", "dd/MM/yyyy", locale), undefined);
 });

@@ -34,7 +34,7 @@ import {
   lastOfMonth,
   monthOf,
   monthWeeks,
-  parsePickerDay,
+  parsePattern,
   partsOf,
   utcDate,
   weekOf,
@@ -146,7 +146,7 @@ function shortPattern(): string {
  */
 export function parseDay(text: string, format?: DayFormat): string | undefined {
   const pattern = typeof format === "string" ? format : undefined;
-  const read = (by: string) => parsePickerDay(text, by, lang());
+  const read = (by: string) => parsePattern(text, by, lang());
   const found = read(pattern ?? shortPattern());
   if (found || pattern) return found;
   return isDay(text.trim()) ? text.trim() : read("yyyy-MM-dd");

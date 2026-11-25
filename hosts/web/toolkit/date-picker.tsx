@@ -21,12 +21,8 @@
  * isn't a date marks the field invalid and changes nothing. The months open
  * on the range's start. `time` gives each end a time of day too (hours and
  * minutes, like `DateTimePicker`), and the value's ends are then
- * `YYYY-MM-DD HH:mm` (a preset is its days, whole); `seconds` takes the
- * times to the second, `YYYY-MM-DD HH:mm:ss` (a preset runs from `00:00:00`
- * to `23:59:59`). From and To read dates. The time comes from each end's
- * time fields. A day-time `format` such as `dd/MM/yyyy HH:mm:ss` writes
- * each end whole.
- * The foot stays in view when the panel scrolls.
+ * `YYYY-MM-DD HH:mm` (a preset is its days, whole). The foot stays in view
+ * when the panel scrolls.
  *
  * The field, the presets and the foot take their look from `--date-picker-*`
  * tokens, and the days from the calendar's (`--calendar-*`).
@@ -35,12 +31,9 @@
  * <DateRangePicker label="Period" value={range} onChange={setRange} today={today} max={today}
  *   format="dd/MM/yyyy" presets={rangePresets(today, { fiscalYearStart: 4, min: "2010-01-01" })} />
  * <DatePicker label="Due" value={due} onChange={setDue} format="d MMM yyyy" />
- * <DateRangePicker label="Report" value={range} onChange={setRange} format="dd/MM/yyyy HH:mm:ss"
- *   seconds />
  * ```
  */
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
-import { lang } from "../words.ts";
 import { Button } from "./button.tsx";
 import { Calendar, type DayFormat, formatDay, parseDay } from "./calendar.tsx";
 import { cx } from "./cx.ts";
@@ -48,10 +41,7 @@ import {
   addMonth,
   clampRange,
   type DateRange,
-  dayPatternOf,
   dayTimeOf,
-  formatPattern,
-  hasTime,
   isDayTime,
   monthOf,
   monthsBetween,
@@ -295,18 +285,12 @@ function DayField(
 
 const START: Clock = { hour: 0, minute: 0 };
 const END: Clock = { hour: 23, minute: 59 };
-/** A whole day's ends, to the second. */
-const START_SECOND: Clock = { hour: 0, minute: 0, second: 0 };
-const END_SECOND: Clock = { hour: 23, minute: 59, second: 59 };
 
-/**
- * The time of day an end of a value has: its own, or the day's first (or last) minute. To the
- * second (`seconds`), a time kept to the minute is at its `:00`.
- */
-const clockOf = (value: string | undefined, whole: Clock, seconds = false): Clock => {
+/** The time of day an end of a value has: its own, or the day's first (or last) minute. */
+const clockOf = (value: string | undefined, whole: Clock): Clock => {
   if (!value || !isDayTime(value)) return whole;
   const { hour, minute, second } = partsOfDayTime(value);
-  return { hour, minute, second: seconds ? second ?? 0 : second };
+  return { hour, minute, second };
 };
 
 const two = (n: number) => String(n).padStart(2, "0");
@@ -348,7 +332,6 @@ export function DateRangePicker(
     presets = true,
     separator = " – ",
     time = false,
-    seconds = false,
     weekStart,
     monthFormat,
     label = say("chooseDates"),
@@ -363,44 +346,24 @@ export function DateRangePicker(
     presets?: RangePreset[] | boolean;
     /** Between the two days, in the field and the foot. */
     separator?: string;
-    /**
-     * Gives each end a time of day: the value's ends are then `YYYY-MM-DD HH:mm`. `format` may then
-     * be a day-time pattern (`dd/MM/yyyy HH:mm`), which writes each end whole.
-     */
+    /** Gives each end a time of day: the value's ends are then `YYYY-MM-DD HH:mm`. */
     time?: boolean;
-    /**
-     * Times to the second (and a time with it): each end's time has a seconds field, and the
-     * value's ends are `YYYY-MM-DD HH:mm:ss`; a preset runs from `00:00:00` to `23:59:59`.
-     */
-    seconds?: boolean;
   },
 ): ReactNode {
   const today = given ?? todayIn();
   const panel = useRef<HTMLDivElement>(null);
-  const timed = time || seconds;
-  const [first, last] = seconds ? [START_SECOND, END_SECOND] : [START, END];
-  // A day-time pattern writes each end whole; its day alone is what From and To show.
-  const whole = timed && typeof format === "string" && hasTime(format) ? format : undefined;
-  const dayFormat = whole ? dayPatternOf(whole) : format;
   const days = (v?: DateRange) => ({
     start: v?.start.slice(0, 10) ?? today,
     end: v?.end.slice(0, 10) ?? today,
   });
-  const clocks = (v?: DateRange) => ({
-    from: clockOf(v?.start, first, seconds),
-    to: clockOf(v?.end, last, seconds),
-  });
+  const clocks = (v?: DateRange) => ({ from: clockOf(v?.start, START), to: clockOf(v?.end, END) });
   const start = days(value);
   const [draft, setDraft] = useState<{ start: string; end?: string }>(start);
   const [times, setTimes] = useState(() => clocks(value));
   const [month, setMonth] = useState(() => firstMonth(start, min, max));
   const list = presets === true ? rangePresets(today, { min, max }) : presets || [];
   const written = (day: string, clock: Clock) =>
-    !timed
-      ? formatDay(day, dayFormat)
-      : whole
-      ? formatPattern(dayTimeOf(day, clock.hour, clock.minute, clock.second), whole, lang())
-      : `${formatDay(day, dayFormat)} ${clockText(clock)}`;
+    time ? `${formatDay(day, format)} ${clockText(clock)}` : formatDay(day, format);
   const show = (range: DateRange) => {
     const [a, b] = [days(range), clocks(range)];
     return `${written(a.start, b.from)}${separator}${written(a.end, b.to)}`;
@@ -408,17 +371,17 @@ export function DateRangePicker(
   const shown = draft.end === undefined
     ? `${written(draft.start, times.from)}${separator}…`
     : `${written(draft.start, times.from)}${separator}${written(draft.end, times.to)}`;
-  const allDay = secondsOf(times.from) === 0 && secondsOf(times.to) === secondsOf(last);
+  const whole = secondsOf(times.from) === 0 && secondsOf(times.to) === secondsOf(END);
   const active = list.find((p) =>
     p.range.start === draft.start && p.range.end === (draft.end ?? draft.start) &&
-    (!timed || allDay)
+    (!time || whole)
   );
   const out = (day: string, clock: Clock) =>
-    timed ? dayTimeOf(day, clock.hour, clock.minute, clock.second) : day;
-  const give = (start: string, end: string, from: Clock, to: Clock) => {
+    time ? dayTimeOf(day, clock.hour, clock.minute, clock.second) : day;
+  const give = (first: string, last: string, from: Clock, to: Clock) => {
     // On one day the end can't come before the start.
-    const later = timed && start === end && secondsOf(to) < secondsOf(from) ? from : to;
-    onChange({ start: out(start, from), end: out(end, later) });
+    const later = time && first === last && secondsOf(to) < secondsOf(from) ? from : to;
+    onChange({ start: out(first, from), end: out(last, later) });
   };
   const open = () => {
     setDraft(start);
@@ -481,8 +444,8 @@ export function DateRangePicker(
                           aria-pressed={preset === active}
                           onClick={() => {
                             onChange({
-                              start: out(preset.range.start, first),
-                              end: out(preset.range.end, last),
+                              start: out(preset.range.start, START),
+                              end: out(preset.range.end, END),
                             });
                             close();
                           }}
@@ -514,17 +477,16 @@ export function DateRangePicker(
                     <DayField
                       label={say("rangeFrom")}
                       day={draft.start}
-                      format={dayFormat}
+                      format={format}
                       min={min}
                       max={max}
                       onDay={typedFrom}
                     />
-                    {timed
+                    {time
                       ? (
                         <TimeFields
                           value={times.from}
                           onChange={(from) => setTimes({ ...times, from })}
-                          seconds={seconds}
                           label={`${say("rangeFrom")}: ${say("time")}`}
                         />
                       )
@@ -534,17 +496,16 @@ export function DateRangePicker(
                     <DayField
                       label={say("rangeTo")}
                       day={draft.end}
-                      format={dayFormat}
+                      format={format}
                       min={min}
                       max={max}
                       onDay={typedTo}
                     />
-                    {timed
+                    {time
                       ? (
                         <TimeFields
                           value={times.to}
                           onChange={(to) => setTimes({ ...times, to })}
-                          seconds={seconds}
                           label={`${say("rangeTo")}: ${say("time")}`}
                         />
                       )

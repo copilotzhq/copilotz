@@ -11,8 +11,9 @@
  *   stays as it is. `{ formulas: true }` turns that off. The file starts
  *   with a byte-order mark, so Excel reads its accents (`{ bom: false }`:
  *   none).
- * - **`.xlsx`** writes a number as a number (`12`, `-3.5`; not `007`, which
- *   stays text), everything else as text, never as a formula.
+ * - **`.xlsx`** writes finite numbers and booleans as typed cells. Display
+ *   strings such as `"12"` and `"-3.5"` become numeric cells, while
+ *   `"007"` stays text. With raw values every string stays text.
  * - **JSON** is the rows as objects by header (`[{ "Name": "Ann" }]`), or
  *   the table export's shape that tools such as bootstrap-table's write
  *   (`{ json: "table" }`: `{ header: [{ "0": … }], data: [{ "0": … }] }`).
@@ -202,7 +203,11 @@ const column = (index: number): string =>
     : column(Math.floor(index / 26) - 1) + column(index % 26);
 
 /** `.xlsx`: a workbook of one sheet, named `name`, its header row bold. */
-export function toXlsx(input: Sheet<ExportCell>, name: string): Uint8Array {
+export function toXlsx(
+  input: Sheet<ExportCell>,
+  name: string,
+  { values }: ExportOptions = {},
+): Uint8Array {
   const { headers } = input;
   const rows = dataRows(input);
   const sheetName = markup(name.replace(/[[\]:*?/\\]/g, " ").trim().slice(0, 31) || "Sheet1");
@@ -214,7 +219,7 @@ export function toXlsx(input: Sheet<ExportCell>, name: string): Uint8Array {
       return `<c r="${ref}"${style}><v>${value}</v></c>`;
     }
     const plain = text(value);
-    if (NUMBER.test(plain)) return `<c r="${ref}"${style}><v>${plain}</v></c>`;
+    if (values !== "raw" && NUMBER.test(plain)) return `<c r="${ref}"${style}><v>${plain}</v></c>`;
     return `<c r="${ref}"${style} t="inlineStr"><is><t xml:space="preserve">${
       markup(plain)
     }</t></is></c>`;

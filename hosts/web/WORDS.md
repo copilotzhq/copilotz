@@ -861,18 +861,15 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `toolkit.chosen` | one: {count} chosen / other: {count} chosen |
 | `toolkit.close` | Close |
 | `toolkit.columns` | Columns |
-| `toolkit.confirm` | Confirm |
 | `toolkit.copied` | Copied |
 | `toolkit.copy` | Copy |
 | `toolkit.copyCode` | Copy code |
 | `toolkit.copyId` | Copy ID |
 | `toolkit.customRange` | Custom range |
-| `toolkit.delete` | Delete |
 | `toolkit.done` | Done |
 | `toolkit.dropFiles` | Drop files here |
 | `toolkit.export` | Export |
 | `toolkit.files` | one: {count} file / other: {count} files |
-| `toolkit.fillIn` | Fill this in. |
 | `toolkit.hideDetails` | Hide details |
 | `toolkit.hoursAgo` | one: {count} hour ago / other: {count} hours ago |
 | `toolkit.hoursShort` | {count}h |
@@ -899,7 +896,6 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `toolkit.noMatches` | Nothing matches “{text}” |
 | `toolkit.noneChosen` | None chosen |
 | `toolkit.noRows` | Nothing to show |
-| `toolkit.notDone` | It wasn't done. Try again. |
 | `toolkit.notifications` | Notifications |
 | `toolkit.notSaved` | It wasn't saved. Try again. |
 | `toolkit.now` | now |

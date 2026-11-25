@@ -27,14 +27,24 @@ Under `**New:**`:
   a time they repeat is its first pass, as `new Date(…)` does in the page's zone. With no zone, the
   page's clock is read as `Date` reads it (`TZ=GMT+3` is three hours behind UTC).
 
+Under `**Fixed:**`:
+
+- **From and To are read when they're done, here since rc.54.** In `DateRangePicker`, each keystroke
+  that made a valid day moved the range, and Apply took the moved end: typing `2` on the way to `20`
+  in To moved From to the 2nd. From and To are now read only when they're left, on Enter, or on
+  Apply. Text that isn't a day stays as typed, marked, and Apply is off until it's put right. And
+  with a first day picked, To is empty until the second is: where rc.54 couldn't read an end's text
+  back (Arabic's short date, a function `format`), it kept showing the old end.
+
 Under `**Docs:**`:
 
 - The toolkit guide has "Date ranges with seconds" and "Reading typed dates and times".
 
 Under `**Upgrading:**`:
 
-- Nothing changes for existing date pickers: without `seconds`, `DateRangePicker` draws and behaves
-  as in rc.64, and `DatePicker`, `DateTimePicker`, `parsePattern` and `parseDay` are unchanged.
+- Nothing else changes for existing date pickers: without `seconds`, `DateRangePicker` draws as in
+  rc.64, and only reads From and To when they're done (Fixed, above). `DatePicker`,
+  `DateTimePicker`, `parsePattern` and `parseDay` are unchanged.
 
 ## (b) AGENTS.md text
 

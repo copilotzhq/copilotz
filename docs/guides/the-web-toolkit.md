@@ -550,12 +550,15 @@ page language's.
   a phone), with the range's From and To over the months as typed fields. A preset applies at once;
   the first day clicked starts a range and the second ends it; Apply takes it, Cancel or Escape keep
   the value, and both stay in view when the panel scrolls. From and To are written and read in the
-  field's `format`: a day typed moves the range and the months shown, and anything else (not a day,
-  or outside `min` and `max`) is marked and changes nothing. Give `format` as a pattern where people
-  type: a function can't be read back, so typed text is then read as the page language's short date
-  or as `YYYY-MM-DD`. A long range opens on its start's months. `presets` is a list, `true` for the
-  standard ones, or `false`; `min` and `max` bound what can be picked; `separator` sits between the
-  days. From and To are the words `toolkit.rangeFrom` and `toolkit.rangeTo`.
+  field's `format`, and what's typed is read when it's done: on leaving the field, on Enter, or on
+  Apply. Then a day moves the range and the months shown; nothing moves while it's being typed
+  (typing `2` on the way to `20` in To doesn't move From to the 2nd). Anything else (not a day, or
+  outside `min` and `max`) stays as typed, marked, and Apply is off until it's put right. Give
+  `format` as a pattern where people type: a function can't be read back, so typed text is then read
+  as the page language's short date or as `YYYY-MM-DD`. A long range opens on its start's months.
+  `presets` is a list, `true` for the standard ones, or `false`; `min` and `max` bound what can be
+  picked; `separator` sits between the days. From and To are the words `toolkit.rangeFrom` and
+  `toolkit.rangeTo`.
 - **`DateRangePicker` with `time`**: each end has hours and minutes too, and the ends are
   `YYYY-MM-DD HH:mm`; a preset is its whole days, `00:00` to `23:59`. On one day, the end is never
   before the start. A stored time with seconds sorts after its minute (`"… 23:59:30" > "… 23:59"`),

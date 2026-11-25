@@ -6,8 +6,12 @@
  * `lg`, or `auto` (as wide as what's in it). `bare` leaves the layout to
  * what's in it (a picture), named by `label`. Centred, or near the top
  * (`placement="top"`: a form that grows downwards stays put). Opened, focus
- * goes to its first field, or stays on the dialog itself (`focus="dialog"`:
- * nothing is typed into until someone chooses to).
+ * goes to its first field (or to what's marked `data-autofocus`), or stays
+ * on the dialog itself (`focus="dialog"`: nothing is typed into until someone
+ * chooses to). While `busy` (a save in flight), it stays open: Escape, the
+ * backdrop and its close button wait. `role="alertdialog"` for one that
+ * interrupts to ask (see `ConfirmDialog`), described by what it says
+ * (`aria-describedby`, or its `description`).
  *
  * Its look is the theme's: `dialog-width` (and `-sm`, `-lg`), `dialog-radius`,
  * `dialog-head-*` (background, foreground, padding, border), `dialog-title-*`,
@@ -74,9 +78,12 @@ export function Dialog(
     placement = "center",
     focus = "first",
     bare,
+    busy = false,
+    role,
     footer,
     className,
     children,
+    "aria-describedby": describedBy,
   }: {
     open: boolean;
     onClose(): void;
@@ -90,13 +97,19 @@ export function Dialog(
     /** What has focus once it opens: its first field, or the dialog itself. */
     focus?: "first" | "dialog";
     bare?: boolean;
+    /** Something it started is under way: it stays open, and says so. */
+    busy?: boolean;
+    /** `alertdialog` for one that interrupts to ask before going on. */
+    role?: "dialog" | "alertdialog";
+    /** The id of what describes it, when that isn't its `description`. */
+    "aria-describedby"?: string;
     footer?: ReactNode;
     /** The box inside it. */
     className?: string;
     children?: ReactNode;
   },
 ): ReactNode {
-  const { ref, events } = useModal(open, onClose, { focus });
+  const { ref, events } = useModal(open, onClose, { focus, keep: busy });
   const id = useId();
   return (
     <dialog
@@ -107,9 +120,11 @@ export function Dialog(
         placement === "top" && "copilotz-dialog-top",
       )}
       tabIndex={focus === "dialog" ? -1 : undefined}
+      role={role === "alertdialog" ? role : undefined}
       aria-labelledby={title ? `${id}-title` : undefined}
       aria-label={title ? undefined : label}
-      aria-describedby={description ? `${id}-description` : undefined}
+      aria-describedby={describedBy ?? (description ? `${id}-description` : undefined)}
+      aria-busy={busy || undefined}
       closedby="any"
       {...events}
     >
@@ -132,6 +147,7 @@ export function Dialog(
                 icon="close"
                 label={say("close")}
                 size="sm"
+                disabled={busy}
                 onClick={() => ref.current?.close()}
               />
             </header>

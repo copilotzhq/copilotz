@@ -4,7 +4,9 @@
  * `error` in its place. `required` marks the label (said to screen readers
  * too). The control is a function of what the field gives it, or the
  * control itself, named by `htmlFor` (the field then marks it invalid by
- * its look).
+ * its look). Given a `name`, the record's field it's for, a `Form` around
+ * it shows a save's refusal of that field here (`detail.field`), and a
+ * control given as a function gets the `name` too.
  *
  * Stacked, the label over the control (the default); or `layout="row"`, the
  * label in a column beside it (`labelWidth`, and `controlWidth`, each a
@@ -19,15 +21,22 @@
  * <Field layout="row" label="Email" htmlFor="email" required>
  *   <Input id="email" type="email" icon="mail" … />
  * </Field>
+ * <Field label="Price" name="price">{(control) => <Input {...control} inputMode="decimal" />}</Field>
  * ```
  */
 import { type CSSProperties, type ReactNode, useId } from "react";
 import { cx } from "./cx.ts";
+import { useRefusal } from "./form.tsx";
 import { sheet } from "./sheet.tsx";
 import { say } from "./words.ts";
 
-/** What a field gives its control. */
-export type Control = { id: string; "aria-describedby"?: string; "aria-invalid"?: true };
+/** What a field gives its control: its id, its `name` when the field has one, and how it reads. */
+export type Control = {
+  id: string;
+  name?: string;
+  "aria-describedby"?: string;
+  "aria-invalid"?: true;
+};
 
 const SHEET = sheet(
   "field",
@@ -57,8 +66,9 @@ export function Field(
   {
     label,
     hint,
-    error,
+    error: given,
     required,
+    name,
     htmlFor,
     layout = "stacked",
     labelWidth,
@@ -71,6 +81,11 @@ export function Field(
     error?: ReactNode;
     /** Marks the label: a value is needed. */
     required?: boolean;
+    /**
+     * The record's field it's for (`price`): a `Form`'s save refused about it (`detail.field`)
+     * says so here, and a control given as a function gets it as its `name`.
+     */
+    name?: string;
     /** The control's id, when the control is given as it is rather than as a function. */
     htmlFor?: string;
     /** The label over the control, or in a column beside it. */
@@ -87,12 +102,15 @@ export function Field(
   },
 ): ReactNode {
   const own = useId();
+  const refused = useRefusal(name);
+  const error = given || refused;
   const id = typeof children === "function" ? own : htmlFor;
   const note = error || hint;
   const noteId = `${own}-note`;
   const control = typeof children === "function"
     ? children({
       id: own,
+      ...(name ? { name } : {}),
       ...(note ? { "aria-describedby": noteId } : {}),
       ...(error ? { "aria-invalid": true } : {}),
     })

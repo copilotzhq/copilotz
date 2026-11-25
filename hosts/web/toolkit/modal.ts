@@ -1,12 +1,14 @@
 /**
  * A `<dialog>` shown modally while `open` (the page behind it inert, focus
  * kept inside and given back after), for `Dialog` and `Drawer`. Opened, focus
- * goes to the first thing to use in what it holds (past its header's close
- * button), or to that button when there's nothing else; or, with `focus:
- * "dialog"`, to the dialog itself (Tab then goes to its first control).
- * Escape, a press on the backdrop or `close()` all end in `onClose`.
+ * goes to what's marked `data-autofocus` in it, else to the first thing to
+ * use in what it holds (past its header's close button), or to that button
+ * when there's nothing else; or, with `focus: "dialog"`, to the dialog itself
+ * (Tab then goes to its first control). Escape, a press on the backdrop or
+ * `close()` all end in `onClose`; while `keep` is on (it's busy), Escape and
+ * the backdrop wait.
  */
-import { type PointerEvent, useEffect, useRef } from "react";
+import { type PointerEvent, type SyntheticEvent, useEffect, useRef } from "react";
 
 /** What takes focus first: something to use, outside the header. */
 const FIRST = ":is(input, textarea, select, button, a[href], [tabindex]):not(" +
@@ -15,7 +17,7 @@ const FIRST = ":is(input, textarea, select, button, a[href], [tabindex]):not(" +
 export function useModal(
   open: boolean,
   onClose: () => void,
-  { focus = "first" }: { focus?: "first" | "dialog" } = {},
+  { focus = "first", keep = false }: { focus?: "first" | "dialog"; keep?: boolean } = {},
 ) {
   const ref = useRef<HTMLDialogElement>(null);
   const pressed = useRef(false);
@@ -25,7 +27,10 @@ export function useModal(
     if (open && !dialog.open) {
       dialog.showModal();
       if (focus === "dialog") dialog.focus();
-      else dialog.querySelector<HTMLElement>(FIRST)?.focus();
+      else {
+        (dialog.querySelector<HTMLElement>("[data-autofocus]") ??
+          dialog.querySelector<HTMLElement>(FIRST))?.focus();
+      }
     }
     if (!open && dialog.open) dialog.close();
   }, [open]);
@@ -33,12 +38,18 @@ export function useModal(
     ref,
     events: {
       onClose: () => onClose(),
+      // Escape, or a light dismiss: refused while it's kept open.
+      onCancel: (event: SyntheticEvent<HTMLDialogElement>) => {
+        if (keep) event.preventDefault();
+      },
       // Only a press that starts and ends on the backdrop (the dialog itself, outside its box).
       onPointerDown: (event: PointerEvent<HTMLDialogElement>) => {
         pressed.current = event.target === event.currentTarget;
       },
       onClick: (event: { target: unknown; currentTarget: HTMLDialogElement }) => {
-        if (pressed.current && event.target === event.currentTarget) event.currentTarget.close();
+        if (pressed.current && event.target === event.currentTarget && !keep) {
+          event.currentTarget.close();
+        }
         pressed.current = false;
       },
     },

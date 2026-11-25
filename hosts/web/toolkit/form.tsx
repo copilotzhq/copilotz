@@ -13,6 +13,12 @@
  * first. While it saves, `useFormState()` says so (`submitting`), for its
  * buttons; a second submit meanwhile is ignored.
  *
+ * A failure about one field (`detail.field`: a schema's refusal of a save,
+ * or an Action's `failure` with a `detail`) shows under the `Field` of that
+ * `name`, or at the top when no field has it. A schema's words are for
+ * developers: `errors` gives people's, by field (`{ price: "Give the price
+ * as a number." }`).
+ *
  * A part shown inside another plugin's form (a View, through `ctx.show`) is
  * in that form's React tree, so it finds it. Outside any `Form`,
  * `useFormSubmit` says so (`inForm: false`), and the part shows a Submit of
@@ -46,7 +52,7 @@ import {
   useState,
 } from "react";
 import { cx } from "./cx.ts";
-import { type PartSubmit, submitAll } from "./form-submit.ts";
+import { fieldFor, type PartSubmit, submitAll } from "./form-submit.ts";
 import { say } from "./words.ts";
 import { Notice } from "./notice.tsx";
 import { sheet } from "./sheet.tsx";
@@ -60,7 +66,13 @@ type Joined = {
   join(handler: { current: PartSubmit }): () => void;
   submitting: boolean;
   error?: string;
+  /** A field shows the refusals about it, by name, while it's there: gives back what lets go. */
+  claim(name: string): () => void;
+  /** What its last save's refusal says, by the field it shows under. */
+  refused: Record<string, string>;
 };
+
+const NOTHING: Record<string, string> = {};
 
 const FormContext = createContext<Joined | null>(null);
 
@@ -70,10 +82,15 @@ const SHEET = sheet(
 );
 
 export function Form(
-  { onSubmit, gap = "md", className, children, ...rest }:
+  { onSubmit, errors, gap = "md", className, children, ...rest }:
     & {
       /** The form's own save, after its parts': given the values they handed up. */
       onSubmit?(values: Record<string, unknown>, form: HTMLFormElement): unknown;
+      /**
+       * People's words for a field a save refuses, by its name (`detail.field`): said instead of
+       * the refusal's own (a schema's are for developers).
+       */
+      errors?: Record<string, string>;
       gap?: Space;
       className?: string;
       children?: ReactNode;
@@ -87,15 +104,31 @@ export function Form(
   const busy = useRef(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
+  const [refused, setRefused] = useState(NOTHING);
   const latest = useRef(onSubmit);
   latest.current = onSubmit;
+  const words = useRef(errors);
+  words.current = errors;
+  /** The fields shown, by name: how many of each. */
+  const names = useRef(new Map<string, number>());
 
   // Joining is the same function all along: a part joins once, and keeps its place in the order.
   const join = useCallback((handler: { current: PartSubmit }) => {
     parts.current.add(handler);
     return () => void parts.current.delete(handler);
   }, []);
-  const joined = useMemo<Joined>(() => ({ join, submitting, error }), [submitting, error]);
+  const claim = useCallback((name: string) => {
+    names.current.set(name, (names.current.get(name) ?? 0) + 1);
+    return () => {
+      const left = (names.current.get(name) ?? 1) - 1;
+      if (left > 0) names.current.set(name, left);
+      else names.current.delete(name);
+    };
+  }, []);
+  const joined = useMemo<Joined>(
+    () => ({ join, submitting, error, claim, refused }),
+    [submitting, error, refused],
+  );
 
   const submitted = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -103,6 +136,7 @@ export function Form(
     busy.current = true;
     setSubmitting(true);
     setError(undefined);
+    setRefused(NOTHING);
     const form = event.currentTarget;
     const handlers = [...parts.current].map((handler) => (element: HTMLFormElement) =>
       handler.current(element)
@@ -115,7 +149,15 @@ export function Form(
     busy.current = false;
     setSubmitting(false);
     // A failure says its words, or that the form wasn't saved; a part that stopped it said why.
-    if (!done.ok && done.failed) setError(done.error ?? say("notSaved"));
+    if (!done.ok && done.failed) {
+      const at = done.field === undefined ? undefined : fieldFor(done.field, names.current.keys());
+      const own = done.field === undefined
+        ? undefined
+        : words.current?.[at ?? done.field] ?? words.current?.[done.field];
+      const said = own ?? done.error ?? say("notSaved");
+      if (at) setRefused({ [at]: said });
+      else setError(said);
+    }
   };
 
   return (
@@ -146,6 +188,18 @@ export function useFormSubmit(
   const join = form?.join;
   useEffect(() => join?.(latest), [join]);
   return { inForm: form !== null, submitting: form?.submitting ?? false };
+}
+
+/**
+ * What the `Form` around it refused of the field `name` at its last save (its words), if
+ * anything; while it's drawn, the form shows refusals of that field here, not at its top.
+ * `Field` uses it, given a `name`.
+ */
+export function useRefusal(name: string | undefined): string | undefined {
+  const form = useContext(FormContext);
+  const claim = form?.claim;
+  useEffect(() => (name && claim ? claim(name) : undefined), [name, claim]);
+  return name ? form?.refused[name] : undefined;
 }
 
 /** The `Form` around it: whether it's saving, and what stopped its last save. */

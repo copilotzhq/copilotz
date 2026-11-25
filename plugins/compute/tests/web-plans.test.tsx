@@ -335,7 +335,10 @@ function typeInto(element: HTMLInputElement, value: string) {
       element,
       value,
     );
+    // The page's own events (happy-dom's window), not the runtime's.
+    // deno-lint-ignore no-window no-window-prefix
     element.dispatchEvent(new window.Event("input", { bubbles: true }));
+    // deno-lint-ignore no-window
     element.dispatchEvent(new window.KeyboardEvent("keyup", { bubbles: true }));
   });
 }
@@ -409,7 +412,7 @@ test("the founder's test, in a page: an asleep cloud computer, an old program, i
     assert(field, "a field for the code its page gives");
     assertStringIncludes(document.body.textContent!, "Open the sign-in page");
     await typeInto(field, "c0de");
-    await act(async () => field.form!.requestSubmit());
+    await act(() => field.form!.requestSubmit());
     for (let i = 0; i < 80 && !document.body.textContent!.includes("It answered"); i++) {
       await settle(50);
       look();
@@ -524,7 +527,7 @@ test("where the plans run, with no computer: in the cloud, made in a click, reco
     assertEquals(shown.includes("On this computer"), !!visitorSystem());
     const choice = [...document.querySelectorAll("button")]
       .find((b) => b.textContent?.startsWith("In the cloud"))!;
-    await act(async () => choice.click());
+    await act(() => choice.click());
     await settle();
     assertEquals(made[0], ["cloud.create", { size: "small", in: "p" }]);
     assertEquals(made[1], ["computer.prepare", { computer: "new-cloud" }]);

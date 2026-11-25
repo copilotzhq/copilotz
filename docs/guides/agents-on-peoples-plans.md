@@ -83,29 +83,28 @@ in order: a page prices the first (a plan at $0).
 
 ## Connecting plans: one flow
 
-A person connects their plans in one flow, "Connect your plans", wherever it opens from: a plan's
-card on Your AI (Connect, or Fix), the address `/accounts?connect=<plan or provider>` (every fix-it
-link: the palette's, a chat's note), or a step of the app's welcome. It never asks them to run a
+A person connects their plans in one flow, "Connect your plans", for the plans its door picked: a
+plan's card on Your AI (Connect, or Fix), the address `/accounts?connect=<plan or provider>` (every
+fix-it link), or the app's welcome, which picks several at once. It never asks them to run a
 command:
 
-1. **Which plans.** Skipped when the door said.
-2. **Where they run,** only when a picked plan runs through an app on a computer and the person has
-   none that can run plans: "In the cloud" (recommended: made in a click, by a computer kind's
+1. **Where they run,** only when a plan runs through an app on a computer and the person has none
+   that can run plans: "In the cloud" (recommended: made in a click, by a computer kind's
    `add.quick`), or "On this computer" on a desktop browser, which says up front that it needs one
    line in a terminal, once (the computer program's download isn't signed yet).
-3. **One checklist,** each line ticking itself off: the computer readied (`computer.prepare`,
-   below); each missing CLI installed, as part of its sign-in; each sign-in in turn (a link to the
-   provider's page and a field for its code; for ChatGPT on the server, the account's own steps, the
-   `accounts.connect` View); and a short test on each plan (`llm.test`). A sign-in on the server can
-   go while the computer wakes.
+2. **One checklist:** the computer readied (`computer.prepare`, below), then one line per plan, one
+   plan at a time, through its phases: its CLI installed (as part of its sign-in, when it's
+   missing), signed in (a link to the provider's page and a field for its code; for ChatGPT on the
+   server, the account's own dialog: the `accounts.connect` View), and a short test answered on it
+   (`llm.test`). A plan on the server doesn't wait for the computer. A second plan connected later
+   finds the computer ready: `computer.prepare` only asks it what its CLIs are.
 
-Every failure ends in one button that fixes it (try again, use a cloud computer, make the computer
-yours alone, sign in again), or in one plain sentence. A command shows only when an installer
-couldn't run (it failed, or the computer runs Windows): with what it said, and the computer's
-Terminal a click away.
+Every failure ends in Try again (the computer checked again, the line run again); a laptop that's
+off also offers a cloud computer instead. A command shows only when an installer failed or can't run
+(Windows): with what it said, and the computer's Terminal a click away.
 
-The checklist is plain functions (`linesOf`, `nextOf` in `views/web/connect-lines.ts`) over what the
-flow's calls answered: never over what a record remembers.
+The checklist is plain functions (`linesOf`, `nextOf`, `retry` in `views/web/connect-lines.ts`) over
+what the flow's calls answered: never over what a record remembers.
 
 The sign-in stays on the computer, in a folder the computer program keeps for each CLI, apart from
 the person's own use of it. The app keeps only whether it's done, and as whom. On their own machine
@@ -178,8 +177,7 @@ adds two sections:
   where it runs now and its backup ("Running on MacBook (online), with Cloud computer ready as
   backup"), its limit, and one action: Connect, Fix or Sign out. With the app's tiers, the plans are
   theirs to list (the `planList` resource: `{ query, order }`, `modelChoice.harnesses` and
-  `tiers.harnesses`), and the person orders them (Move up, Move down). Without, every plan the app
-  has shows.
+  `tiers.harnesses`), and the person orders them (Move up). Without, every plan the app has shows.
 - **Your computers:** each one's state, the plans it runs, its month (the `computer.cost` View, in
   `month` mode), and its Terminal. A card a cloud computer serves says its hour (`cost`), and "In
   the cloud" its price (`price`).
@@ -343,8 +341,15 @@ is charged while it's awake."
 - On a laptop, a CLI installed where the program doesn't look (npm's prefix under a version manager,
   not on the program's `PATH`) isn't found: the page then shows the command to run by hand.
 - A computer program older than 1.0.0-rc.65 neither installs a CLI nor signs one out. The connect
-  flow updates the program first (`computer.prepare`); a cloud computer can't be newer than its
-  pool's VMs, and when they're older the flow says so.
+  flow updates the program first (`computer.prepare`); a computer that can't be brought to the app's
+  program is used as it is.
+- A computer shared with others' agents doesn't run plans: Your AI shows such a plan as not
+  connected, and Connect sets it up on another computer, or a cloud one.
+- The flow connects a plan's first way in: ChatGPT through Codex isn't offered beside ChatGPT on the
+  server.
+- The flow signs a plan in on the person's best computer: a second one, a backup, is one they've
+  signed in on before.
+- A test of a model the plan doesn't include shows as a failure, in the provider's words.
 - On Windows a plan's CLI is installed from the computer's Terminal: the flow shows its command.
 - "On this computer" needs one line in its terminal, once: the program's download isn't signed yet.
 - A cloud computer awake on an older program when a plan is set up there is restarted: the jobs it

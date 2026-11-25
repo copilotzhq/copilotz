@@ -13,14 +13,15 @@ app's welcome.
 **New:**
 
 - **One connect flow.** "Connect your plans" opens from a plan's card on Your AI (Connect, Fix), the
-  address `/accounts?connect=<plan or provider>[&on=<computer>]` (every fix-it link) and a step of
-  the app's welcome. It asks where the plans run only when one runs through an app on a computer and
-  the person has none that can: in the cloud (made in a click by a computer kind's `add.quick`), or
-  on this computer (on a desktop browser, saying it needs one line in a terminal, once). Then one
-  checklist, each line ticking itself off: the computer readied, each missing CLI installed in its
-  sign-in, each sign-in in turn, and a test on each plan. Every failure ends in one button that
-  fixes it, or one plain sentence; a command shows only when an installer couldn't run, with its
-  output and the computer's Terminal a click away.
+  address `/accounts?connect=<plan or provider>` (every fix-it link) and a step of the app's
+  welcome, which picks several at once. It asks where the plans run only when one runs through an
+  app on a computer and the person has none that can: in the cloud (made in a click by a computer
+  kind's `add.quick`), or on this computer (on a desktop browser, saying it needs one line in a
+  terminal, once). Then one checklist: the computer readied, then one line per plan, one at a time,
+  through its phases: its CLI installed as it signs in, signed in, and a test answered on it. Every
+  failure ends in Try again (a laptop that's off also offers a cloud computer); a command shows only
+  when an installer failed or can't run (Windows), with its output and the computer's Terminal a
+  click away.
 - **`computer.prepare`** `{ computer }` readies one of the person's computers for plans, checking
   each time: woken (a cloud computer), its program brought to the app's release (a cloud computer is
   restarted on a new VM, through `computerWake`'s new `sleep`; a laptop is offered the release and
@@ -35,8 +36,8 @@ app's welcome.
   pay for models among the plans. Computers' front end adds Your plans (a card per plan the app
   uses, where it runs now and its backup, its limit, one action; the person's order, from the tiers'
   `planList`) and Your computers (state, the plans each runs, its month, its Terminal).
-  `accounts.connect` connects one account in place. The page's frame and connect steps are in
-  Brazilian Portuguese too.
+  `accounts.connect` is a plan on the server's line in the flow: a button that opens its dialog. The
+  page's frame and connect dialog are in Brazilian Portuguese too.
 - **The welcome's step.** `computer.plans.welcome`, for chat's `welcome` resource: "Which AI plans
   do you have?", then the flow.
 - **A plan at its limit** is kept on the computer (`engines.<engine>.limited`) until a call there
@@ -65,7 +66,14 @@ app's welcome.
 - "On this computer" needs one line in its terminal, once: the program's download isn't signed yet.
 - A cloud computer awake on an older program when a plan is set up there is restarted: the jobs it
   keeps start again; others stop.
-- A cloud computer can't be newer than its pool's VMs; when they're older, the flow says so.
+- A computer that can't be brought to the app's program is used as it is.
+- A computer shared with others' agents doesn't run plans: Your AI shows such a plan as not
+  connected, and Connect sets it up on another computer, or a cloud one.
+- The flow connects a plan's first way in: ChatGPT through Codex isn't offered beside ChatGPT on the
+  server.
+- The flow signs a plan in on the person's best computer: a second one, a backup, is one they've
+  signed in on before.
+- A test of a model the plan doesn't include shows as a failure, in the provider's words.
 - ChatGPT on the server doesn't show its limit on its card.
 - With tiers, the cards follow the app's tiers, not tiers an org saved of its own.
 

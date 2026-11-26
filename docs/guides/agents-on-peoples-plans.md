@@ -182,7 +182,9 @@ to paste back. It keeps a user API key Cursor makes for it (90 days), in that fo
 ### A test, on the plan
 
 `llm.test` `{ model }` makes one short call on a model the person's own plan pays for (a provider
-tagged `paid: "subscription"`), to show it answers there. It takes one model, never a list, so
+tagged `paid: "subscription"`), to show it answers there. The flow tests a plan on the first model
+the app's tiers run on it, as `modelChoice.harnesses` lists it once it shows the plan connected:
+listed since its sign-in, by the models the plan said it runs. It takes one model, never a list, so
 nothing falls to another; its words are fixed; a model the app pays for is refused (`invalid`). A
 failure keeps its code: at its limit (`engine_limit`) the plan is still connected, and the flow says
 so.
@@ -357,6 +359,8 @@ it is charged while it's awake."
   for a chain entry that sets an effort it has.
 - A computer program older than 1.0.0-rc.68 says no list: its plans go by their `serves` maps
   (Antigravity by Google's API names, which it doesn't run) until it updates.
+- A connected plan whose list runs none of the tiers' models doesn't show among Your AI's plans.
+- Cursor's status asks Cursor's servers for its models, for up to 10 s.
 - With one plan, a tier's checker can run on the same maker's models as its builder: plans come
   first, whatever the vendor.
 - A plan at its limit is tried first on each call until it resets: it fails in seconds.

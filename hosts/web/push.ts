@@ -107,3 +107,41 @@ export async function turnPushOff(call: Call): Promise<PushState> {
 
 const same = (a: Uint8Array, b: Uint8Array) =>
   a.length === b.length && a.every((byte, i) => byte === b[i]);
+
+/**
+ * Tells the app whether this tab shows it (`push.looking`), as it shows and
+ * hides and every half minute while it shows, so a person looking at the
+ * app gets no notification on any device. An app without push answers the
+ * first call with an error, and the tab stops saying. Returns a stop.
+ */
+export function reportLooking(
+  call: Call,
+  doc: Document | undefined = globalThis.document,
+): () => void {
+  if (!doc) return () => {};
+  const tab = [...crypto.getRandomValues(new Uint8Array(12))]
+    .map((b) => b.toString(16).padStart(2, "0")).join("");
+  let off = false;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const say = (visible: boolean) => {
+    if (off) return;
+    call("push.looking", { tab, visible }).catch(() => stop());
+  };
+  const changed = () => {
+    const visible = doc.visibilityState === "visible";
+    say(visible);
+    clearInterval(timer);
+    timer = visible ? setInterval(() => say(true), 30_000) : undefined;
+  };
+  const hidden = () => say(false);
+  const stop = () => {
+    off = true;
+    clearInterval(timer);
+    doc.removeEventListener("visibilitychange", changed);
+    globalThis.removeEventListener?.("pagehide", hidden);
+  };
+  doc.addEventListener("visibilitychange", changed);
+  globalThis.addEventListener?.("pagehide", hidden);
+  changed();
+  return stop;
+}

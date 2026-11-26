@@ -13,6 +13,9 @@
  * - **Sending** (`push.send`, the app's own code only): to each of a
  *   person's devices, encrypted for it (RFC 8291) and signed with the app's
  *   key (RFC 8292); a device its push service says is gone is forgotten.
+ * - **When** (processors/notify.ts): an agent asks for a person's yes, or a
+ *   message is to them, and no tab of theirs shows the app (`push.looking`,
+ *   which each tab says as it shows and hides).
  * - **The worker** (hosts/web/pwa.ts) shows what arrives, and a tap opens
  *   the app where the notification points, in a window already open when
  *   there is one.
@@ -27,7 +30,9 @@
  * ```
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
-import { sendAction } from "./actions/send.ts";
+import { lookingAction, sendAction } from "./actions/send.ts";
+import { pushLooking } from "./collections/looking.ts";
+import { askedProcessor, messageProcessor } from "./processors/notify.ts";
 import { keyAction, subscribeAction, unsubscribeAction } from "./actions/subscribe.ts";
 import { pushSubscription } from "./collections/subscription.ts";
 import { rules } from "./shared/rules.ts";
@@ -38,12 +43,17 @@ export { vapidKeys } from "./shared/webpush.ts";
 
 export const push: Plugin = definePlugin({
   name: "push",
-  collections: { pushSubscription },
+  collections: { pushSubscription, pushLooking },
   actions: {
     "push.subscribe": subscribeAction,
     "push.unsubscribe": unsubscribeAction,
     "push.key": keyAction,
     "push.send": sendAction,
+    "push.looking": lookingAction,
+  },
+  processors: {
+    "push.asked": askedProcessor,
+    "push.message": messageProcessor,
   },
   guard: rules,
   resources: { push: {} },

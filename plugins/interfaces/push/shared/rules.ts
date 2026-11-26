@@ -8,6 +8,7 @@ import { failure, type Guard } from "../../../../runtime/mod.ts";
 const NOBODY = { _id: { $in: [] } };
 
 export const rules: Guard = (actor, { collection, access, direct }) => {
+  if (collection === "pushLooking") return NOBODY;
   if (collection !== "pushSubscription") return undefined;
   if (direct && access === "write") {
     throw failure("forbidden", "Notifications are turned on and off through their Actions.", {

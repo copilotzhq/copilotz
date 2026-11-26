@@ -11,7 +11,14 @@
  */
 export { go, signOut, web, type WebOptions, type Where, type Who } from "./host.tsx";
 // Push notifications for this browser (plugins/interfaces/push's front end turns them on).
-export { deviceName, type PushState, pushState, turnPushOff, turnPushOn } from "./push.ts";
+export {
+  deviceName,
+  type PushState,
+  pushState,
+  reportLooking,
+  turnPushOff,
+  turnPushOn,
+} from "./push.ts";
 export { appBase } from "./base.ts";
 // The words every front end says, by key: the app's `words` resource over the English.
 export {

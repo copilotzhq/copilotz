@@ -150,6 +150,9 @@ export function workerOf(
     title?: string;
   },
 ): string {
+  // A notification's icon: the app's own, drawn from its mark, when it has one.
+  const mark = theme ? pictureOf(theme.logo?.mark) : undefined;
+  const icon = mark && typeof mark !== "string" ? ICONS.small : undefined;
   const config = JSON.stringify({
     version,
     code,
@@ -157,6 +160,8 @@ export function workerOf(
     precache,
     assets: HOST_ASSETS,
     offline: offlinePage(theme, title),
+    title,
+    ...(icon ? { icon } : {}),
   }).replaceAll("<", "\\u003c");
   return `// The app's service worker (version ${
     version.replace(/[^\w.-]/g, "")
@@ -227,6 +232,51 @@ self.addEventListener("fetch", (event) => {
   if (url.pathname.startsWith(CONFIG.assets) && !url.search) {
     return event.respondWith(fresh(request));
   }
+});
+
+/** Where a notification points: a path in the app, never another site. */
+function within(path) {
+  try {
+    const url = new URL(path || "/", self.location.origin);
+    return url.origin === self.location.origin ? url.href : self.location.origin + "/";
+  } catch {
+    return self.location.origin + "/";
+  }
+}
+
+// A push (plugins/interfaces/push): every one is shown, as browsers require of a visible push.
+self.addEventListener("push", (event) => {
+  let notice = {};
+  try {
+    notice = event.data ? event.data.json() : {};
+  } catch {
+    notice = { body: event.data ? event.data.text() : "" };
+  }
+  const title = typeof notice.title === "string" && notice.title ? notice.title : CONFIG.title;
+  event.waitUntil(self.registration.showNotification(title, {
+    body: typeof notice.body === "string" ? notice.body : "",
+    ...(typeof notice.tag === "string" && notice.tag ? { tag: notice.tag, renotify: true } : {}),
+    ...(CONFIG.icon ? { icon: CONFIG.icon, badge: CONFIG.icon } : {}),
+    data: { url: within(notice.url) },
+  }));
+});
+
+// A tap opens where it points: in a window of the app already open (moved there), else a new one.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = within(event.notification.data && event.notification.data.url);
+  event.waitUntil((async () => {
+    const open = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const mine = open.find((client) => new URL(client.url).origin === self.location.origin);
+    if (mine) {
+      const focused = await mine.focus();
+      if (focused) {
+        focused.postMessage({ type: "copilotz:open", url });
+        return;
+      }
+    }
+    await self.clients.openWindow(url);
+  })());
 });
 `;
 }

@@ -602,6 +602,29 @@ Generated: `deno run -A hosts/web/tests/keys.ts`.
 | `palette.toGoBack` | to go back |
 | `palette.toMove` | to move |
 
+## push
+
+| Key | English |
+|---|---|
+| `push.about` | When something waits on you (an agent asking for your yes, a reply in a chat you started, someone writing to you) and the app isn't open, we tell you on the devices you turn them on for. Nothing while you're looking at the app. |
+| `push.blocked` | Notifications are blocked for this app in your browser's settings. Allow them there, then come back. |
+| `push.install` | On iPhone and iPad, notifications come only to the app on your Home Screen: tap Share, then Add to Home Screen, open it from there and turn them on. |
+| `push.notSetUp` | Notifications aren't set up in this app yet. |
+| `push.off` | Off |
+| `push.offText` | Turn them on to be told here when something waits on you. |
+| `push.on` | On |
+| `push.onText` | You'll be told here when something waits on you. |
+| `push.others` | Your devices |
+| `push.othersEmpty` | No device has notifications on yet. |
+| `push.remove` | Turn off for {device} |
+| `push.since` | on since {when} |
+| `push.thisDevice` | On this device |
+| `push.thisOne` | this device |
+| `push.title` | Notifications |
+| `push.turnOff` | Turn off |
+| `push.turnOn` | Turn on |
+| `push.unsupported` | This browser can't show notifications from the app. |
+
 ## shell
 
 | Key | English |

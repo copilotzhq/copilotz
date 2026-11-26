@@ -207,7 +207,8 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
     );
   draw(null);
   // Installable, and told when a new version is ready (see pwa.ts).
-  registerWorker();
+  // A tapped notification moves this window where it points (see pwa.ts).
+  registerWorker({ open: go });
   // Opened by an invitation's link (email sign-in's): its person chooses a password first,
   // whoever this browser was.
   const invite = options.arrive ? undefined : inviteOf(location.hash);

@@ -1,6 +1,6 @@
 /**
  * Interfaces: how people and code reach the runtime: the terminal, the
- * developer API (keys, `/api/`), web lines (visitors of a page), WhatsApp, the phone (voice), MCP (a model outside calling the
+ * developer API (keys, `/api/`), web lines (visitors of a page), WhatsApp, the phone (voice), push notifications, MCP (a model outside calling the
  * app's tools), and maintenance (operators, `/maintenance/`).
  */
 export * from "./terminal/mod.ts";
@@ -10,3 +10,4 @@ export * from "./voice/mod.ts";
 export * from "./mcp/mod.ts";
 export * from "./web/lines.ts";
 export * from "./maintenance/mod.ts";
+export * from "./push/mod.ts";

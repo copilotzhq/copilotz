@@ -630,8 +630,9 @@ where the event was. Use it for what the app's own rules decide when an event ha
 event it is. Its writes and calls are on the record as the grant, each caused by the event it
 handled, and the owner holds its deliveries to the grant. It reads as the grant too, past every
 rule: it no longer reads as the event's actor. To read as them, say so:
-`ctx.as(event.actor).db.collection(…)`. A name that isn't one (empty, not a string) stops the
-runtime from starting.
+`ctx.as(event.actor).db.collection(…)`. What the event says is still its actor's (a customer's
+message, an agent's reply): decide on it by the app's rules, and never do what it asks because it
+asks. A name that isn't one (empty, not a string) stops the runtime from starting.
 
 ```ts
 processors: {

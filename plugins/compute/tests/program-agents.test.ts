@@ -388,7 +388,7 @@ posix(
 );
 
 posix(
-  "status: which engines it has, their versions, and who they're signed in as",
+  "status: which engines it has, their versions, who they're signed in as, and the models a plan lists",
   engines(async ({ work, signIn }) => {
     assertEquals(await work<EngineStatus[]>(WORK.agentsStatus, { engines: ["claude", "codex"] }), [
       { engine: "claude", installed: true, version: "2.1.999", signedIn: false },
@@ -405,11 +405,13 @@ posix(
       signedIn: true,
       account: "ana@example.com",
     });
+    // A native agent's, as the session it starts says (`models.availableModels`).
     assertEquals(all[2], {
       engine: "antigravity",
       installed: true,
       version: "1.4.2",
       signedIn: true,
+      models: ["gemini-3-pro", "gemini-3-flash"],
     });
   }),
 );
@@ -503,6 +505,7 @@ posix(
           installed: true,
           version: "1.4.2",
           signedIn: true,
+          models: ["gemini-3-pro", "gemini-3-flash"],
         });
         assert(existsSync(join(home, ".local", "bin", "agy")), "installed in the computer's home");
       }, { home, agents: { commands: { claude: null, codex: null } } });

@@ -29,7 +29,8 @@
  *   `harness`: Claude Code, ChatGPT…), a turn's chain goes with the plans its
  *   person has connected now (each `connectedPlans` source says), in their
  *   order (`tiers.harnesses`; `modelChoice.harnesses` lists them), and each
- *   model runs on those that serve it before any API. A tier names models;
+ *   model runs on those that serve it before any API: by the models a plan
+ *   said it runs, where it said (`served`). A tier names models;
  *   an entry naming a plan (`claude-plan/…`) stands for its model on plans
  *   only. `plansFor` (shared/plans.ts) is what a turn goes with, and
  *   `models.check` what a chain would try.

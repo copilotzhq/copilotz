@@ -42,7 +42,8 @@
  * A list of models is tried in order. Given a person's plans (`harnesses`:
  * providers with `harness`, like `claude-plan` or `chatgpt`), each model runs
  * on theirs that serve it first, and on its API after every plan (see
- * shared/plans.ts); a `connectedPlans` resource says which they have.
+ * shared/plans.ts); a `connectedPlans` resource says which they have, and
+ * which models those that said so run (`served`).
  *
  * Any plugin adds adapters of its own under `adapters.llm`,
  * `adapters.embeddings`, `adapters.transcription` or `adapters.image`.

@@ -17,7 +17,7 @@
  *   honored.
  *
  * `models` says whether it's signed in (a file in its `GROK_HOME`,
- * `fake-auth.json`), `logout` deletes it, `login --device-code` shows a link
+ * `fake-auth.json`), and lists its models, as Grok does; `logout` deletes it, `login --device-code` shows a link
  * and a code, then signs in. Sessions are kept in its `GROK_HOME`, so a later
  * process resumes them (`-r`); `-s` makes a new one.
  */

@@ -24,6 +24,11 @@
  * empty: but for a native agent's rules (`AGENTS.md`, its instructions),
  * which it has no prompt of its own to replace with.
  *
+ * Its status says whether each is signed in, as whom, and the models its
+ * plan runs, where it lists them: Antigravity's in the session it starts,
+ * Grok Build's in `grok models`, Cursor's from its SDK. Claude Code and
+ * Codex list none: they run their maker's models by the API's names.
+ *
  * Signing in is the CLI's own, polled like the terminal (`login`), and so is
  * signing out (`logout`), run in its home: Claude Code's, Codex's and
  * Grok Build's sign-ins are there, so their home goes when it fails. Antigravity has no
@@ -170,12 +175,15 @@ export const ENGINES: Record<string, Engine> = {
     login: ["login", "--device-code"],
     logout: ["logout"],
     async signedIn(run) {
-      // "You are logged in with grok.com.", or "You are not authenticated." (its exit is 0 either way).
+      // "You are logged in with grok.com.", or "You are not authenticated." (its exit is 0 either way),
+      // then its models, one a line: "Available models:", "  * grok-4.7 (default)", "  - grok-4.6".
       const { code, stdout, stderr } = await run(["models"]);
       const said = `${stdout}\n${stderr}`;
-      return {
-        signedIn: code === 0 && /logged in with/i.test(said) && !/not authenticated/i.test(said),
-      };
+      const signedIn = code === 0 && /logged in with/i.test(said) &&
+        !/not authenticated/i.test(said);
+      const listed = said.split(/available models:/i)[1] ?? "";
+      const models = [...listed.matchAll(/^\s*[*-]\s+(\S+)/gm)].map((found) => found[1]);
+      return { signedIn, ...(signedIn && models.length ? { models } : {}) };
     },
   },
   cursor: {
@@ -199,6 +207,7 @@ export const ENGINES: Record<string, Engine> = {
         return {
           signedIn: said.signedIn === true,
           ...(said.signedIn && said.account ? { account: String(said.account) } : {}),
+          ...(said.signedIn && Array.isArray(said.models) ? { models: said.models } : {}),
         };
       } catch {
         return { signedIn: false };
@@ -375,8 +384,11 @@ export function createEngines(options: EnginesOptions): Engines {
     return dir;
   };
 
-  /** Whether a native agent is signed in: whether it starts a session. */
-  const probe = async (found: Found): Promise<boolean> => {
+  /**
+   * Whether a native agent is signed in: whether it starts a session; and
+   * the models its plan runs, as the session says (`models.availableModels`).
+   */
+  const probe = async (found: Found): Promise<{ signedIn: boolean; models?: string[] }> => {
     const peer = launch(found);
     const timer = setTimeout(() => void peer.close(), ASKING);
     try {
@@ -386,10 +398,15 @@ export function createEngines(options: EnginesOptions): Engines {
         protocolVersion: 1,
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
       });
-      await peer.request("session/new", { cwd, mcpServers: [] });
-      return true;
+      type Answer = { models?: { availableModels?: unknown } };
+      const answer = await peer.request<Answer>("session/new", { cwd, mcpServers: [] });
+      const offered = answer?.models?.availableModels;
+      const models = (Array.isArray(offered) ? offered : [])
+        .map((model: { modelId?: unknown } | null) => model?.modelId)
+        .filter((id): id is string => typeof id === "string");
+      return { signedIn: true, ...(models.length ? { models } : {}) };
     } catch {
-      return false;
+      return { signedIn: false };
     } finally {
       clearTimeout(timer);
       await peer.close();
@@ -399,7 +416,7 @@ export function createEngines(options: EnginesOptions): Engines {
   const signedIn = (found: Found) =>
     found.engine.signedIn
       ? found.engine.signedIn((args, stdin) => run(found, args, stdin))
-      : probe(found).then((signedIn) => ({ signedIn }));
+      : probe(found);
 
   const statusOf = async (name: string): Promise<EngineStatus> => {
     let found: Found;

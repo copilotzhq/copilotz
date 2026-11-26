@@ -126,6 +126,9 @@ export type Engine = {
    * can't be signed out from here (its sign-in may be the system keyring's).
    */
   logout?: string[];
-  /** Whether it's signed in, and as whom: a native agent without this is asked for a session. */
-  signedIn?(run: Run): Promise<{ signedIn: boolean; account?: string }>;
+  /**
+   * Whether it's signed in, as whom, and the models its plan runs, when it
+   * lists them: a native agent without this is asked for a session.
+   */
+  signedIn?(run: Run): Promise<{ signedIn: boolean; account?: string; models?: string[] }>;
 };

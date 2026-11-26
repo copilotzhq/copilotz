@@ -3,12 +3,13 @@
  * the models plugin's), in the person's order (`harnesses` on their
  * `person:<id>` choice: theirs first, then the rest in the app's), and
  * those they've connected now (each `connectedPlans` source, asked as them
- * on every turn, never kept here). A turn's chain goes with them
- * (`{ model, harnesses }`), and the models plugin runs each model on them
- * first. What a chain would try, in order, is `models.check`'s answer.
+ * on every turn, never kept here), with the models those that said so run.
+ * A turn's chain goes with them (`{ model, harnesses, served }`), and the
+ * models plugin runs each model on them first. What a chain would try, in
+ * order, is `models.check`'s answer.
  */
 import { personOf, type ReadContext, type Resources } from "copilotz";
-import type { ConnectedPlans, Provider } from "copilotz/plugins/models/contract";
+import type { ConnectedPlans, PlansConnected, Provider } from "copilotz/plugins/models/contract";
 import { orgTiersOf } from "./shown.ts";
 import { type Choice, personChoice } from "./tiers.ts";
 
@@ -44,35 +45,67 @@ export function orderOf(ctx: { resources: Resources }, mine: string[] = []): str
   return [...theirs, ...byDefault.filter((name) => !theirs.includes(name))];
 }
 
-/** The plans the person a call is for has connected now, as each source says (as them). */
-export async function connectedOf(ctx: Pick<ReadContext, "resources" | "call">) {
+/**
+ * A person's plans, as a model list goes with them (`{ model, ...plans }`):
+ * those they can run now, in their order, and the models those that said so
+ * run (`served`, by plan), when any did.
+ */
+export type Plans = { harnesses: string[]; served?: Record<string, string[]> };
+
+/**
+ * The plans the person a call is for has connected now, as each source says
+ * (as them), each with the models it said it runs, when it said.
+ */
+export async function connectedOf(
+  ctx: Pick<ReadContext, "resources" | "call">,
+): Promise<Map<string, string[] | undefined>> {
   const sources = Object.values(
     (ctx.resources.connectedPlans ?? {}) as Record<string, ConnectedPlans | null>,
   ).filter((source): source is ConnectedPlans => !!source?.action);
   const said = await Promise.all(
-    sources.map((source) => ctx.call<string[]>(source.action, {}).catch(() => [] as string[])),
+    sources.map((source) =>
+      ctx.call<PlansConnected>(source.action, {}).catch(() => [] as PlansConnected)
+    ),
   );
-  return new Set(said.flat());
+  return new Map(
+    said.flat().map((plan) =>
+      typeof plan === "string" ? [plan, undefined] : [plan.plan, plan.models]
+    ),
+  );
+}
+
+/** Of `connected` (connectedOf's), the person's plans in their order (`mine`), with their lists. */
+export function plansOf(
+  ctx: { resources: Resources },
+  connected: Map<string, string[] | undefined>,
+  mine?: string[],
+): Plans {
+  const harnesses = orderOf(ctx, mine).filter((name) => connected.has(name));
+  const served = Object.fromEntries(
+    harnesses.flatMap((name) => connected.get(name) ? [[name, connected.get(name)!]] : []),
+  );
+  return { harnesses, ...(Object.keys(served).length ? { served } : {}) };
 }
 
 /**
  * The plans the person a call is for can run now, in their order (`mine`:
- * their `harnesses`): what a model list goes with (`{ model, harnesses }`).
+ * their `harnesses`), with the models those that said so run: what a model
+ * list goes with (`{ model, ...plans }`).
  */
 export async function plansFor(
   ctx: Pick<ReadContext, "resources" | "call" | "actor">,
   mine?: string[],
-): Promise<string[]> {
-  if (!personOf(ctx.actor) || !Object.keys(harnessesOf(ctx)).length) return [];
-  const connected = await connectedOf(ctx);
-  return orderOf(ctx, mine).filter((name) => connected.has(name));
+): Promise<Plans> {
+  if (!personOf(ctx.actor) || !Object.keys(harnessesOf(ctx)).length) return { harnesses: [] };
+  return plansOf(ctx, await connectedOf(ctx), mine);
 }
 
 /**
  * The app's plans, as a person orders them: those that run a model some
- * tier of the org names (each chain, as it would be tried on every plan), in
- * their order, each with whether they've connected it now, and the first
- * model, in tier order, it runs.
+ * tier of the org names (each chain, as it would be tried on every plan, by
+ * the lists of those they've connected that said one), in their order, each
+ * with whether they've connected it now, and the first model, in tier order,
+ * it runs.
  */
 export async function harnessesShown(ctx: ReadContext): Promise<HarnessShown[]> {
   const plans = harnessesOf(ctx);
@@ -86,10 +119,14 @@ export async function harnessesShown(ctx: ReadContext): Promise<HarnessShown[]> 
   ]);
   const chains = Object.values(tiers).sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
     .flatMap((tier) => Object.values(tier.agents));
+  // Every plan, those that said which models they run by their lists.
+  const { served } = plansOf(ctx, connected);
   const tried = await Promise.all(
     chains.map((chain) =>
-      ctx.call<string[]>("models.check", { model: { model: chain, harnesses: all }, port: "llm" })
-        .catch(() => [] as string[])
+      ctx.call<string[]>("models.check", {
+        model: { model: chain, harnesses: all, ...(served ? { served } : {}) },
+        port: "llm",
+      }).catch(() => [] as string[])
     ),
   );
   // Each plan a chain runs, with the first model it runs there.

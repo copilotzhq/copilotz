@@ -7,8 +7,8 @@
  * - A model is `"provider/model"`, with the settings to call it with next to
  *   it (`effort`, `maxTokens`, … by port). A list is tried in order. A name
  *   without a slash is an alias from `resources.model`.
- * - Given a person's plans (`harnesses`), a list runs on them first: see
- *   plans.ts.
+ * - Given a person's plans (`harnesses`, and the models some said they run:
+ *   `served`), a list runs on them first: see plans.ts.
  * - The catalog (models.dev, snapshotted in `catalog.json`) fills in what a
  *   provider resource leaves out: its protocol and URL, and per model its
  *   cost, how its reasoning is controlled and its limits. It's loaded the
@@ -150,7 +150,9 @@ export type Harness = {
   /**
    * The models it runs, by their API id (`"anthropic/claude-opus-5-5"`) or a
    * provider's every one (`"anthropic/*"`), each by its own name for it
-   * (`"*"`: the same). An id wins over its provider's `"*"`.
+   * (`"*"`: the same). An id wins over its provider's `"*"`. Only until the
+   * plan says which models it runs (`served`, on a model list): its list
+   * wins then.
    */
   serves: Record<string, string>;
   /**
@@ -180,6 +182,12 @@ export type ModelSettings = {
    * as written.
    */
   harnesses?: string[];
+  /**
+   * The models some of those plans said they run, by plan, each by the
+   * plan's own name (`{ "gemini-plan": ["gemini-4-hydrogen-high", …] }`): a
+   * plan here runs a model by its list, not its `serves` map (see plans.ts).
+   */
+  served?: Record<string, string[]>;
   [setting: string]: unknown;
 };
 
@@ -266,11 +274,11 @@ function choices(
     return choices(resources, alias, {}, [...aliases, ref])
       .map((c) => ({ id: c.id, settings: over(c.settings, inherited) }));
   }
-  const { model, harnesses, ...settings } = ref;
+  const { model, harnesses, served, ...settings } = ref;
   if (model === undefined) throw invalid("Model settings without a `model`");
   const found = choices(resources, model, over(inherited, defined(settings)), aliases);
   return Array.isArray(harnesses)
-    ? plansFirst((resources.provider ?? {}) as Record<string, Provider>, found, harnesses)
+    ? plansFirst((resources.provider ?? {}) as Record<string, Provider>, found, harnesses, served)
     : found;
 }
 

@@ -7,7 +7,8 @@
  * JavaScript, so Node runs it as it is.
  *
  * Run with a word, it's a CLI of its own: `version` (the SDK's), `status`
- * (`{ signedIn, account? }`, read from its home: nothing asked of Cursor),
+ * (`{ signedIn, account?, models? }`: its sign-in read from its home, and the
+ * models Cursor lists for the account, left out when Cursor can't be asked),
  * `login` (Cursor's own sign-in: a link, and it waits until it's done there;
  * nothing goes back to it) and `logout`. The sign-in is a user API key kept
  * in its home (`auth.json`, only its user reads it), apart from the person's
@@ -42,7 +43,16 @@ if (mode === "version") {
 if (mode === "status") {
   const said = await Cursor.auth.status({ store });
   const signedIn = said.status === "logged-in";
-  console.log(JSON.stringify({ signedIn, ...(signedIn && said.email ? { account: said.email } : {}) }));
+  // The models the plan runs, as Cursor lists them for its account: none when it can't be asked.
+  const listed = async () =>
+    (await Cursor.models.list({ apiKey: (await store.load()).apiKey })).map((m) => m.id);
+  const late = () => new Promise((_, reject) => setTimeout(() => reject(new Error("late")), 10000));
+  const models = signedIn ? await Promise.race([listed(), late()]).catch(() => undefined) : undefined;
+  console.log(JSON.stringify({
+    signedIn,
+    ...(signedIn && said.email ? { account: said.email } : {}),
+    ...(models?.length ? { models } : {}),
+  }));
   process.exit(0);
 }
 if (mode === "login") {

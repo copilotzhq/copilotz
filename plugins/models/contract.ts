@@ -22,7 +22,8 @@
  * - `models.keyable` { provider } → boolean: whether a key can be brought for it
  * - the `modelKeys` resource: where orgs' own keys are kept (ModelKeys)
  * - the `modelUse` resource: UseListener entries, told each call's use in the job that made it
- * - the `connectedPlans` resource: which of a person's plans they've connected (ConnectedPlans)
+ * - the `connectedPlans` resource: which of a person's plans they've connected (ConnectedPlans),
+ *   and the models those that said so run (PlansConnected)
  */
 import type { Cost } from "./shared/choice.ts";
 
@@ -62,11 +63,19 @@ export { mayUse, used } from "./shared/use.ts";
 /**
  * A `connectedPlans` resource: the Action saying which plans (providers with
  * `harness`) the person a call is for has connected now: `{}` in, called as
- * them or an agent working for them; provider names out (`["chatgpt"]`). The
- * accounts plugin says for the accounts people connect, the computers plugin
- * for the plans signed in on their computers.
+ * them or an agent working for them; `PlansConnected` out. The accounts
+ * plugin says for the accounts people connect, the computers plugin for the
+ * plans signed in on their computers.
  */
 export type ConnectedPlans = { action: string };
+
+/**
+ * What a `connectedPlans` Action answers: each plan by its provider's name
+ * (`"chatgpt"`), or, when it said which models it runs, with them, by its
+ * own names (`{ plan: "gemini-plan", models: ["gemini-4-hydrogen-high"] }`:
+ * a model list's `served`).
+ */
+export type PlansConnected = (string | { plan: string; models: string[] })[];
 
 /** What `models.price` answers: the catalog's cost for a model, and which catalog said it. */
 export type Price = { cost?: Cost; source: string };

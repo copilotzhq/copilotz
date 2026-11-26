@@ -330,6 +330,11 @@ export type EngineStatus = {
   signedIn: boolean;
   /** Who it's signed in as, when it says. */
   account?: string;
+  /**
+   * The models its plan runs, by its own names, when it lists them
+   * (Antigravity, Grok Build, Cursor): signed in only.
+   */
+  models?: string[];
 };
 
 /** `computer.agents.status`: these engines (every one unless given). */

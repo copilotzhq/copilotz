@@ -14,7 +14,8 @@
  * agent's alike, and a tier's price is its agents' average.
  *
  * With the person's plans (`plansFor`: those they can run now, in their
- * order), each chain is also priced as their turns would run it: at the
+ * order, and the models those that said so run), each chain is also priced
+ * as their turns would run it: at the
  * first model it would try for them (`models.check`, plans first), one of
  * their plans costing them nothing (`plan`), and a tier's price for them
  * (`yours`) beside the app's (`price`, which pages choosing for others show).
@@ -23,7 +24,7 @@ import type { ReadContext } from "copilotz";
 import type { ModelRef, OfferedModel, Provider } from "copilotz/plugins/models/contract";
 import { agentsOf } from "copilotz/plugins/agents/contract";
 import { personOf } from "copilotz";
-import { plansFor } from "./plans.ts";
+import { type Plans, plansFor } from "./plans.ts";
 import {
   type By,
   type Choice,
@@ -212,17 +213,17 @@ const entriesOf = (ctx: ReadContext, ref: ModelRef) =>
   });
 
 /**
- * For each use, the plan of the person's (`harnesses`) its chain would run
- * on first, as their turns try it (`models.check`), when it's a plan; each
+ * For each use, the plan of the person's (`theirs`) its chain would run on
+ * first, as their turns try it (`models.check`), when it's a plan; each
  * chain asked once.
  */
-async function planFirsts(ctx: ReadContext, uses: Use[], harnesses: string[]) {
+async function planFirsts(ctx: ReadContext, uses: Use[], theirs: Plans) {
   const asked = new Map<string, Promise<string | undefined>>();
   const firstOf = (ref: ModelRef) => {
     const key = JSON.stringify(ref);
     let found = asked.get(key);
     if (!found) {
-      found = ctx.call<string[]>("models.check", { model: { model: ref, harnesses }, port: "llm" })
+      found = ctx.call<string[]>("models.check", { model: { model: ref, ...theirs }, port: "llm" })
         .then((tried) => tried[0], () => undefined);
       asked.set(key, found);
     }
@@ -230,7 +231,7 @@ async function planFirsts(ctx: ReadContext, uses: Use[], harnesses: string[]) {
   };
   const firsts = await Promise.all(uses.map((use) => firstOf(use.ref)));
   return firsts.map((id) =>
-    id && harnesses.includes(id.slice(0, id.indexOf("/"))) ? id : undefined
+    id && theirs.harnesses.includes(id.slice(0, id.indexOf("/"))) ? id : undefined
   );
 }
 
@@ -246,11 +247,11 @@ async function planFirsts(ctx: ReadContext, uses: Use[], harnesses: string[]) {
 async function modelsShown(
   ctx: ReadContext,
   uses: Use[],
-  harnesses: string[] = [],
+  theirs: Plans = { harnesses: [] },
 ): Promise<(ModelShown | undefined)[]> {
   const typical = typicalOf(ctx);
   const lists = uses.map((use) => entriesOf(ctx, use.ref));
-  const firsts = harnesses.length ? planFirsts(ctx, uses, harnesses) : undefined;
+  const firsts = theirs.harnesses.length ? planFirsts(ctx, uses, theirs) : undefined;
   const ids = [...new Set(lists.flat().map((entry) => entry.id))];
   const offered = await Promise.all(
     ids.map((model) =>
@@ -359,8 +360,8 @@ export async function shownAt(
     })
   );
   // The person's plans they can run now, in their order: what their turns go with.
-  const harnesses = person ? await plansFor(ctx, levels.person?.harnesses) : [];
-  const shown = await modelsShown(ctx, uses, harnesses);
+  const theirs = person ? await plansFor(ctx, levels.person?.harnesses) : { harnesses: [] };
+  const shown = await modelsShown(ctx, uses, theirs);
   let cursor = 0;
   const tiersShown: TierShown[] = list.map(([name, tier]) => {
     const own = kindNames.flatMap((kind) =>

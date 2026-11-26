@@ -8,6 +8,8 @@
  * Signing in asked to install sends the plan's official installer, and only then.
  * A cloud computer signed in to a plan isn't shared with others' agents until it's signed out
  * there; a person's own computer may be. Signed in on one that's shared, the plan doesn't run there.
+ * A plan that lists its models runs a model only when its list has it: the next plan does then,
+ * and its computer is never asked.
  */
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { join } from "node:path";
@@ -18,7 +20,13 @@ import models from "../../models/mod.ts";
 import { chat, type Message, tool } from "../../agents/chat/mod.ts";
 import { access } from "../../access/mod.ts";
 import { computers, type Desk } from "../mod.ts";
-import { type PromptEvent, type PromptInput, WORK } from "../computers/shared/workloads.ts";
+import type { PlansConnected } from "../../models/contract.ts";
+import {
+  type EngineStatus,
+  type PromptEvent,
+  type PromptInput,
+  WORK,
+} from "../computers/shared/workloads.ts";
 import { startComputer } from "../computers/program/computer.ts";
 import { host, tempDir, test } from "../../../testing/mod.ts";
 import { fakeCli } from "./fake-cli.ts";
@@ -268,13 +276,13 @@ test("which plans someone has connected: signed in on a computer of theirs that'
       }),
       plansOnly,
     );
-    // Cursor serves every maker's it names, by the same names (not GPT-6 Luna), and its own.
+    // Until it says its list, Cursor serves every maker's models by the same names, and its own.
     assertEquals(
       await s.rt.call("models.check", {
         model: { model: [...plansOnly, "cursor-plan/composer-2.5"], harnesses: ["cursor-plan"] },
         port: "llm",
       }),
-      ["cursor-plan/claude-haiku-5-5", "cursor-plan/composer-2.5"],
+      ["cursor-plan/claude-haiku-5-5", "cursor-plan/gpt-6-luna", "cursor-plan/composer-2.5"],
     );
   });
 });
@@ -485,6 +493,119 @@ test("two conversations that start alike are two answers: their prompts' ids dif
     assertEquals(fresh.length, 2);
     assert(fresh[0].id !== fresh[1].id, "each conversation's own");
   });
+});
+
+test("a plan that lists its models runs one only when its list has it: the next plan does, and the first's computer is never asked", async () => {
+  const topic = `engines-test.${crypto.randomUUID()}`;
+  const neon = [{ model: "google/gemini-4-neon", effort: "high" }, "fake/echo"];
+  const app = definePlugin({
+    name: "app",
+    actions: {
+      // Which plans `actor` has connected here.
+      "test.connected": defineAction({
+        input: { type: "object" },
+        run: (ctx, input: { actor: Actor }) => ctx.as(input.actor).call("computer.connected", {}),
+      }),
+      // A turn's chain, with her plans as the tiers plugin gives them: in the plans' own order,
+      // each that said its models with them.
+      "test.model": defineAction({
+        record: false,
+        input: { type: "object" },
+        run: async (ctx) => {
+          const plans = await ctx.call<PlansConnected>("computer.connected", {});
+          return {
+            model: neon,
+            harnesses: plans.map((p) => typeof p === "string" ? p : p.plan),
+            served: Object.fromEntries(
+              plans.flatMap((p) => typeof p === "string" ? [] : [[p.plan, p.models]]),
+            ),
+          };
+        },
+      }),
+    },
+    resources: {
+      shared: { thread: {}, message: {} },
+      // Google's API, offline.
+      provider: { google: { adapter: "fake" } },
+      agentModel: { test: { action: "test.model" } },
+      agents: { north: { instructions: "Lead.", model: "fake/echo", default: true } },
+    },
+  });
+  const rt = await createRuntime({
+    store: memoryStore(),
+    plugins: [models, chat, ...access, computers, app],
+    transports: [{ type: "in-process", config: { topic } }],
+  });
+  // Her laptop runs Antigravity, which names its models with their effort and has no Gemini 4
+  // Neon; her other computer, Cursor, which has it. Each says what its plan runs.
+  const agy: EngineStatus = {
+    engine: "antigravity",
+    installed: true,
+    signedIn: true,
+    models: ["gemini-4-hydrogen-high", "gemini-3.8-flash-low", "claude-opus-4-6-thinking"],
+  };
+  const cursor: EngineStatus = {
+    engine: "cursor",
+    installed: true,
+    signedIn: true,
+    models: ["claude-opus-5-5", "gemini-4-neon"],
+  };
+  const asked: Record<string, PromptInput[]> = { antigravity: [], cursor: [] };
+  const started: ReturnType<typeof fakeComputer>[] = [];
+  try {
+    const { space } = await rt.call<{ space: string }>("space.personal", {}, { actor: ana });
+    for (const status of [agy, cursor]) {
+      const { code } = await rt.call<{ code: string }>("computer.code", {}, { actor: ana });
+      const computer = fakeComputer(topic, `code:${code}`, {
+        workloads: {
+          [WORK.agentsStatus]: () => encoder.encode(JSON.stringify([status])),
+          [WORK.agentsPrompt]: async ({ input }) => {
+            asked[status.engine].push(JSON.parse(await new Response(input).text()));
+            const events: PromptEvent[] = [
+              { i: 0, type: "session", session: "s-1" },
+              text(1, `From ${status.engine}.`),
+              { i: 2, type: "done", stopReason: "end_turn" },
+            ];
+            return encoder.encode(events.map((event) => JSON.stringify(event) + "\n").join(""));
+          },
+        },
+      });
+      started.push(computer);
+      await computer.worker.ready;
+    }
+    type Shown = { online: boolean; engines: Record<string, { models?: string[] }> }[];
+    const engines = () => rt.call<Shown>("computer.engines", {}, { actor: ana });
+    for (let i = 0; i < 300 && (await engines()).filter((c) => c.online).length < 2; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    // Each computer's record keeps what its plan said it runs.
+    const seen = Object.assign({}, ...(await engines()).map((c) => c.engines));
+    assertEquals([seen.antigravity.models, seen.cursor.models], [agy.models, cursor.models]);
+    const plans = () => rt.call<PlansConnected>("test.connected", { actor: ana });
+    assertEquals(await plans(), [
+      { plan: "gemini-plan", models: agy.models! },
+      { plan: "cursor-plan", models: cursor.models! },
+    ]);
+
+    // Antigravity comes first among her plans, but has no Gemini 4 Neon: Cursor answers.
+    const { thread } = await rt.call<{ thread: string }>("chat.send", {
+      text: "hello",
+      in: space,
+    }, { actor: ana });
+    await rt.idle();
+    const last = (await rt.query<Message[]>("message.history", { thread }, { actor: ana })).at(-1)!;
+    assertEquals([last.from, last.text], ["north", "From cursor."]);
+    assertEquals(asked.antigravity, []);
+    assertEquals(asked.cursor.map((input) => input.model), ["gemini-4-neon"]);
+
+    // Said without its list (a program older than rc.68), it's kept without one: a name again.
+    delete agy.models;
+    await engines();
+    assertEquals(await plans(), ["gemini-plan", { plan: "cursor-plan", models: cursor.models! }]);
+  } finally {
+    for (const computer of started) await computer.worker.stop();
+    await rt.close();
+  }
 });
 
 test("which computer a plan runs on: online, then one the app keeps (it wakes), then one that's off; where the session is first in each", () => {

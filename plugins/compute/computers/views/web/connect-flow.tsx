@@ -9,10 +9,12 @@
  * (`computer.prepare`: woken, updated, asked), then one line per plan, one at
  * a time: its CLI installed as part of its sign-in, signed in (a link and a
  * code field; on the server, the account's own dialog: `accounts.connect`),
- * and a short test answered on it (`llm.test`). Every failure ends in Try
- * again, or a cloud computer for a laptop that's off; a command shows only
- * when an installer failed or can't run (Windows), with what it said, and
- * the computer's terminal a click away. Closing it stops a sign-in under
+ * and a short test answered on it (`llm.test`), on the model the app's
+ * listing names for the plan once it shows it connected: by then, the
+ * models the plan said it runs as it signed in are kept. Every failure ends
+ * in Try again, or a cloud computer for a laptop that's off; a command shows
+ * only when an installer failed or can't run (Windows), with what it said,
+ * and the computer's terminal a click away. Closing it stops a sign-in under
  * way; what's done stays.
  */
 import { type ReactNode, useEffect, useRef, useState } from "react";
@@ -116,8 +118,13 @@ export function ConnectFlow(
     if (best) update((f) => ({ ...f, computer: best.computer._id, kept: !!best.kind }));
   }, [best?.computer._id]);
 
+  // A plan as the app lists it now (live). Its test waits until that shows it connected: listed
+  // since its sign-in, its model is one the plan said it runs.
+  const now = (way: Way) => plans.flatMap((p) => p.ways).find((w) => w.provider === way.provider);
   // The calls the lines need now.
-  const next = nextOf(lines, facts);
+  const next = nextOf(lines, facts).filter((n) =>
+    n.call !== "test" || now(n.way)?.connected !== false
+  );
   useEffect(() => {
     for (const n of next) {
       if (n.call === "prepare") {
@@ -129,7 +136,7 @@ export function ConnectFlow(
       } else if (n.call === "test") {
         const set = progress(n.way.provider);
         set({ test: "running" });
-        void call<{ text: string }>("llm.test", { model: n.way.model }).then(
+        void call<{ text: string }>("llm.test", { model: now(n.way)?.model ?? n.way.model }).then(
           ({ text }) => set({ test: "done", answer: text }),
           (error) => set({ test: "failed", failure: failureOf(error) }),
         );

@@ -116,9 +116,19 @@ function rendered(message: LlmMessage): string {
   return [`[you]\n${message.text ?? ""}`, ...calls].join("\n");
 }
 
-/** New messages, as the session takes them: a person's in their own words. */
+/** A user message's images (those the model reads: the rest were named and left out), as ACP blocks. */
+const images = (message: LlmMessage): unknown[] =>
+  message.role === "user"
+    ? (message.files ?? []).filter((f) => f.type.startsWith("image/"))
+      .map((f) => ({ type: "image", mimeType: f.type, data: f.data }))
+    : [];
+
+/** New messages, as the session takes them: a person's in their own words, with their images. */
 const blocks = (messages: LlmMessage[]) =>
-  messages.map((m) => ({ type: "text", text: m.role === "user" ? words(m) : rendered(m) }));
+  messages.flatMap((m) => [
+    { type: "text", text: m.role === "user" ? words(m) : rendered(m) },
+    ...images(m),
+  ]);
 
 /** The input for a session: the newest messages, or (`history`) all, earlier ones told as such. */
 function input(messages: LlmMessage[], history: boolean): unknown[] {
@@ -211,6 +221,8 @@ async function fresh(request: LlmRequest, computer?: string): Promise<Plan> {
 }
 
 export const engineAdapter: LlmAdapter = {
+  // Images go to the session as ACP image blocks (Claude Code, Codex and ACP agents read them).
+  media: ["image"],
   async *generate(request: LlmRequest): AsyncGenerator<LlmChunk> {
     const { connection, options = {}, instructions = "", tools = [], signal } = request;
     const engine = options.engine as EngineName | undefined;

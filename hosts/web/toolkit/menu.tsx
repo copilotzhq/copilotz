@@ -115,8 +115,8 @@ export function Menu(
     /** What the menu is, said to screen readers (and the icon button's tooltip). */
     label: string;
     icon?: IconLike;
-    /** A button with words instead of an icon. */
-    text?: string;
+    /** A button with words instead of an icon (in elements of its own, to style or shorten them). */
+    text?: ReactNode;
     /** A button of the front end's own instead (a person's row), given what opens the menu. */
     trigger?(props: MenuTrigger): ReactNode;
     items: (MenuItem | "separator")[];

@@ -10,6 +10,9 @@
  * - **The app's key** (`resources.push`, see contract.ts): a VAPID pair
  *   (RFC 8292), the app's own, made once and never changed once people
  *   subscribe. Without one, push is off and nothing is sent.
+ * - **Sending** (`push.send`, the app's own code only): to each of a
+ *   person's devices, encrypted for it (RFC 8291) and signed with the app's
+ *   key (RFC 8292); a device its push service says is gone is forgotten.
  * - **The worker** (hosts/web/pwa.ts) shows what arrives, and a tap opens
  *   the app where the notification points, in a window already open when
  *   there is one.
@@ -24,12 +27,14 @@
  * ```
  */
 import { definePlugin, type Plugin } from "../../../runtime/mod.ts";
+import { sendAction } from "./actions/send.ts";
 import { keyAction, subscribeAction, unsubscribeAction } from "./actions/subscribe.ts";
 import { pushSubscription } from "./collections/subscription.ts";
 import { rules } from "./shared/rules.ts";
 import { settingsOf } from "./shared/settings.ts";
 
 export * from "./contract.ts";
+export { vapidKeys } from "./shared/webpush.ts";
 
 export const push: Plugin = definePlugin({
   name: "push",
@@ -38,6 +43,7 @@ export const push: Plugin = definePlugin({
     "push.subscribe": subscribeAction,
     "push.unsubscribe": unsubscribeAction,
     "push.key": keyAction,
+    "push.send": sendAction,
   },
   guard: rules,
   resources: { push: {} },

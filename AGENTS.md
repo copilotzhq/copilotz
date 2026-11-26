@@ -59,6 +59,10 @@ It runs on Node 24+, Deno 2.9+ and Bun.
   [A grant and a transaction for the whole Action](docs/reference.md#a-grant-and-a-transaction-for-the-whole-action).
 - Run an Action in one transaction → `defineAction({ transaction: true })` →
   [A grant and a transaction for the whole Action](docs/reference.md#a-grant-and-a-transaction-for-the-whole-action).
+- Act on events on the app's own authority, for nobody → a Processor's `as: "order-review"` →
+  [Processors](docs/reference.md#processors).
+- Add a Processor that ignores the events already logged → its `start: "now"` →
+  [Processors](docs/reference.md#processors).
 - Test mail without sending it → `captureEmail()` →
   [Mail in tests: the capture adapter](docs/reference/plugins/email.md#mail-in-tests-the-capture-adapter).
 - Open development mail as files → `resources.email.capture.directory` →
@@ -628,8 +632,8 @@ test("each plugin imports another only through its contract, and requires it", (
 - **Who acts:** `personOf(ctx.actor)`, not `ctx.actor.id` (an agent's is its own). Where: `ctx.in`.
   A tool works where its chat is.
 - **Going past the actor's reach is a named grant,** `as: "inventory-adjust"` for a whole Action or
-  `ctx.as(grant("…"))` for one operation, in trusted code, on the record. Keys stay in code: never
-  in Action inputs (they're recorded), never with a model.
+  a Processor, or `ctx.as(grant("…"))` for one operation, in trusted code, on the record. Keys stay
+  in code: never in Action inputs (they're recorded), never with a model.
 - **An agent tells a conversation only what everyone in it could see.** Its work reads what both its
   asker and the place its answer goes reach: a space and what it draws on; a customer's chat, what
   that customer reaches (a space drawing on another with `contacts: "read"` lets them read it); its
@@ -639,8 +643,9 @@ test("each plugin imports another only through its contract, and requires it", (
   it to them (their own bookings, never any record), take no free-form query that could widen it,
   and return only what they may see. In a customer's chat, an Action people call that goes past its
   caller is refused; an internal Action (no `allow` of its own or inherited) runs as its tool chose.
-  The public (`publicCallers`, `{ kind: "public" }`) reads only spaces that have it as a viewer, and
-  writes nothing.
+  What the app's own rules do there on their own (moving the chat to people after an agent's reply)
+  is a Processor with its grant (`as`), not code in the agent's turn. The public (`publicCallers`,
+  `{ kind: "public" }`) reads only spaces that have it as a viewer, and writes nothing.
 - **Outside effects:** write the intent, call out with its id as the idempotency key (a tool's
   `callId`), then write the result.
 - **Nested calls on a retry:** a retried Action or delivery (`ctx.retry`) gets each `ctx.call` that
@@ -987,7 +992,11 @@ export default defineCollection({ schema });
 (`ctx.transaction`); what follows it (a count, a message, a call outside) is a Processor: it hears
 the events it names after they commit, at least once and in order, and runs as their actor. A
 collection's `<name>.updated` event holds `{ _id, doc, changed, removed }`, so `where` wakes it only
-for what it's about. `processors/tally.ts`:
+for what it's about. One that acts on the app's own authority, whoever's event it is, names its
+grant (`as: "order-review"`): it runs for nobody, and reads as the event's actor only through
+`ctx.as(event.actor)`. One added to an app whose log it mustn't act on starts at its end
+(`start: "now"`); after downtime it still hears what it missed, so an effect that mustn't come late
+checks `event.at`. `processors/tally.ts`:
 
 ```ts
 import type { ProcessorDef } from "copilotz";

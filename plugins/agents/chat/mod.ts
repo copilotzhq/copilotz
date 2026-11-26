@@ -50,7 +50,13 @@
  * - A person moves a conversation to another space (`chat.move`), with
  *   everything in it; not while an agent is writing in it. Moving it is
  *   sharing it: front ends say first who'll see it there and what it drew
- *   on (`thread.moving`, from its messages' `drew`).
+ *   on (`thread.moving`, from its messages' `drew`). An app's rules move one
+ *   on their own (a contact's chat to people, on an agent's reply) from a
+ *   Processor that declares a grant (`as`): an agent's turn is a Processor
+ *   (`turn.requested`), so its tools are a Processor's code, and in a chat
+ *   shared with a contact, their grants reach only Actions a contact may
+ *   call (the spaces plugin's rule); a Processor acting as its own grant
+ *   acts for nobody, and isn't asked.
  * - A person renames a conversation (`chat.rename`), from its header's menu,
  *   a list's row or the palette; its notes take the title too, and an agent
  *   that might have named it (`renamable`) no longer does.

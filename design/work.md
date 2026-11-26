@@ -153,7 +153,9 @@ machine agreed, medians within 3%.)
 - **Going beyond is a named grant:** `ctx.as(grant("chat.hand-over"))` acts as the system, for one
   reason, on the record as the grant `via` whose work it was and `in` where; the owner counts its
   ops (`copilotz.elevated.ops`, by grant). The model never holds one: code decides what leaves it.
-  Copilotz's own: `chat.hand-over`, `chat.hand-back`, `web.budget` (pricing a visitor's use).
+  Copilotz's own: `chat.hand-over`, `chat.hand-back`, `web.budget` (pricing a visitor's use). A
+  Processor that acts on the app's own rules, whoever's event it is, declares its grant (`as`) and
+  acts for nobody (no `via`, 2026-11-26): what goes beyond an actor is then asked about no one.
 - **The helpers say what they mean for an agent:**
   - `people` and `peopleOrContacts` let in an agent working for someone they let in;
   - `inPerson` never lets in an agent, whomever it's for, nor work done for a person (`onBehalf`: a

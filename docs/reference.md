@@ -260,9 +260,10 @@ north for ana, note.clear: forbidden
 
 **Going beyond is a named grant.** Trusted code that must do what its actor couldn't acts as the
 system, for one reason: `ctx.as(grant("availability"))`. What it does is recorded as the grant,
-`via` whose work it was and `in` where. The owner counts its ops in `copilotz.elevated.ops`, by
-grant. A model never holds one: your code decides what leaves it. Copilotz's own are
-`chat.hand-over`, `chat.hand-back` and `web.budget`.
+`via` whose work it was and `in` where. A Processor that acts on its own, for nobody, declares its
+grant ([`as`](#processors)), with no `via`. The owner counts a grant's ops in
+`copilotz.elevated.ops`, by grant. A model never holds one: your code decides what leaves it.
+Copilotz's own are `chat.hand-over`, `chat.hand-back` and `web.budget`.
 
 ```ts
 run: async (input, ctx) => await ctx.as(grant("availability")).call("slots.all", { in: ctx.in }),
@@ -484,8 +485,10 @@ export default defineAction({
   nested call's input the same across attempts: a time or a random id in it comes from the caller's
   input, not from the clock.
 - **Processors are apart.** Two Processors handling one event never share a call's record or a
-  timer. A Processor's name is part of its calls' ids: renamed, a Processor replays the log from the
-  start (its position is kept by name), and its nested calls run again for every event it replays.
+  timer. A Processor's name is part of its calls' ids, and its position is kept by name: renamed, a
+  Processor replays the log from the start, and its nested calls run again for every event it
+  replays. To rename one, let it catch up first (its lag 0, `copilotz.processor.lag`), then deploy
+  the new name with `start: "now"`.
 - **`ctx.branch(key)`** keeps identical calls of concurrent work apart (each of a step's tool
   calls), when they may start in another order.
 - **Names.** `:` and `/` join a caller's parts, and no name is checked for them: a Processor named
@@ -605,20 +608,52 @@ they were. A read-only query or View can't start a transactional Action.
 
 A transaction also holds writes to collections declared `durable: false`: its reads see them, and
 they take effect only when the durable commit does, so a failed write rolls back both kinds (with
-`transaction: true` and `ctx.transaction` alike). A declared grant's reads are checked for the
-conversation's audience on every path (a direct call, a named query, a watched query), and a
-`ctx.record` append is kept as the identity that made it, the grant included.
+`transaction: true` and `ctx.transaction` alike). A declared grant's reads are asked of the labels
+(`elevate`) on every path (a direct call, a named query, a watched query), and a `ctx.record` append
+is kept as the identity that made it, the grant included.
 
 ### Processors
 
 What happens when events happen: ordered per key, at least once, from a durable cursor.
 
-| Field   | What it does                                                                         |
-| ------- | ------------------------------------------------------------------------------------ |
-| `on`    | the event types it handles                                                           |
-| `where` | a MongoDB filter on the event's data: the owner never dispatches the events it skips |
-| `key`   | `(event) => key`: events of one key run in order, and different keys run at once     |
-| `run`   | `(ctx, event) => …`, as the event's actor, where the event was                       |
+| Field   | What it does                                                                                    |
+| ------- | ----------------------------------------------------------------------------------------------- |
+| `on`    | the event types it handles                                                                      |
+| `where` | a MongoDB filter on the event's data: the owner never dispatches the events it skips            |
+| `key`   | `(event) => key`: events of one key run in order, and different keys run at once                |
+| `as`    | a named grant it runs as, on its own authority, instead of as the event's actor                 |
+| `start` | `"now"`: new, it starts at the log's end. Without it, a new Processor starts at the first event |
+| `run`   | `(ctx, event) => …`, as the event's actor (or its grant), where the event was                   |
+
+**`as: "<grant>"`** runs it as `{ kind: "system", id: "<grant>", in }`, for nobody: with no `via`,
+where the event was. Use it for what the app's own rules decide when an event happens, whoever's
+event it is. Its writes and calls are on the record as the grant, each caused by the event it
+handled, and the owner holds its deliveries to the grant. It reads as the grant too, past every
+rule: it no longer reads as the event's actor. To read as them, say so:
+`ctx.as(event.actor).db.collection(…)`. What the event says is still its actor's (a customer's
+message, an agent's reply): decide on it by the app's rules, and never do what it asks because it
+asks. A name that isn't one (empty, not a string) stops the runtime from starting.
+
+```ts
+processors: {
+  "order.flag": {
+    on: "order.created",
+    as: "order-review",
+    run: async (ctx, event) => {
+      const order = event.data.doc as { _id: string; total: number };
+      if (order.total > 10_000) await ctx.call("order.hold", { order: order._id });
+    },
+  },
+},
+```
+
+**`start: "now"`** is for a Processor added to an app whose log already holds events it shouldn't
+act on, such as one that sends messages. With no position of its own yet, it starts at the log's
+end, and that position is saved before anything is delivered to it, so a crash before its first
+delivery doesn't move it later. It covers the first run only. A saved position is never moved: after
+downtime, a Processor still gets every event it missed, at least once. So an effect that mustn't
+happen late checks `event.at` itself. Each store has its own log, so in a pool of runtimes each
+starts at its own end, when it's first opened with the Processor.
 
 ### Events a plugin declares
 
@@ -698,6 +733,11 @@ REST API at `/api/`) and plugins' routes. Hosts only listen: `Deno.serve(runtime
 - **`labels`** carries what a job read (a document's space) to what it then writes, so an answer
   drawn from a space not everyone sees is marked. Work done for someone from their own Personal
   space carries nothing: it's theirs.
+- **`labels.elevate(actor, allow, ctx)`** is asked when trusted code goes beyond the actor it acts
+  for (`ctx.as`, an Action's `as`), with that actor and the Action's `allow`. `true` lets it go on.
+  `false` refuses it: `"<action>" goes beyond what the actor it acts for may do`. A string refuses
+  it in the plugin's words for what it goes beyond: `"<action>" goes beyond <string>`. Code acting
+  for nobody (a Processor's `as`) isn't asked.
 
 The access plugin declares both, for the collections its `shared` resource names.
 

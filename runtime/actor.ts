@@ -39,8 +39,8 @@
  *
  * Everyone who needs the person behind an actor asks here.
  */
-import type { AllowContext } from "./define.ts";
-import type { Actor } from "./store.ts";
+import type { AllowContext, ProcessorDef } from "./define.ts";
+import type { Actor, Event } from "./store.ts";
 
 /**
  * Whether a person's work is done for them rather than by them: through a
@@ -114,6 +114,21 @@ export function allows<I>(
  * through, so code using one decides what leaves it.
  */
 export const grant = (name: string): Actor => ({ kind: "system", id: name });
+
+/**
+ * Whom a Processor's delivery of an event runs as: the event's actor, or,
+ * for one that names a grant (`as`), that grant on its own authority, for
+ * nobody (no `via`), where the event was. The owner holds the delivery's job
+ * to it, and the executor runs the Processor as it.
+ */
+export const deliveryActor = (
+  processor: Pick<ProcessorDef, "as">,
+  event: Pick<Event, "actor">,
+): Actor | undefined =>
+  processor.as === undefined ? event.actor : {
+    ...grant(processor.as),
+    ...(whereOf(event.actor) !== undefined ? { in: whereOf(event.actor) } : {}),
+  };
 
 /**
  * Who an actor is, for counting what they hold and ending them (browsers,

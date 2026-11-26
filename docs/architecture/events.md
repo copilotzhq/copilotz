@@ -59,7 +59,8 @@ again. So a retry rewrites what it wrote instead of writing it twice.
 ## Processors
 
 A Processor is what happens when an event happens. It runs in an executor, as the actor of the event
-it handles, and so where that event's work was.
+it handles, and so where that event's work was. One that declares a grant (`as`) runs as that grant
+instead, for nobody (no `via`), still where the event was.
 
 ```ts
 processors: {
@@ -77,10 +78,20 @@ processors: {
   before it sends any work.
 - **`key`** puts events in lanes. Events with the same key run in order, and different keys run at
   once. Without a key, each event is its own lane.
+- **`as`** names a grant it runs as, on its own authority. The owner sends its deliveries as that
+  grant and holds them to it, so code in them goes beyond no one's reach: nothing asks about whose
+  event it was. It reads as the grant, and as the event's actor only when it says so
+  (`ctx.as(event.actor)`). Its writes and calls record the grant, caused by the event.
+- **`start: "now"`** starts a new Processor at the log's end rather than its first event.
 
 The owner keeps a durable cursor for each Processor: the last event it finished. The cursor never
 moves past an event still being handled, and the owner saves it with its commits. When an owner
-starts, each Processor resumes from its cursor, reading the log back in batches.
+starts, each Processor resumes from its cursor, reading the log back in batches. One with no cursor
+yet starts from the log's first event, or, with `start: "now"`, at its end: the owner reads where
+the log ends, from the furthest saved cursor on, and saves that as its cursor before it delivers
+anything. From then on it has a cursor, which only delivery moves: neither downtime nor a crash
+before its first delivery skips an event that came after its first start. A Processor's cursor is
+kept by its name, so a renamed one has none.
 
 Delivery is at least once. A delivery that fails is tried 3 times in all, a little longer apart each
 time, and each try is on the record as `processor.retried`. The last failure records

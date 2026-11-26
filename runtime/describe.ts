@@ -231,6 +231,10 @@ export type ProcessorDeclaration = {
   where?: Filter;
   /** Whether events run in order by a key of its own. */
   keyed: boolean;
+  /** The named grant it runs as, for nobody, instead of as each event's actor. */
+  as?: string;
+  /** "now": new, it starts at the log's end rather than its first event. */
+  start?: "now";
 };
 
 export type ScheduleDeclaration = {
@@ -682,6 +686,8 @@ const processorsOf = (plugin: Plugin): ProcessorDeclaration[] =>
     on: sorted(typeof def.on === "string" ? [def.on] : def.on),
     ...(def.where ? { where: json(def.where) } : {}),
     keyed: typeof def.key === "function",
+    ...(def.as ? { as: def.as } : {}),
+    ...(def.start ? { start: def.start } : {}),
   })).sort(byName);
 
 const schedulesOf = (plugin: Plugin): ScheduleDeclaration[] =>

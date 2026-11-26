@@ -518,6 +518,19 @@ export type ProcessorDef = {
   where?: Filter;
   /** Events with the same key run in order; different keys run concurrently. */
   key?(event: Event): string;
+  /**
+   * Run as this named system grant (`{ kind: "system", id }`), on its own
+   * authority, rather than as the event's actor: with no `via`, where the
+   * event was (`in`). Its writes record the grant, caused by the event. It
+   * reads as the grant too; `ctx.as(event.actor)` reads as whoever acted.
+   */
+  as?: string;
+  /**
+   * Where it starts when it has no saved position: the log's first event
+   * (the default), or `"now"`, its end, saved before anything is delivered.
+   * A saved position is never moved: after downtime it gets what it missed.
+   */
+  start?: "now";
   run(ctx: Context, event: Event): unknown;
 };
 
@@ -717,7 +730,10 @@ export type Who = (
  * written (saying what it drew on, say) or refuses it (somewhere not everyone
  * may see what the work could read). Trusted code in an Action going beyond
  * whom it acts for asks too (`elevate`, with the actor it went beyond and
- * that Action's `allow`): false refuses it. One plugin, the access plugin, declares them.
+ * that Action's `allow`): true lets it go on; false refuses it, as going
+ * beyond what the actor it acts for may do, and a string refuses it as going
+ * beyond what the string says, for the refusal's words (`"<action>" goes
+ * beyond <it>`). One plugin, the access plugin, declares them.
  */
 export type Labels = {
   read(collection: string, docs: Record<string, unknown>[], ctx: ReadContext): string[];
@@ -732,7 +748,7 @@ export type Labels = {
     actor: Actor,
     allow: ((actor: Actor, input: unknown) => boolean | Promise<boolean>) | undefined,
     ctx: ReadContext,
-  ): boolean | Promise<boolean>;
+  ): boolean | string | Promise<boolean | string>;
 };
 
 /**

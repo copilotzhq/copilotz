@@ -180,9 +180,15 @@ Trusted code can act as someone other than its actor, and it's always on the rec
 
 Each of these records `via`, the actor whose work it was, and stays where that work is unless it
 says otherwise. An unrecorded Action a query or a View calls acts as someone else the same way,
-read-only. The owner counts every op made as the system on someone's behalf in
-`copilotz.elevated.ops`, by grant. The model never holds a grant: code decides when to use one, and
-what leaves it.
+read-only. A Processor that declares a grant (`as`) runs as it from the start, for nobody: no `via`,
+and the owner holds its deliveries to that grant as it holds any job to its actor. The owner counts
+every op made as the system on someone's behalf, or as a grant, in `copilotz.elevated.ops`, by
+grant. The model never holds a grant: code decides when to use one, and what leaves it.
+
+When code goes beyond the actor it acts for, the owner asks the labels' plugin first
+(`labels.elevate`), with that actor and the Action's `allow`. A refusal says the Action goes beyond
+what the actor it acts for may do, or, in the plugin's words, what it goes beyond. Code acting for
+nobody (a Processor's grant) isn't asked: there's no actor to go beyond.
 
 ## The owner's cache
 

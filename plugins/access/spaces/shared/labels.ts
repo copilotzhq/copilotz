@@ -16,7 +16,12 @@
  *   caller (`ctx.as()`) in an Action's job, for an agent answering in a
  *   conversation shared with a contact, goes on only if that Action lets a
  *   contact call it (its `allow`): the tools an app offers there are its own
- *   choice, and run as they are.
+ *   choice, and run as they are. Refused, it goes beyond "what everyone in
+ *   this conversation may see". An agent's turn is a Processor, so its
+ *   tools are code in a Processor's job: what the app's own rules decide on
+ *   their own (moving a contact's chat to people) is a Processor of its own
+ *   that declares a grant (`as`), acting for nobody, and so asked nothing
+ *   here; the agent's tools calling the same Action are still refused.
  * - **On the record.** A document an agent writes in a collection that keeps
  *   it (`shared: { message: { drew: true } }`) says which other spaces its
  *   job read (`drew`), for whoever moves its conversation (chat.move): never
@@ -131,6 +136,7 @@ export const labels: Labels = {
     if (!outside.some((member) => member.startsWith("contact:"))) return true;
     // An Action of the app's own (no `allow`) is what its tool chose to do; one people call is
     // let in only if a contact could call it themselves.
-    return !allow || allow({ kind: "contact", id: "" }, undefined);
+    if (!allow || await allow({ kind: "contact", id: "" }, undefined)) return true;
+    return "what everyone in this conversation may see";
   },
 };

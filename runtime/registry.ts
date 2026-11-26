@@ -342,6 +342,14 @@ export function merge(list: Plugins, options: { elsewhere?: boolean } = {}): Reg
       into(registry.actions, { [name]: allow === def.allow ? def : { ...def, allow } }, "action");
     }
     into(registry.events, plugin.events, "event");
+    for (const [name, def] of Object.entries(plugin.processors ?? {})) {
+      if (def.as !== undefined && (typeof def.as !== "string" || !def.as.trim())) {
+        throw invalid(`Processor "${name}" needs a named grant in as`);
+      }
+      if (def.start !== undefined && def.start !== "now") {
+        throw invalid(`Processor "${name}" start can only be "now": without it, the first event`);
+      }
+    }
     into(registry.processors, plugin.processors, "processor");
     replace(registry.views, plugin.views ?? {});
     for (const [kind, entries] of Object.entries(plugin.resources ?? {})) {

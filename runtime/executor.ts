@@ -33,7 +33,7 @@ import {
 import { type Metrics, noMetrics } from "./metrics.ts";
 import type { Actor, Edge, Event } from "./store.ts";
 import { actionInput } from "./action-input.ts";
-import { acting, allows, whereOf } from "./actor.ts";
+import { acting, allows, deliveryActor, whereOf } from "./actor.ts";
 import { forbidden } from "./errors.ts";
 import {
   decode,
@@ -1010,8 +1010,9 @@ export function createExecutor(
       case "process": {
         const processor = registry.processors[request.processor];
         if (!processor) throw invalid(`Unknown processor "${request.processor}"`);
-        // A Processor runs as the actor of the event it handles. Its writes answer to the
-        // event; its calls and timers are named apart from other Processors'.
+        // A Processor runs as the actor of the event it handles, or as its own grant (`as`).
+        // Its writes answer to the event; its calls and timers are named apart from other
+        // Processors'.
         return processor.run(
           context(
             job,
@@ -1019,7 +1020,7 @@ export function createExecutor(
             request.event,
             undefined,
             deliveryCaller(request.event.id, request.processor),
-            request.event.actor,
+            deliveryActor(processor, request.event),
           ),
           request.event,
         );
@@ -1124,7 +1125,9 @@ export function createExecutor(
             throw error;
           }
         };
-        const own = request.kind === "process" ? request.event.actor : request.actor;
+        const own = request.kind === "process"
+          ? deliveryActor(registry.processors[request.processor] ?? {}, request.event)
+          : request.actor;
         const flush = async () => {
           let first: unknown;
           for (const { ops, who } of byWho(pending.splice(0))) {

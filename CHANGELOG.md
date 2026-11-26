@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0-rc.69 — 2026-11-26
 
 A Processor can act on its own authority, as a named grant, and a new one can start at the log's end
 instead of replaying it. The runtime refuses code going beyond its actor in its own words, and the

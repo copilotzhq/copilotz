@@ -227,7 +227,12 @@ async function fresh(request: LlmRequest, computer?: string): Promise<Plan> {
  * `grok -p`, which takes words only: its images are named and left out, as a model
  * that doesn't read images is told.
  */
-const READS_IMAGES: ReadonlySet<string> = new Set<EngineName>(["claude", "codex", "cursor", "antigravity"]);
+const READS_IMAGES: ReadonlySet<string> = new Set<EngineName>([
+  "claude",
+  "codex",
+  "cursor",
+  "antigravity",
+]);
 
 /** Messages for an engine that takes no images: each named as left out, in the models plugin's words. */
 const unseen = (messages: LlmMessage[]): LlmMessage[] =>
@@ -239,7 +244,10 @@ const unseen = (messages: LlmMessage[]): LlmMessage[] =>
     const { files: _, ...rest } = message;
     return {
       ...rest,
-      text: [message.text, ...left.map((f) => `[${f.name} isn't shown: this model can't read image files]`)]
+      text: [
+        message.text,
+        ...left.map((f) => `[${f.name} isn't shown: this model can't read image files]`),
+      ]
         .join("\n"),
       ...(kept.length ? { files: kept } : {}),
     };

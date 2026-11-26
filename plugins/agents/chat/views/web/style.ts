@@ -230,7 +230,8 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
 .chat-status b { color: var(--secondary-foreground); font-weight: 600; }
 .chat-stop { min-height: 28px; gap: 7px; padding: 0 6px 0 10px; border-radius: var(--radius-full); font-size: 12.5px; }
 @keyframes chat-fade { from { opacity: 0; transform: translateY(3px); } }
-.chat-box { display: flex; flex-direction: column; border: 1px solid var(--input); border-radius: var(--radius-3xl);
+.chat-box { container: chat-box / inline-size; display: flex; flex-direction: column; border: 1px solid var(--input);
+  border-radius: var(--radius-3xl);
   background: var(--card); box-shadow: var(--shadow-md); outline: 3px solid transparent;
   transition: border-color .15s, outline-color .15s; }
 .chat-box:focus-within { border-color: color-mix(in oklab, var(--ring) 40%, var(--input));

@@ -220,12 +220,40 @@ async function fresh(request: LlmRequest, computer?: string): Promise<Plan> {
   };
 }
 
+/**
+ * The engines whose programs take a prompt's images: Claude Code's and Codex's turn
+ * them into their model's own, Cursor's runner sends them with the words (the SDK's
+ * `images`), and Antigravity's `agy acp` takes ACP image blocks itself. Grok's runs
+ * `grok -p`, which takes words only: its images are named and left out, as a model
+ * that doesn't read images is told.
+ */
+const READS_IMAGES: ReadonlySet<string> = new Set<EngineName>(["claude", "codex", "cursor", "antigravity"]);
+
+/** Messages for an engine that takes no images: each named as left out, in the models plugin's words. */
+const unseen = (messages: LlmMessage[]): LlmMessage[] =>
+  messages.map((message) => {
+    if (message.role !== "user" || !message.files?.length) return message;
+    const left = message.files.filter((f) => f.type.startsWith("image/"));
+    if (!left.length) return message;
+    const kept = message.files.filter((f) => !f.type.startsWith("image/"));
+    const { files: _, ...rest } = message;
+    return {
+      ...rest,
+      text: [message.text, ...left.map((f) => `[${f.name} isn't shown: this model can't read image files]`)]
+        .join("\n"),
+      ...(kept.length ? { files: kept } : {}),
+    };
+  });
+
 export const engineAdapter: LlmAdapter = {
-  // Images go to the session as ACP image blocks (Claude Code, Codex and ACP agents read them).
+  // Images go to the session as ACP image blocks, to the engines that take them (READS_IMAGES).
   media: ["image"],
-  async *generate(request: LlmRequest): AsyncGenerator<LlmChunk> {
+  async *generate(asked: LlmRequest): AsyncGenerator<LlmChunk> {
+    const engine = asked.options?.engine as EngineName | undefined;
+    const request = engine && READS_IMAGES.has(engine)
+      ? asked
+      : { ...asked, messages: unseen(asked.messages) };
     const { connection, options = {}, instructions = "", tools = [], signal } = request;
-    const engine = options.engine as EngineName | undefined;
     const call = connection.call;
     if (!engine) throw engineFailure("engine_missing", "This provider names no engine.");
     if (!call) {

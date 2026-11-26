@@ -80,7 +80,8 @@ export const STYLE = `
 .tiers-pick-name, .tiers-pick-price { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tiers-pick-name { flex: 0 1 auto; min-width: 2ch; }
 .tiers-pick-price { flex: 0 100 auto; min-width: 0; }
-@media (max-width: 760px) {
+/* A narrow composer (a phone, a side panel), by its own width (chat's \`chat-box\` container): the name only. */
+@container chat-box (max-width: 520px) {
   .tiers-pick-price { display: none; }
 }
 .tiers-remove-said { margin: 0; color: var(--secondary-foreground); font-size: 14px; line-height: 1.5; }

@@ -1,3 +1,44 @@
+## Unreleased
+
+Each plan says which models it runs, and plans first goes by its list instead of names kept by hand.
+Antigravity, which names its models its own way, runs them again.
+
+**New:**
+
+- **A plan says which models it runs.** Antigravity, Grok Build and Cursor list the models the
+  person's plan runs, by their own names, when the computer says its plans' status: Antigravity in
+  the session its sign-in check starts, Grok Build in `grok models`, Cursor from its SDK. The
+  computer's record keeps each list (`engines.<engine>.models`), and `computer.connected` answers
+  such a plan as `{ plan, models }`, the others by name as before (`PlansConnected`; code that read
+  its answer as names reads `.plan` from an object). The tiers plugin keeps the lists: a turn's
+  chain goes as `{ model, harnesses, served }` (`tiers.model` adds `served` only where a plan said
+  one), and so do a tier's price for the person looking (`yours`) and the model a test of a plan
+  tries. A plan with a list runs a model its list has by the model's API name (`gemini-4-neon`), or
+  by that name and the entry's `effort` (`gemini-4-hydrogen-high`), the name it's then asked by. Its
+  `serves` map isn't consulted then; a plan without a list (Claude Code, Codex, ChatGPT) uses its
+  map, as before. The model's catalog entry stays the API's, for its prices and limits.
+- **Cursor's hand-copied list is gone.** Until its computer says its list, `cursor-plan` serves
+  every maker's models by the same names (`anthropic/*`, `openai/*`, `google/*`, `xai/*`), as
+  `gemini-plan` serves Google's. An entry naming `cursor-plan/…` stands for Cursor's own model.
+
+**Fixed:**
+
+- **Antigravity runs the models it has, by its own names** (rc.67's known limit). It names them with
+  the effort in the name and has no Gemini 4 Neon, and rc.66 asked it by Google's API names: each
+  turn tried it first among Google's models, it said it doesn't run that one, and the next plan or
+  the API answered. A model its list lacks now skips it without asking its computer, and one it
+  lists with the entry's effort runs on it.
+
+**Known limits:**
+
+- **A plan's name that follows neither rule isn't matched** (`claude-opus-4-6-thinking`: neither the
+  API's name nor it with an effort). That model runs there only where a chain names it on the plan
+  (`gemini-plan/claude-opus-4-6-thinking`).
+- **A model a plan names only with its effort** (Antigravity's `gemini-4-hydrogen-high`) runs there
+  only for an entry that sets an effort it has.
+- **A computer on a program older than rc.68 says no list,** so its plans go by their `serves` maps
+  (Antigravity by Google's API names) until it updates.
+
 ## 1.0.0-rc.67 — 2026-11-26
 
 A fix to rc.66's plans first: a turn whose first plan failed ran on the app's API, though another of

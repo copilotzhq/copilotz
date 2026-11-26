@@ -21,13 +21,13 @@ computer program, as MCP tools, and run where every tool runs, with the same rul
 
 The computers plugin adds five model providers:
 
-| Provider      | Runs on                     | The CLI      | Serves                                                       |
-| ------------- | --------------------------- | ------------ | ------------------------------------------------------------ |
-| `claude-plan` | the person's Claude plan    | Claude Code  | Anthropic's models                                           |
-| `codex-plan`  | the person's ChatGPT plan   | Codex        | OpenAI's models                                              |
-| `gemini-plan` | the person's Google AI plan | Antigravity  | Google's models                                              |
-| `grok-plan`   | the person's Grok plan      | Grok Build   | xAI's models (`grok-4.7`…)                                   |
-| `cursor-plan` | the person's Cursor plan    | Cursor's SDK | the makers' models Cursor runs, and its own (`composer-2.5`) |
+| Provider      | Runs on                     | The CLI      | Serves                                                                      |
+| ------------- | --------------------------- | ------------ | --------------------------------------------------------------------------- |
+| `claude-plan` | the person's Claude plan    | Claude Code  | Anthropic's models                                                          |
+| `codex-plan`  | the person's ChatGPT plan   | Codex        | OpenAI's models                                                             |
+| `gemini-plan` | the person's Google AI plan | Antigravity  | the models it lists for the plan (`gemini-4-hydrogen-high`…)                |
+| `grok-plan`   | the person's Grok plan      | Grok Build   | the models it lists for the plan (`grok-4.7`…)                              |
+| `cursor-plan` | the person's Cursor plan    | Cursor's SDK | the models it lists for the plan: the makers', and its own (`composer-2.5`) |
 
 Cursor has no CLI to drive: its SDK is installed into the folder the program keeps for it, and a
 small runner the program writes beside it runs it, with Node. Cursor's own prompt can't be replaced
@@ -67,9 +67,19 @@ person's order; then the API entries, as the chain lists them. Someone with only
 `claude-plan/claude-opus-5-5`, `chatgpt/gpt-6.2-sol`, `codex-plan/gpt-6.2-sol`, then the APIs. A
 plan at its limit hands over to the next entry at once, so to the next plan while there is one.
 
-- **Which models a plan serves** is data on its provider: `harness: { order, serves, plan }`.
-  `serves` maps API ids, or a whole provider (`"anthropic/*"`), to the plan's own names (`"*"`: the
-  same). `plan` is the plan people know it as ("ChatGPT"), shared by `chatgpt` and `codex-plan`.
+- **Which models a plan runs** is its own list, where it has one. Antigravity, Grok Build and Cursor
+  list the models the person's plan runs, by their own names: the computer keeps each list
+  (`engines.<engine>.models`) as it says its plans' status, and `computer.connected` answers such a
+  plan as `{ plan: "gemini-plan", models: [...] }`. A plan with a list runs a model its list has by
+  the model's API name (`gemini-4-neon`), or by that name and the entry's `effort`
+  (`gemini-4-hydrogen-high`, for `effort: "high"`), and it's asked by that name, the one with the
+  effort first. One whose list lacks the model is passed over: the next plan, or the API, runs it.
+  The model's catalog entry stays the API's, for its prices and limits.
+- **A plan without a list** (Claude Code, Codex and ChatGPT on the server run their maker's models
+  by the API's names) goes by its provider's data: `harness: { order, serves, plan }`. `serves` maps
+  API ids, or a whole provider (`"anthropic/*"`), to the plan's own names (`"*"`: the same). The
+  plans that list theirs keep a `serves` map too, for until their computer has said its list. `plan`
+  is the plan people know it as ("ChatGPT"), shared by `chatgpt` and `codex-plan`.
 - **The order** is the plans' own until the person changes it: Claude Code (10), ChatGPT on the
   server (20), Codex (30), Grok Build (40), Antigravity (50), Cursor (60). The person reorders their
   plans with `tiers.harnesses` `{ harnesses: ["codex-plan"] }`, kept on their own tier choice:
@@ -79,14 +89,15 @@ plan at its limit hands over to the next entry at once, so to the next plan whil
 - **Which they have** is asked on each turn, of the plugins that keep plans (the `connectedPlans`
   resource): their ChatGPT account, connected; a plan signed in on a computer of theirs that's on,
   or that wakes when asked (a cloud computer), and none while nobody's there. A stale answer costs
-  one fast failure: the plan's CLI checks again.
+  one fast failure: the plan's CLI checks again. A turn's chain goes with them as
+  `{ model, harnesses, served }`: `served` has the lists of those that said one, by plan.
 - **A chain that names a plan** (`claude-plan/claude-opus-5-5`, as chains were written before)
   stands for its model on the person's plans only. A chain left with nothing for them is tried as
   written, and the plan's failure says what to do.
 - **An app without plans,** and a model list without `harnesses`, run as they did.
 
-`models.check` `{ model: { model: chain, harnesses }, port: "llm" }` answers what a chain would try,
-in order: a page prices the first (a plan at $0).
+`models.check` `{ model: { model: chain, harnesses, served }, port: "llm" }` answers what a chain
+would try, in order: a page prices the first (a plan at $0).
 
 ## Connecting plans: one flow
 
@@ -339,12 +350,18 @@ it is charged while it's awake."
   there included. Keep personal sign-ins on a computer you don't share.
 - Antigravity can't be signed out from here: its sign-in may be in the system's keyring, beside the
   person's own use of it.
-- Antigravity serves Google's models, by their names; others it runs come once their names are
-  checked.
+- A plan's name for a model that is neither the API's name nor it with an effort
+  (`claude-opus-4-6-thinking`) isn't matched to the API's model: it runs there only where a chain
+  names it on the plan (`gemini-plan/claude-opus-4-6-thinking`).
+- A model a plan names only with its effort (Antigravity's `gemini-4-hydrogen-high`) runs there only
+  for a chain entry that sets an effort it has.
+- A computer program older than 1.0.0-rc.68 says no list: its plans go by their `serves` maps
+  (Antigravity by Google's API names, which it doesn't run) until it updates.
 - With one plan, a tier's checker can run on the same maker's models as its builder: plans come
   first, whatever the vendor.
 - A plan at its limit is tried first on each call until it resets: it fails in seconds.
-- Plans run at their CLI's own effort, whatever the chain says.
+- Plans run at their CLI's own effort, whatever the chain says, but for a model a plan names with
+  its effort.
 - Grok Build reaches an agent's tools through its own search: a tool call takes it a few more model
   turns. Its built-in skills stay in its prompt. Grok keeps a copy of each session at xAI.
 - A computer program older than 1.0.0-rc.66 has no Grok Build or Cursor: Sign in says it doesn't

@@ -133,8 +133,14 @@ async function prompt(params) {
       ? [block.resource.text]
       : []
   ).join("\n\n");
+  // A prompt's images go with its words (the SDK's SDKUserMessage).
+  const images = (params.prompt ?? []).flatMap((block) =>
+    block?.type === "image" && block.data
+      ? [{ data: String(block.data), mimeType: String(block.mimeType ?? "image/png") }]
+      : []
+  );
   try {
-    session.run = await session.agent.send(text);
+    session.run = await session.agent.send(images.length ? { text, images } : text);
     for await (const message of session.run.stream()) {
       if (message.type === "assistant") {
         for (const block of message.message?.content ?? []) {
@@ -186,7 +192,7 @@ const methods = {
     agentCapabilities: {
       loadSession: true,
       mcpCapabilities: { http: true },
-      promptCapabilities: { image: false, embeddedContext: true },
+      promptCapabilities: { image: true, embeddedContext: true },
     },
     authMethods: [],
   }),

@@ -1,3 +1,26 @@
+## 1.0.0-rc.70 — 2026-11-26
+
+A hotfix on rc.69: on a phone, the composer's tier picker no longer pushes the mic and send buttons
+out of the box, and a person's images reach the plan engines that read them instead of being
+dropped.
+
+**Fixes:**
+
+- **The composer keeps attach, mic and send.** Its row gives way instead: the controls beside send
+  may shrink (`min-width: 0`), and the tier picker shortens with an ellipsis. In a narrow composer
+  (under 520px of its own width, a phone or a side panel; `.chat-box` is now the `chat-box`
+  container) the picker shows the tier's name without its price.
+- **A plan engine gets a message's images.** The `engine` model adapter takes images (`media:
+  ["image"]`) and sends them as ACP image blocks beside the words, to Claude Code, Codex,
+  Antigravity (`agy acp`) and Cursor, whose runner now passes them to the SDK
+  (`send({ text, images })`) and says it takes them (`promptCapabilities.image`). Grok runs
+  `grok -p`, which takes words only: its images are named and left out ("… isn't shown: this model
+  can't read image files"), as before. Until now every plan engine was told that.
+
+**New:**
+
+- `Menu`'s `text` may be any node, not only a string (a string reads as before).
+
 ## 1.0.0-rc.69 — 2026-11-26
 
 A Processor can act on its own authority, as a named grant, and a new one can start at the log's end

@@ -72,8 +72,18 @@ export const STYLE = `
 }
 
 /* Beside the send button */
-.tiers-pick { display: inline-flex; }
-.tiers-pick .copilotz-button { color: var(--muted-foreground); font-weight: 550; }
+.tiers-pick { display: inline-flex; flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.tiers-pick .copilotz-button { min-width: 0; max-width: 100%; color: var(--muted-foreground); font-weight: 550; }
+.tiers-pick .copilotz-button > svg, .tiers-pick .copilotz-button > .copilotz-icon { flex: none; }
+/* Never wider than the row leaves it: the name shortens with an ellipsis, the send button stays. */
+.tiers-pick-text { display: flex; min-width: 0; overflow: hidden; }
+.tiers-pick-name, .tiers-pick-price { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tiers-pick-name { flex: 0 1 auto; min-width: 2ch; }
+.tiers-pick-price { flex: 0 100 auto; min-width: 0; }
+/* A narrow composer (a phone, a side panel), by its own width (chat's \`chat-box\` container): the name only. */
+@container chat-box (max-width: 520px) {
+  .tiers-pick-price { display: none; }
+}
 .tiers-remove-said { margin: 0; color: var(--secondary-foreground); font-size: 14px; line-height: 1.5; }
 .tiers-row-kind { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: var(--radius-full);
   background: var(--muted); color: var(--secondary-foreground); font-size: 11.5px; font-weight: 600; }

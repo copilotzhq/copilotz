@@ -96,7 +96,12 @@ function TierPick(
         label={`${say("pickLabel", { tier: tier?.title ?? now.tier, by: bySaid(now.by) })}${
           capTitle && !free ? `. ${say("pickCap", { cap: capTitle })}` : ""
         }`}
-        text={`${tier?.title ?? now.tier}${price ? ` · ${price}` : ""}`}
+        text={
+          <span className="tiers-pick-text">
+            <span className="tiers-pick-name">{tier?.title ?? now.tier}</span>
+            {price ? <span className="tiers-pick-price">{` · ${price}`}</span> : null}
+          </span>
+        }
         icon="sparkles"
         variant="ghost"
         size="sm"

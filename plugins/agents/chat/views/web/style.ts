@@ -230,7 +230,8 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
 .chat-status b { color: var(--secondary-foreground); font-weight: 600; }
 .chat-stop { min-height: 28px; gap: 7px; padding: 0 6px 0 10px; border-radius: var(--radius-full); font-size: 12.5px; }
 @keyframes chat-fade { from { opacity: 0; transform: translateY(3px); } }
-.chat-box { display: flex; flex-direction: column; border: 1px solid var(--input); border-radius: var(--radius-3xl);
+.chat-box { container: chat-box / inline-size; display: flex; flex-direction: column; border: 1px solid var(--input);
+  border-radius: var(--radius-3xl);
   background: var(--card); box-shadow: var(--shadow-md); outline: 3px solid transparent;
   transition: border-color .15s, outline-color .15s; }
 .chat-box:focus-within { border-color: color-mix(in oklab, var(--ring) 40%, var(--input));
@@ -239,8 +240,13 @@ a.msg-name:hover { text-decoration: underline; text-underline-offset: 3px;
 .chat-box-live { border-color: color-mix(in oklab, var(--destructive) 35%, var(--input)); }
 .chat-box-text[hidden] { display: none; }
 .chat-input { min-height: 54px; padding: 15px 20px 4px; font-size: 15px; }
-.chat-box-row { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 8px 10px; }
-.chat-box-end { display: flex; align-items: center; gap: 4px; }
+.chat-box-row { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-width: 0;
+  padding: 4px 8px 8px 10px; }
+.chat-box-row > * { flex: none; }
+/* The controls beside send (a tier, credits) give way first; mic and send keep their size. */
+.chat-box-end { display: flex; flex: 1 1 auto; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
+.chat-box-end > * { flex: none; }
+.chat-box-end > :not(.copilotz-tooltip-for, button) { flex: 0 1 auto; min-width: 0; }
 .chat-send { border-radius: var(--radius-full); }
 .chat-status-spin { color: var(--primary-text); }
 

@@ -1,7 +1,7 @@
-## Unreleased
+## 1.0.0-rc.68 — 2026-11-26
 
 Each plan says which models it runs, and plans first goes by its list instead of names kept by hand.
-Antigravity, which names its models its own way, runs them again.
+Antigravity, which names its models its own way, now runs them.
 
 **Breaking:**
 

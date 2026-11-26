@@ -58,7 +58,7 @@ The runtime:
 | `copilotz.executors`            | executors connected                                                                            |
 | `copilotz.cache.reads`          | reads the owner's cache answered (hit) or passed to the store (miss)                           |
 | `copilotz.timer.lateness`       | how long after its time a timer's occurrence was called                                        |
-| `copilotz.elevated.ops`         | ops trusted code made beyond the actor it acted for, as the system or a named grant, by grant  |
+| `copilotz.elevated.ops`         | ops trusted code made as the system beyond the actor it acted for, or as a named grant         |
 
 `copilotz.transaction.duration` is new in 1.0.0-rc.31. A transaction's outcome is `commit`, `abort`,
 `idle` or `error`. A transaction left waiting on its code for 5 seconds, from an answer to its next
@@ -66,8 +66,9 @@ op, rolls back as `idle`.
 
 `copilotz.elevated.ops` is new in 1.0.0-rc.32. It counts the ops code makes past whom it acts for:
 `ctx.as()` counts as `grant: "system"`, and `ctx.as(grant("chat.hand-over"))` as
-`grant: "chat.hand-over"`. Copilotz's own grants are `chat.hand-over`, `chat.hand-back` and
-`web.budget`. A grant you didn't expect, or one growing fast, is worth a look.
+`grant: "chat.hand-over"`. A Processor that runs as its own grant (`as`) counts under that grant.
+Copilotz's own grants are `chat.hand-over`, `chat.hand-back` and `web.budget`. A grant you didn't
+expect, or one growing fast, is worth a look.
 
 Model calls, by OpenTelemetry's GenAI conventions:
 

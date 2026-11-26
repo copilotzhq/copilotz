@@ -34,8 +34,15 @@
  *   nobody what they couldn't see. Writing anywhere whose readers don't all
  *   reach that is a share: refused (`needs_approval`) until its person says
  *   yes. In front of a contact, trusted code goes beyond its caller only for
- *   an Action a contact may call. An agent's messages say which other spaces
- *   its work read (`drew`), on the record, never a gate.
+ *   an Action a contact may call: a contact can't steer an agent's tools past
+ *   what everyone in the conversation may do (refused, it "goes beyond what
+ *   everyone in this conversation may see"). An agent's turn is a Processor,
+ *   so its tools run in a Processor's job: what the app's own rules do on
+ *   their own when an event comes (moving a contact's chat to people on an
+ *   agent's reply) is a Processor that declares a grant (`as`), acting for
+ *   nobody, which this doesn't ask about; every other Processor runs as the
+ *   event's actor, as the agent's tools do. An agent's messages say which
+ *   other spaces its work read (`drew`), on the record, never a gate.
  * - **People by name:** each person's profile (collection `profile`: their
  *   name and picture, as sign-in verified them, kept as it changes), which
  *   anyone in the org reads; wherever an id would show, the name does

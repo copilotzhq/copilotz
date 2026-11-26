@@ -110,9 +110,11 @@ The runtime keeps these whatever the plugins do.
 4. **Outside effects run outside the writer.** Their results are written with ids derived from their
    cause, so a retry rewrites instead of duplicating.
 5. **Processors resume from their cursors.** A cursor never passes an event its Processor hasn't
-   finished, so each event is delivered at least once.
+   finished, so each event is delivered at least once. A new one starts at the log's first event,
+   or, with `start: "now"`, at its end, saved before its first delivery.
 6. **Every op an actor's work makes passes the rules.** Only the system passes by, and trusted code
-   acting as the system is on the record as such, `via` whose work it was.
+   acting as the system is on the record as such, `via` whose work it was, or as a Processor's own
+   grant.
 7. **`allow` is asked wherever an actor calls,** and for an agent, for its person too. An agent
    never calls an Action its person couldn't.
 8. **What the owner keeps is never stale.** Each commit updates its cache and lets go of the kept

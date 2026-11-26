@@ -1,3 +1,55 @@
+## Unreleased
+
+A Processor can act on its own authority, as a named grant, and a new one can start at the log's end
+instead of replaying it. The runtime refuses code going beyond its actor in its own words, and the
+access plugin keeps its people-facing ones.
+
+**Breaking:**
+
+- **`labels.elevate` may answer a string,** what the code would go beyond, which refuses it in those
+  words (`"<action>" goes beyond <string>`). `true` still lets it go on and `false` refuses it, now
+  as going beyond "what the actor it acts for may do". Only `true` is a yes. The access plugin
+  answers "what everyone in this conversation may see", so its refusals read as before.
+- **`copilotz.elevated.ops` also counts ops made as a named grant acting for nobody,** under that
+  grant: a Processor's `as`, and a grant the system's own work takes (an Action with `as` called by
+  a declared schedule).
+
+**New:**
+
+- **A Processor's `as: "<grant>"`.** It runs as `{ kind: "system", id: "<grant>", in }` instead of
+  as the event's actor: for nobody (no `via`), where the event was. The owner holds its deliveries
+  to that grant. Its writes and calls are on the record as the grant, each caused by the event it
+  handled, and code going beyond from it asks the labels nothing (it goes beyond no one). It reads
+  as the grant; `ctx.as(event.actor)` reads as whoever acted. A name that isn't one fails at
+  startup, as an Action's does. This is for what an app's own rules do when an event comes,
+  whoever's event it is: a Processor that hears an agent's reply in a chat shared with a contact,
+  and moves the chat to people, can now call `chat.move` as its grant. Without `as` it runs as the
+  agent, and is refused as an agent's tool is: an agent's turn is itself a Processor, so the
+  exemption is declared, not every Processor's.
+- **A Processor's `start: "now"`.** With no saved position, it starts at the log's end instead of
+  its first event, and that position is saved before anything is delivered: a crash before its first
+  delivery doesn't move it later. A saved position is never moved, so after downtime it still gets
+  what it missed (at least once): an effect that mustn't come late checks `event.at`. Each store has
+  its own end, so in a pool of runtimes each tenant starts at its own, when first opened with it.
+  Without `start`, a new Processor starts at the first event, as before.
+- `describe` says a Processor's `as` and `start`.
+
+**Docs:**
+
+- Renaming a Processor replays the log and runs its nested calls again, since its position and its
+  calls' ids are kept by name. To rename one, let it catch up (lag 0), then deploy the new name with
+  `start: "now"`. The reference's Processors, the architecture's events and owner pages, and the
+  spaces and chat plugins' docs say how `as` and `start` work, and why a Processor's exemption from
+  the contact rule is declared.
+
+**Known limits:**
+
+- **`start: "now"` finds the log's end by reading on from the furthest saved position.** A store
+  with a long log and no saved position at all reads all of it once, at the first start with such a
+  Processor.
+- **A rename with `start: "now"` skips what the old name hadn't finished** when the new owner took
+  the store: let the old one reach lag 0 first.
+
 ## 1.0.0-rc.68 — 2026-11-26
 
 Each plan says which models it runs, and plans first goes by its list instead of names kept by hand.

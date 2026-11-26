@@ -11,7 +11,7 @@ import { type Metrics, noMetrics } from "./metrics.ts";
 import { type Clock, type Scheduled, systemClock, TIMERS } from "./schedules.ts";
 import { createTimers } from "./timers.ts";
 import { actionInput } from "./action-input.ts";
-import { allows, callIdOf, inScope } from "./actor.ts";
+import { allows, callIdOf, deliveryActor, inScope } from "./actor.ts";
 import { createApi } from "./api.ts";
 import type { IndexSpec, ScalarType } from "./store.ts";
 import { createHypervisor, type Hypervisor, type HypervisorOptions } from "@oxian/oxian-js";
@@ -491,7 +491,7 @@ export async function createOwner(
     }),
     elevated: metrics.counter("copilotz.elevated.ops", {
       description:
-        "Ops trusted code made beyond the actor it acted for, as the system or a named grant",
+        "Ops trusted code made as the system beyond the actor it acted for, or as a named grant",
     }),
   };
   // A Processor filter the reference can't evaluate fails here, not when an event arrives.
@@ -1005,16 +1005,18 @@ export async function createOwner(
   ) {
     if (actor?.kind !== "system" || !actor.via || !action || !registry.labels?.elevate) return;
     const allow = registry.actions[action]?.allow;
-    if (
-      !await registry.labels.elevate(
-        actor.via as Actor,
-        allow &&
-          ((who, input) => allow(who, input, callerReads(who, track, undefined, load, rules))),
-        rules,
-      )
-    ) {
-      throw forbidden(`"${action}" goes beyond what everyone in this conversation may see`);
-    }
+    const said = await registry.labels.elevate(
+      actor.via as Actor,
+      allow &&
+        ((who, input) => allow(who, input, callerReads(who, track, undefined, load, rules))),
+      rules,
+    );
+    if (said === true) return;
+    // What it goes beyond, as the labels' plugin says it, or as the runtime does.
+    const beyond = typeof said === "string" && said.trim()
+      ? said
+      : "what the actor it acts for may do";
+    throw forbidden(`"${action}" goes beyond ${beyond}`);
   }
   const callerReads = (
     actor?: Actor,
@@ -1721,7 +1723,8 @@ export async function createOwner(
       }
       return disconnect(first.actor);
     }
-    if (request.actor?.kind === "system" && request.actor.via) {
+    // Beyond the actor it acts for (`via`), or as a Processor's own grant, for nobody.
+    if (request.actor?.kind === "system" && (request.actor.via || request.actor.id !== "system")) {
       measure.elevated.add(request.ops.length, { grant: request.actor.id });
     }
     if (!("tx" in request)) {
@@ -2114,7 +2117,13 @@ export async function createOwner(
       linked?.unlink();
       throw error;
     });
-    pin(handle.operationId, job.kind === "process" ? job.event.actor : job.actor);
+    // A delivery's authority is the event's actor, or the Processor's own grant (`as`).
+    pin(
+      handle.operationId,
+      job.kind === "process"
+        ? deliveryActor(registry.processors[job.processor] ?? {}, job.event)
+        : job.actor,
+    );
     if (job.kind === "call") acting.set(handle.operationId, job.action);
     let outcome: Exclude<Line, { frame: unknown }> | undefined;
     let lost: unknown;
@@ -2513,6 +2522,26 @@ export async function createOwner(
 
   // Recover: resume every Processor from its durable cursor, then every timer.
   for (const [name, seq] of Object.entries(await store.positions())) saved.set(name, seq);
+  // One that starts now and has no cursor yet starts at the log's end, saved before anything is
+  // delivered: a restart resumes there, never at a later end. No position is past the end.
+  const fresh = Object.keys(registry.processors).filter((name) =>
+    registry.processors[name].start === "now" && !saved.has(name)
+  );
+  if (fresh.length) {
+    let end = Math.max(0, ...saved.values());
+    for (
+      let batch = await store.events(end, 500);
+      batch.length;
+      batch = await store.events(end, 500)
+    ) {
+      end = batch.at(-1)!.seq;
+    }
+    for (const name of fresh) {
+      saved.set(name, end);
+      unsaved.set(name, end);
+    }
+    await commit(async () => {});
+  }
   const from = Math.min(
     ...Object.keys(registry.processors).map((name) => saved.get(name) ?? 0),
   );

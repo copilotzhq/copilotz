@@ -10,7 +10,8 @@ dropped.
   may shrink (`min-width: 0`), and the tier picker shortens with an ellipsis. In a narrow composer
   (under 520px of its own width, a phone or a side panel; `.chat-box` is now the `chat-box`
   container) the picker shows the tier's name without its price.
-- **A plan engine gets a message's images.** The `engine` model adapter takes images (`media:
+- **A plan engine gets a message's images.** The `engine` model adapter takes images
+  (`media:
   ["image"]`) and sends them as ACP image blocks beside the words, to Claude Code, Codex,
   Antigravity (`agy acp`) and Cursor, whose runner now passes them to the SDK
   (`send({ text, images })`) and says it takes them (`promptCapabilities.image`). Grok runs

@@ -10,13 +10,14 @@
  * cached.
  *
  * Where the app has plans (providers with `harness`), the chain goes with
- * the plans its person has connected now, in their order:
- * `{ model: chain, harnesses }` (none for a turn that's nobody's), and the
- * models plugin runs each model on them first (see shared/plans.ts). Asking
- * which they have is one read per plugin that keeps plans, beside the rest.
+ * the plans its person has connected now, in their order, and the models
+ * those that said so run: `{ model: chain, harnesses, served? }` (none for a
+ * turn that's nobody's), and the models plugin runs each model on them first
+ * (see shared/plans.ts). Asking which they have is one read per plugin that
+ * keeps plans, beside the rest.
  */
 import { defineAction, personOf } from "copilotz";
-import { connectedOf, harnessesOf, orderOf } from "../shared/plans.ts";
+import { connectedOf, harnessesOf, plansOf } from "../shared/plans.ts";
 import { levelsOf, orgTiersOf } from "../shared/shown.ts";
 import { entryOf, kindOf, tierIn } from "../shared/tiers.ts";
 
@@ -45,14 +46,13 @@ export const modelAction = defineAction({
         ...(input.thread ? { thread: input.thread } : {}),
         ...(person ? { person } : {}),
       }),
-      plans && person ? connectedOf(ctx) : new Set<string>(),
+      plans && person ? connectedOf(ctx) : new Map<string, string[] | undefined>(),
     ]);
     const inForce = tierIn(tiers, levels);
     const kind = kindOf(ctx, input.agent, undefined, kinds);
     const chain = entryOf(inForce ? tiers[inForce.tier] : undefined, kind, kinds);
     if (chain === undefined) return null;
     if (!plans) return chain;
-    const harnesses = orderOf(ctx, levels.person?.harnesses).filter((name) => connected.has(name));
-    return { model: chain, harnesses };
+    return { model: chain, ...plansOf(ctx, connected, levels.person?.harnesses) };
   },
 });

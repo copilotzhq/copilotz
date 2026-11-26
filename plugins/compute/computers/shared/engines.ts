@@ -31,6 +31,13 @@ export type EngineSeen = {
   signedIn: boolean;
   version?: string;
   account?: string;
+  /**
+   * The models its plan runs, by its own names, as it last listed them
+   * (Antigravity, Grok Build, Cursor): what `computer.connected` says the
+   * plan runs. Unset where it lists none, or its program is older than
+   * 1.0.0-rc.68: its provider's `serves` map says then.
+   */
+  models?: string[];
   /** When it said so. */
   at: string;
   /**
@@ -146,8 +153,9 @@ export async function signedOut(ctx: Context, computer: string, engine: EngineNa
 /**
  * Asks `computer` what its plans' CLIs are now (`computer.agents.status`:
  * `engines`, or every one), and keeps what it said on it, field by field (a
- * plan's `limited` stays): what it said, by engine, or undefined when it
- * didn't answer (it's offline, or its program is older than the work).
+ * plan's `limited` stays; its `models` as said, or unset when it listed
+ * none): what it said, by engine, or undefined when it didn't answer (it's
+ * offline, or its program is older than the work).
  * Asked after a wake, it's what's true there now, not what was before it
  * slept.
  */
@@ -170,21 +178,23 @@ export async function engineStatus(
   for (const status of said) {
     if (!(ENGINES as readonly string[]).includes(status.engine)) continue;
     const name = status.engine as EngineName;
-    seen[name] = {
-      installed: status.installed,
-      signedIn: status.signedIn,
+    const models = Array.isArray(status.models)
+      ? status.models.filter((model) => typeof model === "string")
+      : [];
+    const said = {
       ...(status.version ? { version: status.version } : {}),
       ...(status.account ? { account: status.account } : {}),
-      at,
+      ...(models.length ? { models } : {}),
     };
+    seen[name] = { installed: status.installed, signedIn: status.signedIn, ...said, at };
     const field = `engines.${name}`;
     Object.assign(set, {
       [`${field}.installed`]: status.installed,
       [`${field}.signedIn`]: status.signedIn,
       [`${field}.at`]: at,
     });
-    for (const key of ["version", "account"] as const) {
-      if (status[key]) set[`${field}.${key}`] = status[key];
+    for (const key of ["version", "account", "models"] as const) {
+      if (said[key]) set[`${field}.${key}`] = said[key];
       else unset[`${field}.${key}`] = "";
     }
   }

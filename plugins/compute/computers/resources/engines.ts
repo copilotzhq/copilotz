@@ -8,18 +8,20 @@
  *
  * Each is a plan (`harness`): a model list given a person's plans runs its
  * maker's models on it first (Claude Code 10, Codex 30 after ChatGPT on the
- * server, Grok Build 40, Antigravity 50; Cursor 60, every maker's it names),
- * and `computer.connected` says who has it. An agent may also name one first and an API model next, for when
- * it can't run (no computer of theirs on, not signed in, the plan's limit
- * reached, a routine with no one there): `["claude-plan/claude-opus-5-5",
+ * server, Grok Build 40, Antigravity 50; Cursor 60, every maker's), and
+ * `computer.connected` says who has it. Antigravity, Grok Build and Cursor
+ * list the models their plan runs, by their own names, and a list runs on
+ * them by it (see the models plugin's plans.ts): their `serves` map counts
+ * only until their computer has said it. Claude Code and Codex list none:
+ * they run their maker's models by the API's names.
+ *
+ * An agent may also name one first and an API model next, for when it can't
+ * run (no computer of theirs on, not signed in, the plan's limit reached, a
+ * routine with no one there): `["claude-plan/claude-opus-5-5",
  * "anthropic/claude-opus-5-5"]`. Its uses are metered, tagged
  * `paid: "subscription"`, at no cost to the app (`engineCost`).
  */
 import type { Harness, Provider } from "../../../models/contract.ts";
-
-/** Models a plan runs by the same names as their maker's API: `"<maker>/<model>": "*"`. */
-const same = (maker: string, models: string[]) =>
-  Object.fromEntries(models.map((model) => [`${maker}/${model}`, "*"]));
 
 /**
  * A plan's provider, on `engine`, its models found in `catalog`'s; a plan
@@ -64,7 +66,7 @@ export const engineProviders: Record<string, Provider> = {
     false,
     "Google AI plan, through Antigravity",
     "Runs on the Google AI plan of whoever asks, through Antigravity on their own computer: each person signs in once.",
-    // Google's models by the same names; others it runs once their names are checked.
+    // Until its computer says its list: Google's models by the same names.
     { order: 50, serves: { "google/*": "*" }, plan: "Google AI" },
   ),
   "grok-plan": plan(
@@ -79,29 +81,12 @@ export const engineProviders: Record<string, Provider> = {
     false,
     "Cursor plan",
     "Runs on the Cursor plan of whoever asks, through Cursor's SDK on their own computer: each person signs in once.",
-    // The makers' models Cursor runs, by the same names (its list, 2026-11-25); its own (`composer-2.5`) by name.
+    // Until its computer says its list: the makers' models by the same names. Its own
+    // (`composer-2.5`) by name.
     {
       order: 60,
       plan: "Cursor",
-      serves: {
-        ...same("anthropic", [
-          "claude-opus-5-5",
-          "claude-sonnet-5-5",
-          "claude-haiku-5-5",
-          "claude-fable-5-2",
-          "claude-opus-5",
-          "claude-sonnet-5",
-        ]),
-        ...same("openai", ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"]),
-        ...same("google", [
-          "gemini-4-neon",
-          "gemini-4-carbon",
-          "gemini-4-hydrogen",
-          "gemini-4-argon",
-          "gemini-3.8-flash",
-        ]),
-        ...same("xai", ["grok-4.7", "grok-4.6", "grok-4.5"]),
-      },
+      serves: { "anthropic/*": "*", "openai/*": "*", "google/*": "*", "xai/*": "*" },
     },
   ),
 };

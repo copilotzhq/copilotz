@@ -41,7 +41,7 @@ const computerSchema = {
     /**
      * The plans' CLIs it runs agents' model calls on, by engine (`claude`,
      * `codex`, `antigravity`, `grok`, `cursor`), as it last said (see shared/engines.ts):
-     * installed, signed in, as whom, and when.
+     * installed, signed in, as whom, the models its plan runs (where it lists them), and when.
      */
     engines: { type: "object" },
     at: { type: "string" },

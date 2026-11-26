@@ -6,6 +6,8 @@
  *
  * - `Cursor.auth`: `login` shows a link and signs in, `status` and `logout`
  *   read and clear the store (`FileCredentialStore`, a JSON file).
+ * - `Cursor.models.list`: the account's models, given its key; it fails as
+ *   offline while `HOME` has a file `fake-offline`.
  * - `Agent.create` and `Agent.resume` (agents kept in `HOME`, so a later
  *   process resumes them): each send is scripted by what it says: `say
  *   <words>`, `call <tool> <json>` (on the agent's MCP server, held there
@@ -62,6 +64,18 @@ export const Cursor = {
     },
     async logout({ store }) {
       await store.clear();
+    },
+  },
+  models: {
+    async list({ apiKey }) {
+      if (existsSync(join(process.env.HOME ?? ".", "fake-offline"))) {
+        throw new Error("fetch failed");
+      }
+      if (apiKey !== "key_fake") throw new Error("Unauthenticated");
+      return [
+        { id: "claude-sonnet-5-5", displayName: "Sonnet 5.5" },
+        { id: "gemini-4-neon", displayName: "Gemini 4 Neon" },
+      ];
     },
   },
 };

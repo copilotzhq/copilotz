@@ -3,7 +3,7 @@
  * priced at the first model it would try for them (its plans first, as a turn of theirs goes),
  * one of their plans costing them nothing (`plan`, `yours`). What it costs on the app's models
  * (`price`) stays, for pages that choose for others. By plan set: none, ChatGPT only, Claude
- * only, both.
+ * only, both; and a plan that said which models it runs, by its list.
  */
 import { assert, assertAlmostEquals, assertEquals } from "@std/assert";
 import {
@@ -16,6 +16,7 @@ import {
 } from "copilotz";
 import { memoryStore } from "copilotz/stores/memory";
 import models, { type LlmAdapter } from "copilotz/plugins/models";
+import type { PlansConnected } from "copilotz/plugins/models/contract";
 import { chat } from "copilotz/plugins/agents";
 import { access } from "copilotz/plugins/access";
 import { usage } from "copilotz/plugins/billing";
@@ -58,7 +59,7 @@ const TIERS = {
 };
 
 /** The plans each person has connected now. */
-let connected: string[] = [];
+let connected: PlansConnected = [];
 
 async function start(): Promise<Runtime> {
   const rt = await createRuntime({
@@ -147,6 +148,16 @@ test("by plan set: none, ChatGPT only, Claude only, both; the app's price stays"
     const both = await everyday(rt);
     assertEquals(both.yours, 0, "on her plans: the model costs her nothing");
     assertEquals(both.price, price, "what it costs on the app's models stays");
+
+    // Claude's plan said it runs Opus only: Haiku is priced on the API, as her turns would run it.
+    connected = [{ plan: "h-claude", models: ["opus"] }];
+    const listed = await everyday(rt);
+    assertEquals(plans(listed), { north: null, east: null, west: "h-claude/opus", south: null });
+    assertAlmostEquals(
+      listed.yours!,
+      (priceOf("north") + priceOf("east") + priceOf("south")) / 4,
+      1e-12,
+    );
   } finally {
     await rt.close();
   }

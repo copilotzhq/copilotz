@@ -274,7 +274,7 @@ posix("A failed prompt says why: a sign-in, a limit, a model; cancelling stops i
 });
 
 posix(
-  "Its sign-in is a device code; its status is what `grok models` says; sign-out its own",
+  "Its sign-in is a device code; its status, and its plan's models, are what `grok models` says; sign-out its own",
   async () => {
     const g = await grokOn(false);
     try {
@@ -290,7 +290,13 @@ posix(
       while (step.state === "running") step = await g.engines.login({ engine: "grok" });
       assertEquals(step.signedIn, true);
       assertEquals(g.logged().find((l) => l.login).login, ["login", "--device-code"]);
-      assertEquals((await status()).signedIn, true);
+      assertEquals(await status(), {
+        engine: "grok",
+        installed: true,
+        version: "1.0.999",
+        signedIn: true,
+        models: ["grok-4.7", "grok-4.6"],
+      });
       await g.engines.logout({ engine: "grok" });
       assertEquals((await status()).signedIn, false);
       assertMatch(g.home, /\.copilotz\/engines\/grok$/);

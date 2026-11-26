@@ -451,6 +451,62 @@ test("the founder's test, in a page: an asleep cloud computer, an old program, i
     }
   }));
 
+test("a plan's test runs on the model it says it has: listed again once its sign-in kept its list", () =>
+  page(async (render) => {
+    const asked: [string, unknown][] = [];
+    const call = <R,>(action: string, input?: unknown): Promise<R> => {
+      asked.push([action, input]);
+      if (action === "computer.prepare") {
+        return Promise.resolve(
+          {
+            computer: "studio",
+            online: true,
+            shared: false,
+            engines: { antigravity: { installed: true, signedIn: false, at: AT } },
+            program: { version: "1.0.0-rc.68", current: true },
+          } satisfies Prepared as R,
+        );
+      }
+      if (action === "computer.engine.login") {
+        return Promise.resolve({ state: "done", output: "", signedIn: true, installed: true } as R);
+      }
+      return Promise.resolve({ text: "Ready.", ms: 900 } as R);
+    };
+    // Before it's signed in, the tiers' Gemini 4 Hydrogen, by its API name: a guess.
+    const gemini = (connected: boolean, model: string) =>
+      plansOf([
+        { name: "gemini-plan", title: "Google AI plan", plan: "Google AI plan", model, connected },
+      ], []);
+    const studioNow = machine({ ...studio, engines: {} });
+    const flow = (plans: PlanShown[]) => (
+      <ConnectFlow
+        plans={plans}
+        picked={["gemini-plan"]}
+        machines={[studioNow]}
+        computers={[studioNow.computer]}
+        accounts={[]}
+        kinds={[]}
+        onClose={() => {}}
+        call={call as never}
+      />
+    );
+    await render(flow(gemini(false, "gemini-plan/gemini-4-hydrogen")));
+    for (let i = 0; i < 40 && !asked.some(([a]) => a === "computer.engine.login"); i++) {
+      await settle(25);
+    }
+    await settle(50);
+    // Signed in, it waits for the listing: no test on the guess.
+    assertEquals(asked.filter(([a]) => a === "llm.test"), []);
+    // Listed again with what Antigravity said it runs: its own name, with the tier's effort.
+    await render(flow(gemini(true, "gemini-plan/gemini-4-hydrogen-low")));
+    for (let i = 0; i < 40 && !document.body.textContent!.includes("It answered"); i++) {
+      await settle(25);
+    }
+    assertEquals(asked.filter(([a]) => a === "llm.test"), [
+      ["llm.test", { model: "gemini-plan/gemini-4-hydrogen-low" }],
+    ]);
+  }));
+
 test("a second plan, from its card, finds the computer ready: one check, then its own sign-in, nothing else", () =>
   page(async (render) => {
     const asked: [string, unknown][] = [];

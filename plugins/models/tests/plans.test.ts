@@ -2,9 +2,11 @@
  * Plans first, native first: a model list given a person's plans
  * (`harnesses`, in their order) runs each model on the plans that serve it
  * first, model by model in the list's order, and on the models' own
- * providers after every plan. An entry naming a plan stands for its model,
- * on plans only; a list left empty is tried as written. `models.check`
- * answers what a list would try, in order.
+ * providers after every plan. A plan that said which models it runs
+ * (`served`) runs one by its list: by the API's name, or with the entry's
+ * effort; one without a list, by its `serves` map. An entry naming a plan
+ * stands for its model, on plans only; a list left empty is tried as
+ * written. `models.check` answers what a list would try, in order.
  */
 import { assertEquals } from "@std/assert";
 import { createRuntime, definePlugin } from "../../../runtime/mod.ts";
@@ -37,6 +39,13 @@ const provider: Record<string, Provider> = {
     50,
     { "google/*": "*", "anthropic/claude-sonnet-5-5": "sonnet-thinking" },
     "Google AI",
+    false,
+  ),
+  // Every maker's models, by the same names, until it says its list.
+  "cursor-plan": plan(
+    60,
+    { "anthropic/*": "*", "openai/*": "*", "google/*": "*", "xai/*": "*" },
+    "Cursor",
     false,
   ),
 };
@@ -112,6 +121,38 @@ test("plans first: each model on the person's plans that serve it, then the APIs
   ]);
 });
 
+test("a plan that said which models it runs: by the API's name, or with the entry's effort", () => {
+  // Antigravity's names have the effort in them, and it has no Gemini 4 Neon; Cursor's are the API's.
+  const agy = ["gemini-4-hydrogen-high", "gemini-4-hydrogen-low", "claude-opus-4-6-thinking"];
+  const cursor = ["gemini-4-neon", "claude-opus-5-5"];
+  const harnesses = ["gemini-plan", "cursor-plan"];
+  const on = (ref: ModelRef, served: Record<string, string[]>) =>
+    resolve(resources, { model: ref, harnesses, served }).map((m) => [m.id, m.catalog]);
+  // A plan whose list lacks the model is passed over: the next plan runs it first.
+  assertEquals(on([NEON, OPUS], { "gemini-plan": agy, "cursor-plan": cursor }), [
+    ["cursor-plan/gemini-4-neon", "google/gemini-4-neon"],
+    ["cursor-plan/claude-opus-5-5", "anthropic/claude-opus-5-5"],
+    ["google/gemini-4-neon", "google/gemini-4-neon"],
+    ["anthropic/claude-opus-5-5", "anthropic/claude-opus-5-5"],
+  ]);
+  // Its name with the entry's effort: asked by that name, priced as the API's model.
+  const hydrogen = (effort: string) => ({ model: "google/gemini-4-hydrogen", effort });
+  assertEquals(on(hydrogen("high"), { "gemini-plan": agy, "cursor-plan": cursor }), [
+    ["gemini-plan/gemini-4-hydrogen-high", "google/gemini-4-hydrogen"],
+    ["google/gemini-4-hydrogen", "google/gemini-4-hydrogen"],
+  ]);
+  // No list has it at that effort: the API.
+  assertEquals(on(hydrogen("medium"), { "gemini-plan": agy, "cursor-plan": cursor }), [
+    ["google/gemini-4-hydrogen", "google/gemini-4-hydrogen"],
+  ]);
+  // A plan without a list runs what its map says, beside one that said its own.
+  assertEquals(on(NEON, { "cursor-plan": ["gemini-4-neon-high"] }), [
+    ["gemini-plan/gemini-4-neon", "google/gemini-4-neon"],
+    ["cursor-plan/gemini-4-neon-high", "google/gemini-4-neon"],
+    ["google/gemini-4-neon", "google/gemini-4-neon"],
+  ]);
+});
+
 test("a plan's entry keeps the model's settings and its catalog entry, under its own name", () => {
   const [onPlan, next] = resolve(resources, {
     model: [OPUS, { model: "anthropic/claude-sonnet-5-5", options: { beta: true } }],
@@ -172,6 +213,13 @@ test("a list that names plans: each stands for its model, on the person's plans 
     "gemini-plan/gemini-4-neon",
     "google/gemini-4-neon",
   ]);
+  // One serving several makers' every model (Cursor) stands for its own model: no maker's.
+  assertEquals(tried(["cursor-plan/composer-2.5", OPUS], ["claude-plan", "cursor-plan"]), [
+    "cursor-plan/composer-2.5",
+    "claude-plan/claude-opus-5-5",
+    "cursor-plan/claude-opus-5-5",
+    "anthropic/claude-opus-5-5",
+  ]);
   // A model no plan serves stays on its API; a name that isn't a plan is passed over.
   assertEquals(tried(["google/gemini-4-neon", LUNA], ["claude-plan", "nobody"]), [
     "google/gemini-4-neon",
@@ -199,6 +247,18 @@ test("models.check answers what a list would try, in order", async () => {
         port: "llm",
       }),
       ["chatgpt/gpt-6.2-sol", "anthropic/claude-opus-5-5", "openai/gpt-6.2-sol"],
+    );
+    // And by the lists of the plans that said theirs.
+    assertEquals(
+      await rt.call("models.check", {
+        model: {
+          model: NEON,
+          harnesses: ["gemini-plan", "cursor-plan"],
+          served: { "gemini-plan": ["gemini-4-hydrogen-high"] },
+        },
+        port: "llm",
+      }),
+      ["cursor-plan/gemini-4-neon", "google/gemini-4-neon"],
     );
   } finally {
     await rt.close();

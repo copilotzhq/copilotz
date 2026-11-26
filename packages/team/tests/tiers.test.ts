@@ -19,6 +19,7 @@ import {
 import { memoryStore } from "copilotz/stores/memory";
 import { sqliteStore } from "copilotz/stores/sqlite";
 import models, { type LlmAdapter, type ModelUse } from "copilotz/plugins/models";
+import type { PlansConnected } from "copilotz/plugins/models/contract";
 import { chat, type Message } from "copilotz/plugins/agents";
 import { team } from "../team/mod.ts";
 import { type AgentNow, type HarnessShown, type Shown, tiers } from "../tiers/mod.ts";
@@ -60,7 +61,7 @@ const script: LlmAdapter = {
 let planTier: string | null = null;
 
 /** Each person's plans, connected now, as the plugins that keep them would say. */
-const connected: Record<string, string[]> = {};
+const connected: Record<string, PlansConnected> = {};
 
 /** A person's plan on the script: the models it serves, each by its own name (`plan-opus`). */
 const plan = (order: number, title: string, name: string, models: string[]) => ({
@@ -545,15 +546,44 @@ test("plans first: a turn runs on its person's plans, in their order, then the A
       ["h-claude/plan-opus", "h-codex/plan-sol", "h-chatgpt/plan-sol", "s/opus", "s/sol"],
     );
     // What a page prices for her: the same plans, in the order she keeps.
-    assertEquals(await rt.call("test.plansFor", { actor: ana, mine: ["h-chatgpt"] }), [
-      "h-chatgpt",
-      "h-claude",
-      "h-codex",
-    ]);
+    assertEquals(await rt.call("test.plansFor", { actor: ana, mine: ["h-chatgpt"] }), {
+      harnesses: ["h-chatgpt", "h-claude", "h-codex"],
+    });
     // Someone with none, or a turn for nobody: the APIs.
-    assertEquals(await rt.call("test.plansFor", { actor: bob }), []);
+    assertEquals(await rt.call("test.plansFor", { actor: bob }), { harnesses: [] });
     assertEquals(await north(bob), { model: chain, harnesses: [] });
     assertEquals(await rt.call("tiers.model", { agent: "north" }), { model: chain, harnesses: [] });
+  } finally {
+    await rt.close();
+  }
+});
+
+test("a plan that said which models it runs: the turn goes with its list, and runs by it", async () => {
+  const rt = await start({ plans: true });
+  try {
+    const launch = await spaceOf(rt, "Launch", ana);
+    await rt.call("tiers.choose", { tier: "expert" }, { actor: ana });
+    const north = () =>
+      rt.call("test.model", { actor: { kind: "agent", id: "north", for: ana }, agent: "north" });
+    const chain = TIERS.expert.agents.north;
+    // Claude's plan names Opus with its effort: it runs it by that name.
+    connected.ana = [{ plan: "h-claude", models: ["opus-medium", "haiku"] }, "h-chatgpt"];
+    assertEquals(await north(), {
+      model: chain,
+      harnesses: ["h-claude", "h-chatgpt"],
+      served: { "h-claude": ["opus-medium", "haiku"] },
+    });
+    assertEquals(await asked(rt, launch), "opus-medium");
+    assertEquals(await rt.call("test.plansFor", { actor: ana }), {
+      harnesses: ["h-claude", "h-chatgpt"],
+      served: { "h-claude": ["opus-medium", "haiku"] },
+    });
+    // What a test of it tries: the first model, in tier order, its list has.
+    const shown = await rt.query<HarnessShown[]>("modelChoice.harnesses", {}, { actor: ana });
+    assertEquals(shown.find((h) => h.name === "h-claude")?.model, "h-claude/haiku");
+    // Its list without Opus: the next plan, ChatGPT, by its map.
+    connected.ana = [{ plan: "h-claude", models: ["haiku"] }, "h-chatgpt"];
+    assertEquals(await asked(rt, launch), "plan-sol");
   } finally {
     await rt.close();
   }

@@ -129,7 +129,7 @@ const outcome = (promise: Promise<unknown>) =>
   );
 
 posix(
-  "Its version and sign-in are the runner's: a link, nothing pasted back; then its sign-out",
+  "Its version, sign-in and plan's models are the runner's: a link, nothing pasted back; then its sign-out",
   async () => {
     const c = await cursorOn({ signedIn: false });
     try {
@@ -145,13 +145,17 @@ posix(
       while (step.state === "running") step = await c.engines.login({ engine: "cursor" });
       assertEquals(step.signedIn, true);
       assertEquals(c.logged().find((l) => l.login).login, { apiKeyName: "Copilotz" });
+      // With the models Cursor lists for the account; none when Cursor can't be asked.
       assertEquals(await status(), {
         engine: "cursor",
         installed: true,
         version: "1.5.0",
         signedIn: true,
         account: "ana@example.com",
+        models: ["claude-sonnet-5-5", "gemini-4-neon"],
       });
+      writeFileSync(join(c.home, "fake-offline"), "");
+      assertEquals((await status()).models, undefined);
       // Its sign-in is a file in its home, apart from the person's own Cursor.
       assert(existsSync(join(c.home, "auth.json")));
       await c.engines.logout({ engine: "cursor" });

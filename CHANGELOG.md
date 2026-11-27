@@ -1,3 +1,32 @@
+## 1.0.0-rc.71 — 2026-11-27
+
+Push notifications, in the library: a person turns them on per device, and is told when something
+waits on them (an agent asks for their yes, a message is to them) while no tab of theirs shows the
+app. Off in every app until it's given a VAPID key pair.
+
+**New:**
+
+- **The `push` plugin** (`copilotz/interfaces`, with `pushWeb` from `copilotz/interfaces/web`). Each
+  device's subscription is its person's alone, changed only through `push.subscribe` and
+  `push.unsubscribe`; its endpoint and keys are private. `push.send` `{ person, notice }`, for the
+  app's own code only, encrypts for each device (RFC 8291, `aes128gcm`) and signs with the app's key
+  (RFC 8292 VAPID), on WebCrypto alone (Deno, Node, Bun); a device its push service says is gone
+  (404, 410) is forgotten. Its settings, `resources.push`: `publicKey`, `privateKey` (make a pair
+  once with `vapidKeys()`, and keep it: a new pair breaks every subscription) and `contact`
+  (`mailto:` or `https://`). Without a pair, push is off.
+- **When it notifies:** an `approval` a person answers ("<agent> asks for your yes", with what it
+  would do), and a message whose `to` names them (an agent's reply in a chat they left, a person
+  writing to them, a mention): the sender's name and its first words; a tap opens the chat, and one
+  from the same chat replaces the last. Never their own message, an agent's private step, anything
+  over five minutes old, or while a tab of theirs shows the app: each signed-in tab says so
+  (`push.looking`, `reportLooking`) as it shows and hides.
+- **The service worker** shows each push and, on a tap, focuses the app's window and moves it to the
+  notice's page (same-origin only), or opens one.
+- **Notifications**, in the person's menu: this device's switch, why it can't be on (blocked, not
+  installed on an iPhone's Home Screen, unsupported, not set up), and their other devices to turn
+  off. English and Portuguese.
+- The `bell` icon.
+
 ## 1.0.0-rc.70 — 2026-11-26
 
 A hotfix on rc.69: on a phone, the composer's tier picker no longer pushes the mic and send buttons

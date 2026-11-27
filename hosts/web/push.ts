@@ -51,7 +51,7 @@ export async function pushState(): Promise<PushState> {
 }
 
 /** A word for this device, for the person's list: never more than the browser says. */
-export function deviceName(agent = nav()?.userAgent ?? ""): string {
+export function deviceName(agent: string = nav()?.userAgent ?? ""): string {
   if (/iPhone/.test(agent)) return "iPhone";
   if (/iPad/.test(agent) || (/Macintosh/.test(agent) && (nav()?.maxTouchPoints ?? 0) > 1)) {
     return "iPad";

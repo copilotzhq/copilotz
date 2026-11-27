@@ -78,7 +78,14 @@ test("the worker carries the code's version, and handles only pages, code and ho
     addEventListener: (type: string) => heard.push(type),
     location: { origin: "http://x" },
   }, {});
-  assertEquals(heard.sort(), ["activate", "fetch", "install", "message"]);
+  assertEquals(heard.sort(), [
+    "activate",
+    "fetch",
+    "install",
+    "message",
+    "notificationclick",
+    "push",
+  ]);
 });
 
 test("the server: the manifest, the worker at the root, and the page linking them", async () => {

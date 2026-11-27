@@ -17,11 +17,25 @@ const set = (worker: ServiceWorker | undefined) => {
   for (const listener of listeners) listener();
 };
 
-/** Registers the worker, once, and follows its versions. */
-export function registerWorker(): void {
+/**
+ * Registers the worker, once, and follows its versions. `open` goes to a
+ * path in the app when a tapped notification points there (a window already
+ * open is moved, not reloaded); without it, the page loads that path.
+ */
+export function registerWorker({ open }: { open?: (path: string) => void } = {}): void {
   const workers = globalThis.navigator?.serviceWorker;
   if (!workers || registered) return;
   registered = true;
+  workers.addEventListener("message", (event) => {
+    const data = event.data as { type?: string; url?: string } | null;
+    if (data?.type !== "copilotz:open" || typeof data.url !== "string") return;
+    const url = new URL(data.url, location.origin);
+    if (url.origin !== location.origin) return;
+    const path = url.pathname + url.search + url.hash;
+    if (path === location.pathname + location.search + location.hash) return;
+    if (open) open(path);
+    else location.assign(path);
+  });
   workers.register("/sw.js", { scope: "/", updateViaCache: "none" }).then((registration) => {
     // A version already waiting, from a visit before: this page runs the old one.
     if (registration.waiting && workers.controller) set(registration.waiting);

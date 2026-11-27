@@ -26,6 +26,7 @@ import { computers } from "./computers.ts";
 import { host } from "./host.ts";
 import { memory } from "./memory.ts";
 import { palette } from "./palette.ts";
+import { push } from "./push.ts";
 import { shell } from "./shell.ts";
 import { signIn } from "./sign-in.ts";
 import { spaces } from "./spaces.ts";
@@ -42,6 +43,7 @@ export const ptBR: Plugin = definePlugin({
       ...host,
       ...memory,
       ...palette,
+      ...push,
       ...shell,
       ...spaces,
       ...toolkit,

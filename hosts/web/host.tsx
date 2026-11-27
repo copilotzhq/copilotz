@@ -42,6 +42,7 @@ import { BASE } from "./style.ts";
 import { ThemeContext } from "./theme/context.ts";
 import { fontsOf, fromGoogle, preloadsOf, themeCss, themeOf } from "./theme/css.ts";
 import { UpdateReady } from "./update.tsx";
+import { reportLooking } from "./push.ts";
 import { say } from "./host-words.ts";
 import { setWords, wordsOf } from "./words.ts";
 
@@ -207,7 +208,8 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
     );
   draw(null);
   // Installable, and told when a new version is ready (see pwa.ts).
-  registerWorker();
+  // A tapped notification moves this window where it points (see pwa.ts).
+  registerWorker({ open: go });
   // Opened by an invitation's link (email sign-in's): its person chooses a password first,
   // whoever this browser was.
   const invite = options.arrive ? undefined : inviteOf(location.hash);
@@ -297,5 +299,7 @@ export async function web(options: WebOptions): Promise<Client | undefined> {
   show();
   // Renamed (here, or in another tab), every View draws again with their name as it is now.
   if (person) followViewer(client, first.actor, show);
+  // Notifications wait while this tab shows the app (see plugins/interfaces/push).
+  if (person) reportLooking((action, input) => client.call(action as never, input));
   return client;
 }

@@ -6,8 +6,8 @@ app. Off in every app until it's given a VAPID key pair.
 
 **New:**
 
-- **The `push` plugin** (`copilotz/interfaces`, with `pushWeb` from `copilotz/interfaces/web`). Each
-  device's subscription is its person's alone, changed only through `push.subscribe` and
+- **The `push` plugin** (`copilotz/plugins/interfaces`; `pushWeb` from
+  `copilotz/plugins/interfaces/web`). Each device's subscription is its person's alone, changed only through `push.subscribe` and
   `push.unsubscribe`; its endpoint and keys are private. `push.send` `{ person, notice }`, for the
   app's own code only, encrypts for each device (RFC 8291, `aes128gcm`) and signs with the app's key
   (RFC 8292 VAPID), on WebCrypto alone (Deno, Node, Bun); a device its push service says is gone
